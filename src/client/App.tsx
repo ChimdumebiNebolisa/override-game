@@ -392,7 +392,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
   const finalRoundReveal = match.status === "finished" && reveal &&
     (resultType === "standard" || resultType === "sudden-death" || resultType === "board-exhaustion");
   if (serverStatus === "voided" || (match.status === "finished" && (!finalRoundReveal || showFinalResult))) {
-    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={onRestart} onExit={onExit} onOpenRanked={onOpenRanked} onOpenLeaderboard={onOpenLeaderboard} onQuickRematch={onQuickRematch} />;
+    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={onRestart} onExit={onExit} onOpenRanked={onOpenRanked} onOpenLeaderboard={onOpenLeaderboard} onQuickRematch={onQuickRematch} onSnapshot={receiveSnapshot} />;
   }
 
   const resign = async () => {
@@ -558,7 +558,7 @@ function RevealPanel({ result, player, finalRound, onContinue }: { result: NonNu
   );
 }
 
-function ResultScreen({ match, totals, player, ranked, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onOpenLeaderboard, onQuickRematch }: {
+function ResultScreen({ match, totals, player, ranked, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onOpenLeaderboard, onQuickRematch, onSnapshot }: {
   match: MatchState;
   totals: Readonly<Record<Player, number>>;
   player: Player;
@@ -571,6 +571,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   onOpenRanked: () => void;
   onOpenLeaderboard: () => void;
   onQuickRematch: (match: PublicMatch) => void;
+  onSnapshot: (match: PublicMatch) => void;
 }) {
   const rival: Player = player === "A" ? "B" : "A";
   const title = resultType === "server-error" ? "Match voided" : resultType === "no-contest" ? "No contest" : match.winner === player ? "Victory" : match.winner === rival ? "Defeat" : "Draw";
@@ -596,10 +597,20 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
     let active = true;
     const load = async () => {
       try {
-        const [settled, currentProfile, rematch, queue] = await Promise.all([
-          api.getRankedSettlement(matchId), api.getProfile(), api.getRankedRematch(matchId), api.getRankedQueue(),
+        const settled = await api.getRankedSettlement(matchId);
+        if (!settled.settlement) {
+          const latest = (await api.getMatch<PublicMatch>(matchId)).match;
+          if (active) {
+            setError("");
+            if (latest.status === "voided") onSnapshot(latest);
+          }
+          return;
+        }
+        const [currentProfile, rematch, queue] = await Promise.all([
+          api.getProfile(), api.getRankedRematch(matchId), api.getRankedQueue(),
         ]);
         if (!active) return;
+        setError("");
         setSettlement(settled.settlement);
         setProfile(currentProfile.profile);
         setInvitation(rematch.invitation);
@@ -613,7 +624,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
     void load();
     const poll = window.setInterval(() => void load(), 1_000);
     return () => { active = false; window.clearInterval(poll); };
-  }, [ranked, matchId]);
+  }, [ranked, matchId, resultType]);
 
   useEffect(() => {
     if (!friend || ranked) return;
@@ -685,14 +696,15 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
         <div><span>{(profile?.placementProgress ?? mine.updatedProfile.placementProgress) < 5 ? "Placement" : "Global rank"}</span><strong>{(profile?.placementProgress ?? mine.updatedProfile.placementProgress) < 5 ? `${profile?.placementProgress ?? mine.updatedProfile.placementProgress}/5` : profile?.rank ? `#${profile.rank}` : "Updating"}</strong></div>
       </section>}
       {ranked && mine && <><p className="status-note">{creditExplanation(settlement!.multiplier)}</p><p className="next-rival">{nextRivalText(profile?.rating ?? mine.updatedProfile.rating)}</p></>}
+      {ranked && !settlement && resultType !== "server-error" && <p className="status-note" role="status">Rating update pending. This result will refresh automatically.</p>}
       {ranked && invitation && !requested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Sides will swap and credit is recalculated before ready.</p><button className="primary-cta" disabled={busy} onClick={acceptRematch}>Accept rematch <span>→</span></button></div>}
       {ranked && requested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your opponent.</p>{invitation && <button className="secondary-cta" onClick={() => navigator.clipboard.writeText(invitation.inviteUrl)}>Copy invite link</button>}</div>}
       {friend && quickInvitation && !quickRequested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Accept to play again with sides swapped.</p><button className="primary-cta" disabled={busy} onClick={acceptQuickRematch}>Accept rematch <span>→</span></button></div>}
       {friend && quickRequested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your friend.</p></div>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="result-actions">
-        {ranked ? resultType !== "server-error" && !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? resultType !== "server-error" && !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" disabled={busy} onClick={restart}>Rematch <span>↻</span></button>}
-        {ranked && <button className="secondary-cta" onClick={onOpenRanked}>New opponent</button>}
+        {ranked ? resultType !== "server-error" && settlement && !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? resultType !== "server-error" && !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" disabled={busy} onClick={restart}>Rematch <span>↻</span></button>}
+        {ranked && (settlement || resultType === "server-error") && <button className="secondary-cta" onClick={onOpenRanked}>New opponent</button>}
         {ranked && <button className="secondary-cta" onClick={onOpenLeaderboard}>Leaderboard</button>}
         <button className="secondary-cta" onClick={onExit}>Home</button>
       </div>
@@ -1074,7 +1086,7 @@ export function App() {
     if (next === "practice" || next === "quick" || next === "ranked") void api.trackEvent("mode_selected", next).catch(() => undefined);
     if (next === "room") void api.trackEvent("opponent_selected", "quick-human").catch(() => undefined);
     setScreen(next);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   };
   const start = async (mode: SoloMode, difficulty: Difficulty, creationKey: string, parentMatchId?: string) => {
     if (!parentMatchId) void api.trackEvent("opponent_selected", `${mode}-bot`).catch(() => undefined);

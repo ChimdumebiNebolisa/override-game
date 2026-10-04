@@ -270,6 +270,30 @@ test('repeated internal settlement failure voids a bound match without changing 
   }
 });
 
+test('transient profile write failure retries settlement without voiding the match', () => {
+  const db = makeDb();
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const shell = createRankedShell(db, 'a', 'b', 500_000);
+    bindBoth(db, shell.matchId, 500_100);
+    resignMatch(db, shell.matchId, { id: 'session-a', uid: 'a', createdAt: 0, expiresAt: 1_000_000 }, 500_200);
+    db.exec(`CREATE TRIGGER temporary_profile_failure BEFORE UPDATE OF rating ON profiles
+      BEGIN SELECT RAISE(ABORT, 'temporary write failure'); END`);
+    assert.deepEqual(settlePendingRankedMatches(db, 500_300), []);
+    assert.deepEqual(settlePendingRankedMatches(db, 501_300), []);
+    assert.deepEqual(settlePendingRankedMatches(db, 502_300), []);
+    assert.equal(errors.mock.calls.length, 1);
+    assert.equal(row<{ status: string }>(db, 'SELECT status FROM matches WHERE id = ?', shell.matchId).status, 'finished');
+    assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM ranked_ownership WHERE match_id = ?', shell.matchId).count, 2);
+    db.exec('DROP TRIGGER temporary_profile_failure');
+    assert.deepEqual(settlePendingRankedMatches(db, 503_300), [shell.matchId]);
+    assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM rating_settlements WHERE match_id = ?', shell.matchId).count, 1);
+    assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM ranked_ownership WHERE match_id = ?', shell.matchId).count, 0);
+  } finally {
+    errors.mockRestore();
+  }
+});
+
 test('no contest creates only the audit ledger and disconnect incidents, with no competitive changes', () => {
   const db = makeDb();
   db.prepare('UPDATE profiles SET wins = 2, streak = 2, placement_progress = 3 WHERE uid = ?').run('a');

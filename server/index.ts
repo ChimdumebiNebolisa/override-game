@@ -440,9 +440,13 @@ setInterval(() => {
 }, 100);
 
 setInterval(() => {
-  for (const id of settlePendingRankedMatches(db)) {
-    logMatchEvent(getMatch(db, id)?.status === 'voided' ? 'ranked_voided' : 'ranked_settled', id);
-    notifyMatch(id);
+  try {
+    for (const id of settlePendingRankedMatches(db)) {
+      logMatchEvent(getMatch(db, id)?.status === 'voided' ? 'ranked_voided' : 'ranked_settled', id);
+      notifyMatch(id);
+    }
+  } catch (error) {
+    console.error('Settlement worker failed', error);
   }
 }, 1_000);
 

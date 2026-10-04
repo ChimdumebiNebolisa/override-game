@@ -416,15 +416,18 @@ export function settlePendingRankedMatches(db: Database.Database, now = Date.now
       settleRankedMatch(db, id, now);
       resolved.push(id);
     } catch (error) {
-      console.error(`Could not settle Ranked match ${id}`, error);
+      const invalidResult = error instanceof SyntaxError || error instanceof RangeError ||
+        (error instanceof HttpError && error.status === 500);
       try {
+        let attempts = 0;
         const voided = db.transaction(() => {
           db.prepare(`INSERT INTO settlement_failures (match_id, attempts, first_failed_at, last_failed_at)
             VALUES (?, 1, ?, ?) ON CONFLICT(match_id) DO UPDATE SET
             attempts = attempts + 1, last_failed_at = excluded.last_failed_at`).run(id, now, now);
           const failure = db.prepare('SELECT attempts, first_failed_at FROM settlement_failures WHERE match_id = ?')
             .get(id) as { attempts: number; first_failed_at: number };
-          if (failure.attempts < 3 || now - failure.first_failed_at < 2_000) return false;
+          attempts = failure.attempts;
+          if (!invalidResult || failure.attempts < 3 || now - failure.first_failed_at < 2_000) return false;
           const match = rankedMatch(db, id);
           if (!match || match.status !== 'finished') return false;
           let state: MatchState;
@@ -437,6 +440,10 @@ export function settlePendingRankedMatches(db: Database.Database, now = Date.now
           db.prepare('DELETE FROM ranked_ownership WHERE match_id = ?').run(id);
           return true;
         }).immediate();
+        if (attempts === 1 || attempts % 60 === 0) {
+          console.error(JSON.stringify({ at: new Date(now).toISOString(), event: 'ranked_settlement_retry',
+            matchId: id, attempts, error: error instanceof Error ? error.message : 'Unknown error' }));
+        }
         if (voided) resolved.push(id);
       } catch (recoveryError) {
         console.error(`Could not record settlement failure for Ranked match ${id}`, recoveryError);

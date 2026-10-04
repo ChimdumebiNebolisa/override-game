@@ -33,3 +33,31 @@ test('retention removes old guest match chains and telemetry but preserves Ranke
     db.close();
   }
 });
+
+test('retention removes old Ranked invitation tokens without deleting match or settlement audit', () => {
+  const db = openDatabase(':memory:');
+  try {
+    const day = 24 * 60 * 60_000;
+    const now = 100 * day;
+    db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, 1)')
+      .run('a', 'Alpha', 'alpha');
+    db.prepare(`INSERT INTO matches (id, mode, player_a_key, player_b_key, player_a_name, player_b_name,
+      state_json, status, started_at, ended_at) VALUES ('ranked-audit', 'ranked', 'a', 'b', 'A', 'B', '{}', 'finished', 1, 2)`).run();
+    db.prepare('INSERT INTO rating_settlements (match_id, settlement_json, settled_at) VALUES (?, ?, 2)')
+      .run('ranked-audit', '{}');
+    const insert = db.prepare(`INSERT INTO ranked_invitations
+      (id, token, kind, creator_uid, parent_match_id, status, match_id, created_at, expires_at)
+      VALUES (?, ?, ?, 'a', ?, ?, ?, 1, ?)`);
+    insert.run('old-challenge', 'old-challenge-token', 'challenge', null, 'expired', null, day);
+    insert.run('old-accepted', 'old-accepted-token', 'rematch', 'ranked-audit', 'accepted', 'ranked-audit', day);
+    insert.run('recent-challenge', 'recent-token', 'challenge', null, 'expired', null, 90 * day);
+
+    const removed = pruneExpiredGuestData(db, now);
+    assert.equal(removed.invitations, 2);
+    assert.deepEqual(db.prepare('SELECT id FROM ranked_invitations').all(), [{ id: 'recent-challenge' }]);
+    assert.ok(db.prepare("SELECT 1 FROM matches WHERE id = 'ranked-audit'").get());
+    assert.ok(db.prepare("SELECT 1 FROM rating_settlements WHERE match_id = 'ranked-audit'").get());
+  } finally {
+    db.close();
+  }
+});

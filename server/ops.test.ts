@@ -77,6 +77,9 @@ test('health reports database failure instead of success', { timeout: 20_000 }, 
     const failed = await fetch(`http://127.0.0.1:${port}/api/health`);
     assert.equal(failed.status, 503);
     assert.deepEqual(await failed.json(), { ok: false });
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    const stillServing = await fetch(`http://127.0.0.1:${port}/api/health`);
+    assert.equal(stillServing.status, 503);
   } finally {
     if (child.exitCode === null) {
       const stopped = once(child, 'exit');

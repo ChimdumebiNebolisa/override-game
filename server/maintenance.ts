@@ -2,13 +2,14 @@ import type Database from 'better-sqlite3';
 
 const GUEST_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
-/** Remove expired guest data while keeping all Ranked matches and settlement records. */
+/** Remove expired guest data and old invite tokens while keeping Ranked match and settlement records. */
 export function pruneExpiredGuestData(db: Database.Database, now = Date.now()) {
   const cutoff = now - GUEST_RETENTION_MS;
   return db.transaction(() => {
     const telemetry = db.prepare('DELETE FROM telemetry_events WHERE created_at < ?').run(cutoff).changes;
     db.prepare('DELETE FROM join_attempts WHERE window_started_at < ?').run(now - 5 * 60_000);
-    const invitations = db.prepare('DELETE FROM quick_rematch_invitations WHERE expires_at < ?').run(cutoff).changes;
+    const invitations = db.prepare('DELETE FROM quick_rematch_invitations WHERE expires_at < ?').run(cutoff).changes
+      + db.prepare('DELETE FROM ranked_invitations WHERE expires_at < ?').run(cutoff).changes;
     let matches = 0;
     for (;;) {
       const leaves = db.prepare(`SELECT m.id FROM matches m WHERE m.mode <> 'ranked'
