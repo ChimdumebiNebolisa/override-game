@@ -63,7 +63,7 @@ export function matchForSession(db: Database.Database, id: string, session: Sess
   if (!player) throw new HttpError(404, 'Match not found');
   if (row.mode === 'ranked' && row.started_at === null) {
     return {
-      id: row.id, roomId: row.room_id, mode: row.mode, status: row.status,
+      id: row.id, roomId: row.room_id, mode: row.mode, botDifficulty: row.bot_difficulty, status: row.status,
       player: null, playerNames: null, state: null, score: null,
       deadline: row.ready_deadline, serverNow: Date.now(), revision: row.revision,
       locked: false, lastResult: null, resultType: null,
@@ -78,6 +78,7 @@ export function matchForSession(db: Database.Database, id: string, session: Sess
     id: row.id,
     roomId: row.room_id,
     mode: row.mode,
+    botDifficulty: row.bot_difficulty,
     player,
     playerNames: { A: row.player_a_name, B: row.player_b_name },
     state,

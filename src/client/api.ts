@@ -24,6 +24,7 @@ export interface PublicMatch {
   id: string;
   roomId: string | null;
   mode: "quick" | "practice" | "ranked";
+  botDifficulty: "easy" | "normal" | "hard" | null;
   player: Player;
   playerNames: Record<Player, string>;
   state: MatchState;
@@ -254,6 +255,13 @@ export const api = {
 
   claimHandle(handle: string) {
     return request<{ profile: RankedProfile }>("/api/profile/handle", {
+      method: "POST",
+      body: JSON.stringify({ handle }),
+    });
+  },
+
+  renameHandle(handle: string) {
+    return request<{ profile: RankedProfile }>("/api/profile/rename", {
       method: "POST",
       body: JSON.stringify({ handle }),
     });

@@ -115,6 +115,15 @@ describe('guest matches', () => {
     expectStatus(() => createBotMatch(db, guest, 'Guest', 'quick', 'easy'), 429);
   });
 
+  it('includes bot difficulty in the resumable match view', () => {
+    for (const difficulty of ['easy', 'hard'] as const) {
+      const guest = session(`guest-${difficulty}`);
+      const id = createBotMatch(db, guest, 'Guest', 'practice', difficulty);
+      expect(matchForSession(db, id, guest).botDifficulty).toBe(difficulty);
+      expect(activeMatchForSession(db, guest)?.botDifficulty).toBe(difficulty);
+    }
+  });
+
   it('returns one bot match for a retried creation request', () => {
     const guest = session('guest');
     const key = 'faad872a-89b5-44e8-8fb9-f72098ec39c4';

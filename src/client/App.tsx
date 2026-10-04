@@ -74,6 +74,19 @@ function coordinate(index: number) {
   return `${String.fromCharCode(65 + (index % 5))}${Math.floor(index / 5) + 1}`;
 }
 
+function creditExplanation(multiplier: number): string {
+  if (multiplier === 0) return "Zero competitive credit for both players: RP, rated matches, placement, W-L-D, and streak stay unchanged.";
+  if (multiplier < 1) return `${Math.round(multiplier * 100)}% RP credit. This counts as a rated match; W-L-D and streak stay unchanged.`;
+  return "Full competitive credit: RP and eligible match stats update normally; placement advances if still in progress.";
+}
+
+const RIVAL_MILESTONES = [850, 950, 1050, 1150, 1250, 1400, 1550, 1750];
+
+function nextRivalText(rating: number): string {
+  const next = RIVAL_MILESTONES.find((target) => target > rating);
+  return next ? `Next Rival: ${next === 1250 ? "ROOK" : `Rival ${next}`} · ${next - rating} RP away` : "All Rival benchmarks cleared.";
+}
+
 function actionText(action: Action) {
   const name = action.type[0].toUpperCase() + action.type.slice(1);
   return action.type === "pass" ? name : `${name} ${coordinate(action.target)}`;
@@ -206,13 +219,14 @@ function ModeSelect({
   );
 }
 
-function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked, onQuickRematch }: {
+function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked, onOpenLeaderboard, onQuickRematch }: {
   mode: PlayMode;
   difficulty: Difficulty;
   initialMatch: PublicMatch;
   onExit: () => void;
   onRestart: (creationKey: string) => Promise<void>;
   onOpenRanked: () => void;
+  onOpenLeaderboard: () => void;
   onQuickRematch: (match: PublicMatch) => void;
 }) {
   const [match, setMatch] = useState(initialMatch.state);
@@ -220,7 +234,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
   const [target, setTarget] = useState<number | null>(null);
   const [timeLeft, setTimeLeft] = useState(() => Math.max(0, Math.ceil(((initialMatch.deadline ?? initialMatch.serverNow) - initialMatch.serverNow) / 1000)));
   const [locked, setLocked] = useState(initialMatch.locked);
-  const [reveal, setReveal] = useState(initialMatch.lastResult);
+  const [reveal, setReveal] = useState(initialMatch.status === "decision" ? null : initialMatch.lastResult);
+  const acknowledgedRoundRef = useRef(initialMatch.status === "decision" ? initialMatch.state.round : initialMatch.state.round - 1);
+  const [showFinalResult, setShowFinalResult] = useState(false);
   const [networkError, setNetworkError] = useState("");
   const [connectionError, setConnectionError] = useState("");
   const [revision, setRevision] = useState(initialMatch.revision);
@@ -261,12 +277,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
     setNetworkError("");
     try {
       const response = await api.lockAction(initialMatch.id, playerAction, match.round, revision);
-      setMatch(response.match.state);
-      setReveal(response.match.status === "decision" ? null : response.match.lastResult);
-      setRevision(response.match.revision);
-      revisionRef.current = response.match.revision;
-      setResultType(response.match.resultType);
-      setTimeLeft(0);
+      receiveSnapshot(response.match);
     } catch (reason) {
       setNetworkError(reason instanceof Error ? reason.message : "The move could not be locked.");
       setLocked(false);
@@ -278,7 +289,8 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
   const receiveSnapshot = (snapshot: PublicMatch) => {
     setMatch(snapshot.state);
     setServerStatus(snapshot.status);
-    setReveal(snapshot.status === "decision" ? null : snapshot.lastResult);
+    setReveal(snapshot.status === "finished" || (snapshot.lastResult && snapshot.lastResult.state.round > acknowledgedRoundRef.current)
+      ? snapshot.lastResult : null);
     setRevision(snapshot.revision);
     revisionRef.current = snapshot.revision;
     setResultType(snapshot.resultType);
@@ -354,12 +366,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
         if (snapshot.status !== "transition") break;
       }
       if (!snapshot) return;
-      setMatch(snapshot.state);
-      setRevision(snapshot.revision);
-      setResultType(snapshot.resultType);
+      acknowledgedRoundRef.current = reveal?.state.round ?? acknowledgedRoundRef.current;
       focusRoundAfterReveal.current = snapshot.status !== "finished";
-      setReveal(snapshot.status === "finished" ? snapshot.lastResult : null);
-      setLocked(snapshot.locked);
+      receiveSnapshot(snapshot);
       setActionType("expand");
       setTarget(null);
       setTimeLeft(Math.max(0, Math.ceil(((snapshot.deadline ?? snapshot.serverNow) - snapshot.serverNow) / 1000)));
@@ -379,8 +388,10 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
     return first ? `Try ${actionText(first)}. Legal targets are outlined on the grid.` : "No territory move is available. Pass this round.";
   }, [match, me]);
 
-  if (match.status === "finished" || serverStatus === "voided") {
-    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={onRestart} onExit={onExit} onOpenRanked={onOpenRanked} onQuickRematch={onQuickRematch} />;
+  const finalRoundReveal = match.status === "finished" && reveal &&
+    (resultType === "standard" || resultType === "sudden-death" || resultType === "board-exhaustion");
+  if (serverStatus === "voided" || (match.status === "finished" && (!finalRoundReveal || showFinalResult))) {
+    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={onRestart} onExit={onExit} onOpenRanked={onOpenRanked} onOpenLeaderboard={onOpenLeaderboard} onQuickRematch={onQuickRematch} />;
   }
 
   const resign = async () => {
@@ -409,7 +420,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
       <section className="score-rail" aria-label="Match score">
         <div className={`player-score you side-${me}`}><span className="owner-symbol">{me === "A" ? "●" : "◆"}</span><p><small>You · {me}</small><strong>{totals[me].toString().padStart(2, "0")}</strong></p></div>
         <div className="round-track"><span style={{ width: `${Math.min(100, ((match.round - 1) / match.config.standardRounds) * 100)}%` }} /></div>
-        <div className={`player-score bot side-${rival}`}><p><small>{initialMatch.roomId ? initialMatch.playerNames[rival] : `${difficulty} bot`} · {rival}</small><strong>{totals[rival].toString().padStart(2, "0")}</strong></p><span className="owner-symbol">{rival === "A" ? "●" : "◆"}</span></div>
+        <div className={`player-score bot side-${rival}`}><p><small>{mode === "ranked" || initialMatch.roomId ? initialMatch.playerNames[rival] : `${difficulty} bot`} · {rival}</small><strong>{totals[rival].toString().padStart(2, "0")}</strong></p><span className="owner-symbol">{rival === "A" ? "●" : "◆"}</span></div>
       </section>
 
       <div className="game-layout">
@@ -456,11 +467,11 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
           <button className="lock-button" disabled={!selectedAction || locked || Boolean(reveal)} onClick={() => void commit()}>
             {locked ? "Move locked" : "Lock move"}<span>{locked ? "✓" : "→"}</span>
           </button>
-          <p className="privacy-note">{initialMatch.roomId ? "Your opponent cannot see your move or lock timing before reveal." : "The bot chooses from the same public pre-round state and cannot see your pending move."}</p>
+          <p className="privacy-note">{mode === "ranked" || initialMatch.roomId ? "Your opponent cannot see your move or lock timing before reveal." : "The bot chooses from the same public pre-round state and cannot see your pending move."}</p>
         </section>
       </div>
 
-      {reveal && <RevealPanel result={reveal} player={me} onContinue={() => void nextRound()} />}
+      {reveal && <RevealPanel result={reveal} player={me} finalRound={Boolean(finalRoundReveal)} onContinue={() => finalRoundReveal ? setShowFinalResult(true) : void nextRound()} />}
       {confirmResign && !reveal && <ResignDialog ranked={mode === "ranked"} onCancel={closeResign} onConfirm={() => void resign()} />}
     </main>
   );
@@ -514,7 +525,7 @@ function ResignDialog({ ranked, onCancel, onConfirm }: { ranked: boolean; onCanc
   );
 }
 
-function RevealPanel({ result, player, onContinue }: { result: NonNullable<PublicMatch["lastResult"]>; player: Player; onContinue: () => void }) {
+function RevealPanel({ result, player, finalRound, onContinue }: { result: NonNullable<PublicMatch["lastResult"]>; player: Player; finalRound: boolean; onContinue: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const continueRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -540,13 +551,13 @@ function RevealPanel({ result, player, onContinue }: { result: NonNullable<Publi
           ))}
         </div>
         <div className="reveal-score"><span>{result.score[player]}</span><small>territory</small><span>{result.score[rival]}</span></div>
-        <button ref={continueRef} className="primary-cta full" onClick={onContinue}>Next round <span>→</span></button>
+        <button ref={continueRef} className="primary-cta full" onClick={onContinue}>{finalRound ? "See result" : "Next round"} <span>→</span></button>
       </section>
     </dialog>
   );
 }
 
-function ResultScreen({ match, totals, player, ranked, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onQuickRematch }: {
+function ResultScreen({ match, totals, player, ranked, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onOpenLeaderboard, onQuickRematch }: {
   match: MatchState;
   totals: Readonly<Record<Player, number>>;
   player: Player;
@@ -557,6 +568,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   onRestart: (creationKey: string) => Promise<void>;
   onExit: () => void;
   onOpenRanked: () => void;
+  onOpenLeaderboard: () => void;
   onQuickRematch: (match: PublicMatch) => void;
 }) {
   const rival: Player = player === "A" ? "B" : "A";
@@ -662,8 +674,10 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
         <div><span>RP change</span><strong className={mine.delta >= 0 ? "positive" : "negative"}>{mine.delta >= 0 ? "+" : ""}{mine.delta}</strong></div>
         <div><span>Rating</span><strong>{mine.profile.rating} → {mine.updatedProfile.rating}</strong></div>
         <div><span>Credit</span><strong>{Math.round(settlement!.multiplier * 100)}%</strong></div>
+        <div><span>Tier</span><strong>{profile?.tier ?? "Updating"}</strong></div>
         <div><span>{(profile?.placementProgress ?? mine.updatedProfile.placementProgress) < 5 ? "Placement" : "Global rank"}</span><strong>{(profile?.placementProgress ?? mine.updatedProfile.placementProgress) < 5 ? `${profile?.placementProgress ?? mine.updatedProfile.placementProgress}/5` : profile?.rank ? `#${profile.rank}` : "Updating"}</strong></div>
       </section>}
+      {ranked && mine && <><p className="status-note">{creditExplanation(settlement!.multiplier)}</p><p className="next-rival">{nextRivalText(profile?.rating ?? mine.updatedProfile.rating)}</p></>}
       {ranked && invitation && !requested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Sides will swap and credit is recalculated before ready.</p><button className="primary-cta" disabled={busy} onClick={acceptRematch}>Accept rematch <span>→</span></button></div>}
       {ranked && requested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your opponent.</p>{invitation && <button className="secondary-cta" onClick={() => navigator.clipboard.writeText(invitation.inviteUrl)}>Copy invite link</button>}</div>}
       {friend && quickInvitation && !quickRequested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Accept to play again with sides swapped.</p><button className="primary-cta" disabled={busy} onClick={acceptQuickRematch}>Accept rematch <span>→</span></button></div>}
@@ -671,6 +685,8 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="result-actions">
         {ranked ? resultType !== "server-error" && !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" disabled={busy} onClick={restart}>Rematch <span>↻</span></button>}
+        {ranked && <button className="secondary-cta" onClick={onOpenRanked}>New opponent</button>}
+        {ranked && <button className="secondary-cta" onClick={onOpenLeaderboard}>Leaderboard</button>}
         <button className="secondary-cta" onClick={onExit}>Home</button>
       </div>
       {!ranked && <small>Practice and Quick Duel results do not affect Ranked statistics.</small>}
@@ -911,7 +927,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
       {queue?.state === "searching" && <section className="ranked-console"><div className="queue-pulse" /><strong>Finding an opponent…</strong><p>Search expands over 15 seconds.</p><button className="secondary-cta full" onClick={() => void api.leaveRankedQueue().then(() => setQueue(null))}>Cancel</button></section>}
       {queue?.state === "timed-out" && <section className="ranked-console"><strong>No opponent found this time.</strong><p>Search timed out after 15 seconds.</p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Try again <span>→</span></button></section>}
       {queue?.state === "ready-expired" && <section className="ranked-console"><strong>Ready window expired.</strong><p>Both players need to confirm within 15 seconds. This match did not affect ratings.</p><button className="secondary-cta full" onClick={() => setQueue(null)}>Return to Ranked</button></section>}
-      {queue?.state === "readying" && <section className="ranked-console"><p className="eyebrow">Opponent found</p><strong>{queue.competitiveMultiplier === 1 ? "Full competitive credit" : `${Math.round((queue.competitiveMultiplier ?? 0) * 100)}% RP credit`}</strong><p>Opponent identity appears after both players commit.</p><button className="primary-cta full" disabled={busy} onClick={ready}>Ready <span>→</span></button></section>}
+      {queue?.state === "readying" && <section className="ranked-console"><p className="eyebrow">Opponent found</p><strong>{queue.competitiveMultiplier === 1 ? "Full competitive credit" : `${Math.round((queue.competitiveMultiplier ?? 0) * 100)}% RP credit`}</strong><p>{creditExplanation(queue.competitiveMultiplier ?? 0)}</p><p>Opponent identity appears after both players commit.</p><button className="primary-cta full" disabled={busy} onClick={ready}>Ready <span>→</span></button></section>}
       {queue?.state === "cooldown" && <section className="ranked-console"><strong>Ranked cooldown</strong><p>Matchmaking is temporarily unavailable after repeated disconnect incidents.</p></section>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="ranked-facts"><p><strong>1000</strong><span>Starting RP</span></p><p><strong>5</strong><span>Placements</span></p><p><strong>Human</strong><span>Opponents only</span></p></div>
@@ -922,6 +938,8 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
 
 function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | "how-to"; navigate: (screen: Screen) => void }) {
   const [profile, setProfile] = useState<RankedProfile | null>(null);
+  const [newHandle, setNewHandle] = useState("");
+  const [renaming, setRenaming] = useState(false);
   const [leaders, setLeaders] = useState<LeaderboardEntry[]>([]);
   const [around, setAround] = useState<LeaderboardEntry[]>([]);
   const [error, setError] = useState("");
@@ -929,6 +947,12 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
     if (screen === "profile") api.getProfile().then((response) => setProfile(response.profile)).catch(() => setProfile(null));
     if (screen === "leaderboard") api.getLeaderboard().then((response) => { setLeaders(response.top); setAround(response.around); }).catch((reason) => setError(reason instanceof Error ? reason.message : "Leaderboard unavailable."));
   }, [screen]);
+  const rename = async () => {
+    setRenaming(true); setError("");
+    try { setProfile((await api.renameHandle(newHandle.trim())).profile); setNewHandle(""); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "The handle could not be changed."); }
+    finally { setRenaming(false); }
+  };
   if (screen === "how-to") return <HowTo navigate={navigate} />;
   return (
     <main className="panel-page info-page">
@@ -938,7 +962,8 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
         <h1>{screen === "profile" ? profile?.handle ?? "Playing as guest." : "Leaderboard"}</h1>
         <p>{screen === "profile" ? profile ? `${profile.tier ?? "Placement"} · ${profile.rating ?? 1000} RP` : "Practice and Quick Duel work without an account." : "Official ranks include eligible human Ranked players only."}</p>
       </div>
-      {screen === "profile" && profile && <div className="profile-stats"><p><strong>{profile.rating ?? 1000}</strong><span>RP</span></p><p><strong>{profile.peakRating ?? profile.rating ?? 1000}</strong><span>Peak RP</span></p><p><strong>{profile.placementProgress ?? 0}/5</strong><span>Placement</span></p><p><strong>{profile.wins ?? 0}-{profile.losses ?? 0}-{profile.draws ?? 0}</strong><span>W-L-D</span></p></div>}
+      {screen === "profile" && profile && <div className="profile-stats"><p><strong>{profile.rating ?? 1000}</strong><span>RP</span></p><p><strong>{profile.peakRating ?? profile.rating ?? 1000}</strong><span>Peak RP</span></p><p><strong>{profile.placementProgress ?? 0}/5</strong><span>Placement</span></p><p><strong>{profile.rank ? `#${profile.rank}` : "Unplaced"}</strong><span>Global rank</span></p><p><strong>{profile.ratedMatchCount ?? 0}</strong><span>Rated matches</span></p><p><strong>{profile.wins ?? 0}-{profile.losses ?? 0}-{profile.draws ?? 0}</strong><span>W-L-D</span></p><p><strong>{profile.streak ?? 0}</strong><span>Win streak</span></p></div>}
+      {screen === "profile" && profile?.handle && <section className="room-form ranked-setup"><label>Change public handle<input value={newHandle} onChange={(event) => setNewHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><p className="status-note">After your first rename, you can change your handle once every 30 days.</p><button className="secondary-cta full" disabled={renaming || !/^[A-Za-z0-9_]{3,16}$/.test(newHandle.trim()) || newHandle.trim() === profile.handle} onClick={rename}>{renaming ? "Changing handle…" : "Change handle"}</button></section>}
       {screen === "leaderboard" && leaders.length > 0 && <ol className="leaderboard-list">{leaders.map((entry) => <li key={entry.handle}><b>#{entry.rank}</b><strong>{entry.handle}</strong><span>{entry.tier}</span><em>{entry.rating} RP</em></li>)}</ol>}
       {screen === "leaderboard" && around.length > 0 && <section aria-labelledby="around-title"><h2 id="around-title">Around you</h2><ol className="leaderboard-list">{around.map((entry) => <li key={entry.handle}><b>#{entry.rank}</b><strong>{entry.handle}</strong><span>{entry.tier}</span><em>{entry.rating} RP</em></li>)}</ol></section>}
       {((screen === "profile" && !profile) || (screen === "leaderboard" && leaders.length === 0)) && <div className="empty-state"><span aria-hidden="true">{screen === "profile" ? "G" : "#"}</span><strong>{screen === "profile" ? "No persistent profile yet" : "No placed players yet"}</strong><p>{screen === "profile" ? "Guest games do not carry into Ranked statistics." : "Bots and benchmark Rivals never appear in the human rankings."}</p></div>}
@@ -950,13 +975,12 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
 }
 
 function RivalsPanel({ rating }: { rating: number }) {
-  const rivals = [850, 950, 1050, 1150, 1250, 1400, 1550, 1750];
-  const next = rivals.find((target) => target > rating);
+  const next = RIVAL_MILESTONES.find((target) => target > rating);
   return (
     <section className="rivals-panel" aria-labelledby="rivals-title">
       <div><p className="eyebrow">System benchmarks</p><h2 id="rivals-title">Rivals to beat</h2><small>Rivals are milestones created by OVERRIDE. They are not human accounts and never affect Global Rank.</small></div>
-      <div className="rival-track">{rivals.map((target) => <span key={target} className={target <= rating ? "cleared" : target === next ? "next" : ""}><b>{target === 1250 ? "ROOK" : "RIVAL"}</b><small>{target} RP</small></span>)}</div>
-      <p className="next-rival">{next ? `Next Rival: ${next === 1250 ? "ROOK" : `Rival ${next}`} · ${next - rating} RP away` : "All Rival benchmarks cleared."}</p>
+      <div className="rival-track">{RIVAL_MILESTONES.map((target) => <span key={target} className={target <= rating ? "cleared" : target === next ? "next" : ""}><b>{target === 1250 ? "ROOK" : "RIVAL"}</b><small>{target} RP</small></span>)}</div>
+      <p className="next-rival">{nextRivalText(rating)}</p>
     </section>
   );
 }
@@ -994,7 +1018,10 @@ export function App() {
     api.getResume().then(({ match, room, rankedQueue, rankedChallenge }) => {
       if (!active) return;
       if (match) {
-        setSolo({ mode: match.mode, difficulty: "Normal" });
+        const difficulty = match.botDifficulty
+          ? `${match.botDifficulty[0].toUpperCase()}${match.botDifficulty.slice(1)}` as Difficulty
+          : "Normal";
+        setSolo({ mode: match.mode, difficulty });
         setBotMatch(match);
         setScreen((current) => current === "home" ? "game" : current);
       } else if (room) {
@@ -1033,7 +1060,7 @@ export function App() {
       {screen === "home" && <Home navigate={navigate} />}
       {screen === "practice" && <ModeSelect kind="practice" onStart={start} navigate={navigate} />}
       {screen === "quick" && <ModeSelect kind="quick" onStart={start} navigate={navigate} />}
-      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.id); }} />}
+      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.id); }} />}
       {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
