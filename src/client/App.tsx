@@ -11,12 +11,7 @@ import {
   type Player,
 } from "../shared/rules";
 import { api, snapshotIsCurrent, type LeaderboardEntry, type PublicMatch, type QuickRematchInvitation, type RankedInvitation, type RankedProfile, type RankedQueue, type RankedSettlement, type Room } from "./api";
-
-declare global {
-  interface Window {
-    google?: { accounts: { id: { initialize(options: { client_id: string; nonce: string; callback: (response: { credential: string }) => void }): void; renderButton(element: HTMLElement, options: Record<string, unknown>): void } } };
-  }
-}
+import { googleFirebaseIdToken } from "./firebase-auth";
 
 type Screen =
   | "home"
@@ -911,7 +906,7 @@ function QuickRematchLanding({ token, navigate, onMatch }: { token: string; navi
 function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: Screen) => void; onMatch: (match: PublicMatch) => void; inviteIntent: { kind: "challenge" | "rematch"; token: string } | null }) {
   const [profile, setProfile] = useState<RankedProfile | null>(null);
   const [signedIn, setSignedIn] = useState(false);
-  const [clientId, setClientId] = useState<string | null>(null);
+  const [firebaseConfig, setFirebaseConfig] = useState<{ apiKey: string; authDomain: string; projectId: string; appId: string } | null>(null);
   const [handle, setHandle] = useState("");
   const [queue, setQueue] = useState<RankedQueue | null>(null);
   const [error, setError] = useState("");
@@ -923,7 +918,6 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
   const [inviteFailed, setInviteFailed] = useState(false);
   const [inviteAttempt, setInviteAttempt] = useState(0);
   const [arenaConnected, setArenaConnected] = useState(false);
-  const googleButton = useRef<HTMLDivElement>(null);
   const acceptingInvite = useRef(false);
 
   const openActiveMatch = async (next: RankedQueue | null) => {
@@ -954,7 +948,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
       if (!active) return;
       setSignedIn(session.signedIn);
       setProfile(session.profile);
-      setClientId(config.googleClientId);
+      setFirebaseConfig(config.firebaseConfig);
       if (session.signedIn && session.profile?.handle) {
         if (!inviteIntent) void api.getCurrentRankedChallenge()
           .then(({ invitation }) => {
@@ -984,60 +978,22 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
     return api.subscribeMatch(queue.matchId, () => void refreshQueue(), () => setArenaConnected(true), () => setArenaConnected(false));
   }, [queue?.state, queue?.matchId]);
 
-  useEffect(() => {
-    if (signedIn || !clientId || !googleButton.current) return;
-    let active = true;
-    const render = async () => {
-      if (!window.google || !googleButton.current) return;
-      let nonce: string;
-      try {
-        nonce = (await api.getGoogleNonce()).nonce;
-      } catch (reason) {
-        if (active) setError(reason instanceof Error ? reason.message : "Google sign-in could not start.");
-        return;
-      }
-      if (!active || !window.google || !googleButton.current) return;
-      window.google.accounts.id.initialize({
-        client_id: clientId,
-        nonce,
-        callback: ({ credential }) => {
-          setBusy(true);
-          api.googleSignIn(credential).then((response) => {
-            setSignedIn(true);
-            setProfile(response.profile);
-            setError("");
-          }).catch(async (reason) => {
-            const message = reason instanceof Error ? reason.message : "Google sign-in failed.";
-            try {
-              const session = await api.getSession();
-              if (session.signedIn) {
-                setSignedIn(true);
-                setProfile(session.profile);
-                setError("");
-                return;
-              }
-            } catch { /* Keep the original sign-in error visible. */ }
-            setError(message);
-            await render();
-          })
-            .finally(() => setBusy(false));
-        },
-      });
-      googleButton.current.replaceChildren();
-      window.google.accounts.id.renderButton(googleButton.current, {
-        theme: "outline", size: "large", width: 320,
-        click_listener: () => { void api.trackEvent("ranked_auth_started", "ranked").catch(() => undefined); },
-      });
-    };
-    if (window.google) { void render(); return () => { active = false; }; }
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.onload = () => { void render(); };
-    script.onerror = () => setError("Google sign-in could not load. Check your connection and reload the page.");
-    document.head.appendChild(script);
-    return () => { active = false; script.remove(); };
-  }, [clientId, signedIn]);
+  const signInWithGoogle = async () => {
+    if (!firebaseConfig || busy) return;
+    setBusy(true);
+    setError("");
+    void api.trackEvent("ranked_auth_started", "ranked").catch(() => undefined);
+    try {
+      const idToken = await googleFirebaseIdToken(firebaseConfig);
+      const response = await api.googleSignIn(idToken);
+      setSignedIn(true);
+      setProfile(response.profile);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Google sign-in failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!profile?.handle || !inviteIntent || inviteDismissed || acceptingInvite.current || queue) return;
@@ -1115,8 +1071,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
       <button className="back-link" onClick={() => navigate("home")}>← Home</button>
       <div className="ranked-badge">R</div>
       <div className="panel-heading"><p className="eyebrow">Human opponents · Rated</p><h1>Ranked Duel</h1><p>Sign in with Google to enter matchmaking, complete five placement matches, and earn an official human leaderboard rank.</p></div>
-      {!signedIn && clientId && <div className="google-slot" ref={googleButton} aria-label="Sign in with Google" />}
-      {!signedIn && !clientId && <button className="google-button" disabled><span>G</span> Google sign-in is not configured</button>}
+      {!signedIn && <button className="google-button" disabled={!firebaseConfig || busy} onClick={() => void signInWithGoogle()}><span>G</span> {busy ? "Signing in…" : firebaseConfig ? "Continue with Google" : "Google sign-in is not configured"}</button>}
       {signedIn && !profile?.handle && <section className="room-form ranked-setup"><label>Choose a public handle<input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><button className="primary-cta full" disabled={busy || !/^[A-Za-z0-9_]{3,16}$/.test(handle)} onClick={claim}>Claim handle <span>→</span></button></section>}
       {profile?.handle && !queue && (!inviteIntent || inviteDismissed) && <section className="ranked-console"><p>Signed in as <strong>{profile.handle}</strong></p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Find opponent <span>→</span></button><button className="secondary-cta full challenge-button" disabled={busy} onClick={challenge}>Challenge friend</button>{inviteUrl && <div className="invite-output"><span>Waiting for friend to accept</span>{inviteCode && <p>Challenge code <strong>{inviteCode}</strong></p>}<div className="invite-actions">{inviteCode && <button onClick={() => navigator.clipboard.writeText(inviteCode)}>Copy code</button>}<button onClick={() => navigator.clipboard.writeText(inviteUrl)}>Copy invite link</button></div></div>}<form className="ranked-code-form" onSubmit={(event) => { event.preventDefault(); void acceptChallengeCode(); }}><label>Join a Ranked challenge<input value={challengeCode} onChange={(event) => setChallengeCode(event.target.value.toUpperCase())} placeholder="10-character code" maxLength={12} autoCapitalize="characters" /></label><button className="secondary-cta full" disabled={busy || !challengeCode.trim()}>Join challenge</button></form></section>}
       {profile?.handle && inviteIntent && !inviteDismissed && !queue && <section className="ranked-console">{inviteFailed ? <><strong>Invitation could not be opened.</strong><p>Check that it is still valid, or return to Ranked.</p><button className="primary-cta full" disabled={busy} onClick={retryInvite}>Retry invitation <span>→</span></button><button className="secondary-cta full" disabled={busy} onClick={dismissInvite}>Return to Ranked</button></> : <><div className="queue-pulse" /><strong>Opening {inviteIntent.kind}…</strong><p>Your destination was preserved through sign-in.</p></>}</section>}

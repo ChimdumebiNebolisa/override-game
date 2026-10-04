@@ -1,43 +1,14 @@
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { getApps, initializeApp, cert } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import type Database from 'better-sqlite3';
 import { HttpError } from './http.js';
 
-const GOOGLE_ISSUERS = ['https://accounts.google.com', 'accounts.google.com'];
-const GOOGLE_JWKS = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HANDLE_COOLDOWN_MS = 30 * DAY_MS;
-const GOOGLE_NONCE_TTL_MS = 5 * 60_000;
 const PROFANITY = ['fuck', 'shit', 'bitch', 'cunt'];
 
-export interface GoogleVerificationOptions {
-  /** Test seam; production callers should use GOOGLE_CLIENT_ID and Google's JWKS. */
-  clientId?: string;
-  keySet?: JWTVerifyGetKey;
-  expectedNonceHash?: string;
-}
-
-export interface VerifiedGoogleIdentity {
+export interface VerifiedFirebaseIdentity {
   uid: string;
-}
-
-function hashNonce(nonce: string): string {
-  return createHash('sha256').update(nonce).digest('hex');
-}
-
-/** Issue a short-lived Google ID-token nonce bound to the current anonymous session. */
-export function issueGoogleNonce(db: Database.Database, sessionId: string, now = Date.now()): string {
-  const nonce = randomBytes(32).toString('base64url');
-  const update = db.transaction(() => {
-    const session = db.prepare('SELECT uid FROM sessions WHERE id = ? AND expires_at > ?').get(sessionId, now) as
-      { uid: string | null } | undefined;
-    if (!session) throw new HttpError(401, 'Session expired');
-    if (session.uid) throw new HttpError(409, 'Session is already signed in');
-    db.prepare('UPDATE sessions SET google_nonce_hash = ?, google_nonce_expires_at = ? WHERE id = ?')
-      .run(hashNonce(nonce), now + GOOGLE_NONCE_TTL_MS, sessionId);
-  });
-  update.immediate();
-  return nonce;
 }
 
 export interface PublicProfile {
@@ -68,83 +39,48 @@ interface ProfileRow {
   created_at: number;
 }
 
-export async function verifyGoogleIdToken(
-  idToken: unknown,
-  options: GoogleVerificationOptions = {},
-): Promise<VerifiedGoogleIdentity> {
+export async function verifyFirebaseIdToken(idToken: unknown, verify?: (token: string) => Promise<{ uid: string; firebase?: { sign_in_provider?: string } }>): Promise<VerifiedFirebaseIdentity> {
   if (typeof idToken !== 'string' || idToken.length === 0 || idToken.length > 16_384) {
-    throw new HttpError(400, 'A Google ID token is required');
+    throw new HttpError(400, 'A Firebase ID token is required');
   }
-  const clientId = options.clientId ?? process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) throw new HttpError(503, 'Google sign-in is not configured');
-
   try {
-    const { payload } = await jwtVerify(idToken, options.keySet ?? GOOGLE_JWKS, {
-      issuer: GOOGLE_ISSUERS,
-      audience: clientId,
-      algorithms: ['RS256'],
-    });
-    if (typeof payload.sub !== 'string' || payload.sub.length === 0) {
-      throw new HttpError(401, 'Google ID token has no user identity');
+    const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    if (!verify && !serviceAccount) throw new HttpError(503, 'Firebase Authentication is not configured');
+    const decoded = verify
+      ? await verify(idToken)
+      : await getAuth(getApps()[0] ?? initializeApp({ credential: cert(JSON.parse(serviceAccount!)) })).verifyIdToken(idToken);
+    if (typeof decoded.uid !== 'string' || !decoded.uid || decoded.firebase?.sign_in_provider !== 'google.com') {
+      throw new HttpError(401, 'Sign in with Google to continue');
     }
-    if (options.expectedNonceHash) {
-      const suppliedNonce = typeof payload.nonce === 'string' ? Buffer.from(hashNonce(payload.nonce), 'hex') : null;
-      const expectedNonce = Buffer.from(options.expectedNonceHash, 'hex');
-      if (!suppliedNonce || suppliedNonce.length !== expectedNonce.length || !timingSafeEqual(suppliedNonce, expectedNonce)) {
-        throw new HttpError(401, 'Google sign-in state is invalid');
-      }
-    }
-    return { uid: payload.sub };
+    return { uid: decoded.uid };
   } catch (error) {
     if (error instanceof HttpError) throw error;
-    throw new HttpError(401, 'Invalid Google ID token');
+    throw new HttpError(401, 'Invalid Firebase ID token');
   }
 }
 
-/** Verify a Google ID token, bind the verified subject to an existing opaque session, and create its profile. */
-export async function attachGoogleIdentity(
+/** Verify a Firebase ID token, bind its UID to the opaque game session, and create its profile. */
+export async function attachFirebaseIdentity(
   db: Database.Database,
   sessionId: string,
   idToken: unknown,
   now = Date.now(),
-  options: GoogleVerificationOptions = {},
-): Promise<VerifiedGoogleIdentity> {
-  const challenge = db.prepare(`SELECT uid, expires_at, google_nonce_hash, google_nonce_expires_at
-    FROM sessions WHERE id = ?`).get(sessionId) as {
-      uid: string | null;
-      expires_at: number;
-      google_nonce_hash: string | null;
-      google_nonce_expires_at: number | null;
-    } | undefined;
+  verify?: (token: string) => Promise<{ uid: string; firebase?: { sign_in_provider?: string } }>,
+): Promise<VerifiedFirebaseIdentity> {
+  const challenge = db.prepare('SELECT uid, expires_at FROM sessions WHERE id = ?').get(sessionId) as { uid: string | null; expires_at: number } | undefined;
   if (!challenge || challenge.expires_at <= now) throw new HttpError(401, 'Session expired');
   if (challenge.uid) throw new HttpError(409, 'Session belongs to another account');
-  if (!challenge.google_nonce_hash || !challenge.google_nonce_expires_at || challenge.google_nonce_expires_at <= now) {
-    throw new HttpError(401, 'Google sign-in state expired');
-  }
-
-  const identity = await verifyGoogleIdToken(idToken, { ...options, expectedNonceHash: challenge.google_nonce_hash });
+  const identity = await verifyFirebaseIdToken(idToken, verify);
   const attach = db.transaction(() => {
-    const session = db.prepare(`SELECT uid, expires_at, google_nonce_hash, google_nonce_expires_at
-      FROM sessions WHERE id = ?`).get(sessionId) as {
-        uid: string | null;
-        expires_at: number;
-        google_nonce_hash: string | null;
-        google_nonce_expires_at: number | null;
-      } | undefined;
+    const session = db.prepare('SELECT uid, expires_at FROM sessions WHERE id = ?').get(sessionId) as { uid: string | null; expires_at: number } | undefined;
     if (!session) throw new HttpError(401, 'Session expired');
     if (session.expires_at <= now) throw new HttpError(401, 'Session expired');
     if (session.uid && session.uid !== identity.uid) throw new HttpError(409, 'Session belongs to another account');
-    if (session.uid || session.google_nonce_hash !== challenge.google_nonce_hash ||
-        !session.google_nonce_expires_at || session.google_nonce_expires_at <= now) {
-      throw new HttpError(401, 'Google sign-in state expired');
-    }
+    if (session.uid) throw new HttpError(409, 'Session is already signed in');
 
     db.prepare('INSERT OR IGNORE INTO profiles (uid, created_at) VALUES (?, ?)').run(identity.uid, now);
-    const consumed = db.prepare(`UPDATE sessions
-      SET uid = ?, google_nonce_hash = NULL, google_nonce_expires_at = NULL
-      WHERE id = ? AND uid IS NULL AND google_nonce_hash = ? AND google_nonce_expires_at > ?`)
-      .run(identity.uid, sessionId, challenge.google_nonce_hash, now);
-    if (consumed.changes !== 1) throw new HttpError(401, 'Google sign-in state expired');
+    const consumed = db.prepare('UPDATE sessions SET uid = ? WHERE id = ? AND uid IS NULL AND expires_at > ?').run(identity.uid, sessionId, now);
+    if (consumed.changes !== 1) throw new HttpError(409, 'Session is already signed in');
     return identity;
   });
   return attach.immediate();

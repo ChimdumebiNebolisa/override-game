@@ -253,11 +253,7 @@ export const api = {
   },
 
   getConfig() {
-    return request<{ googleClientId: string | null }>("/api/config");
-  },
-
-  getGoogleNonce() {
-    return request<{ nonce: string }>("/api/auth/google/nonce", { method: "POST", body: "{}" });
+    return request<{ firebaseConfig: { apiKey: string; authDomain: string; projectId: string; appId: string } | null }>("/api/config");
   },
 
   getSession() {

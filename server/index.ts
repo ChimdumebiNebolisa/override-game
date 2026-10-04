@@ -3,8 +3,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { openDatabase } from './db';
-import { port, publicOrigin } from './config';
-import { attachGoogleIdentity, claimHandle, getPublicProfile, issueGoogleNonce, renameHandle } from './auth';
+import { firebaseWebConfig, port, publicOrigin } from './config';
+import { attachFirebaseIdentity, claimHandle, getPublicProfile, renameHandle } from './auth';
 import { HttpError, applySecurityHeaders, assertMutationOrigin, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
 import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, reconcilePresenceOnStartup, resignMatch } from './matches';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
@@ -114,7 +114,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const session = requireSession(req, res, db);
       return json(res, 200, { signedIn: Boolean(session.uid), profile: session.uid ? profileView(db, session.uid) : null });
     }
-    if (path === '/api/config' && method === 'GET') return json(res, 200, { googleClientId: process.env.GOOGLE_CLIENT_ID ?? null });
+    if (path === '/api/config' && method === 'GET') return json(res, 200, { firebaseConfig: firebaseWebConfig });
     if (path === '/api/telemetry' && method === 'POST') {
       const session = requireSession(req, res, db);
       const body = await readJson(req);
@@ -332,14 +332,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return json(res, 200, { match: matchForSession(db, matchMatch[1], session) });
     }
 
-    if (path === '/api/auth/google/nonce' && method === 'POST') {
-      const session = requireSession(req, res, db);
-      return json(res, 200, { nonce: issueGoogleNonce(db, session.id) });
-    }
     if (path === '/api/auth/google' && method === 'POST') {
       const session = requireSession(req, res, db);
       const body = await readJson(req);
-      const identity = await attachGoogleIdentity(db, session.id, body.idToken);
+      const identity = await attachFirebaseIdentity(db, session.id, body.idToken);
       recordTelemetryEvent(db, session.id, 'ranked_auth_completed', 'ranked');
       return json(res, 200, { profile: profileView(db, identity.uid) });
     }

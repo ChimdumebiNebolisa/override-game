@@ -17,13 +17,14 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
-    "jose": "^6.0.0",
+    "firebase-admin": "^14.5.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tsx": "^4.0.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "firebase": "^12.19.0",
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
@@ -32,5 +33,9 @@
     "typescript": "^5.0.0",
     "vite": "^8.3.2",
     "vitest": "^4.0.0"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.13.6",
+    "uuid": "^11.1.1"
   }
 }

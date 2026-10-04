@@ -20,7 +20,9 @@ services:
           name: override-game-staging
           type: web
           envVarKey: RENDER_EXTERNAL_URL
-      - key: GOOGLE_CLIENT_ID
+      - key: FIREBASE_WEB_CONFIG
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
       - key: INVITATION_ENCRYPTION_KEY
         generateValue: true

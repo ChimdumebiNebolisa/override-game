@@ -31,14 +31,14 @@ describe('mutation request origin', () => {
   });
 });
 
-it('sets browser security headers including the Google identity origins', () => {
+it('sets browser security headers including Firebase Authentication origins', () => {
   const headers = new Map<string, string>();
   const response = ({
     setHeader: (name: string, value: string | number | readonly string[]) => headers.set(name, String(value)),
   } as unknown) as Pick<ServerResponse, 'setHeader'>;
   applySecurityHeaders(response);
   expect(headers.get('content-security-policy')).toContain("object-src 'none'");
-  expect(headers.get('content-security-policy')).toContain('https://accounts.google.com');
+  expect(headers.get('content-security-policy')).toContain('https://identitytoolkit.googleapis.com');
   expect(headers.get('permissions-policy')).toBe('camera=(), microphone=(), geolocation=()');
   expect(headers.get('x-frame-options')).toBe('DENY');
 });
