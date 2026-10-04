@@ -10,6 +10,8 @@
     "test": "vitest run",
     "report:metrics": "tsx server/report.ts",
     "backup:db": "tsx server/backup.ts",
+    "backup:fixture": "tsx server/backup-fixture.ts",
+    "backup:verify": "tsx server/verify-backup.ts",
     "ops:status": "tsx server/ops.ts",
     "start": "tsx server/start.ts"
   },

@@ -41,9 +41,11 @@ jobs:
           wait_for_health
           docker exec override-verify test -f /data/override.sqlite
           curl -fsS http://127.0.0.1:8787/api/session >/dev/null
+          match_id=$(docker exec override-verify npm run backup:fixture | tail -n 1)
           docker exec override-verify npm run backup:db -- /data/backups/ci-backup.sqlite
           docker rm -f override-verify
           docker run --rm -v override-verify-data:/data --entrypoint node override-game:verify -e "require('node:fs').copyFileSync('/data/backups/ci-backup.sqlite', '/data/restore.sqlite')"
           docker run -d --name override-verify -p 8787:8787 -v override-verify-data:/data -e PUBLIC_ORIGIN=https://game.example -e DB_PATH=/data/restore.sqlite override-game:verify
           wait_for_health
           docker exec override-verify node -e "const Database = require('better-sqlite3'); const db = new Database('/data/restore.sqlite'); const count = db.prepare('SELECT COUNT(*) AS count FROM sessions').get().count; db.close(); if (count !== 1) process.exit(1)"
+          docker exec override-verify npm run backup:verify -- "$match_id"
