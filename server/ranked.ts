@@ -6,6 +6,7 @@ import { HttpError } from './http.js';
 
 const READY_WINDOW_MS = 15_000;
 const QUEUE_LEASE_MS = 60_000;
+const SEARCH_WINDOW_MS = 15_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MUTUAL_INCIDENT_THRESHOLD = 3;
 const MUTUAL_INCIDENT_WINDOW_MS = DAY_MS;
@@ -179,8 +180,10 @@ export function createRankedShell(db: Database.Database, uidA: string, uidB: str
 }
 
 function expireStaleSearchingInTransaction(db: Database.Database, now: number): void {
-  const expired = db.prepare(`SELECT uid FROM ranked_ownership WHERE state = 'searching' AND lease_expires_at <= ?`)
-    .all(now) as { uid: string }[];
+  const expired = db.prepare(`SELECT o.uid FROM ranked_ownership o
+    LEFT JOIN ranked_queue q ON q.uid = o.uid
+    WHERE o.state = 'searching' AND (o.lease_expires_at <= ? OR q.joined_at <= ? OR q.uid IS NULL)`)
+    .all(now, now - SEARCH_WINDOW_MS) as { uid: string }[];
   for (const { uid } of expired) {
     db.prepare('DELETE FROM ranked_queue WHERE uid = ?').run(uid);
     db.prepare("DELETE FROM ranked_ownership WHERE uid = ? AND state = 'searching'").run(uid);
@@ -195,7 +198,7 @@ function expireDueReadyShellsInTransaction(db: Database.Database, now: number): 
   return expired;
 }
 
-/** Remove only expired queue leases and readying shells; bound-match ownership is never lease-expired. */
+/** Remove timed-out searches and readying shells; bound-match ownership is never lease-expired. */
 export function expireRankedLeases(db: Database.Database, now = Date.now()): string[] {
   return db.transaction(() => {
     expireStaleSearchingInTransaction(db, now);
@@ -387,9 +390,53 @@ export function settleRankedMatch(db: Database.Database, matchId: string, now = 
     }
     db.prepare('INSERT INTO rating_settlements (match_id, settlement_json, settled_at) VALUES (?, ?, ?)')
       .run(matchId, JSON.stringify(settlement), now);
+    db.prepare('DELETE FROM settlement_failures WHERE match_id = ?').run(matchId);
     db.prepare('DELETE FROM ranked_ownership WHERE match_id = ?').run(matchId);
     return settlement;
   }).immediate();
+}
+
+/** Retry terminal results left without a ledger by an interrupted server process. */
+export function settlePendingRankedMatches(db: Database.Database, now = Date.now()): string[] {
+  const pending = db.prepare(`SELECT m.id FROM matches m
+    LEFT JOIN rating_settlements s ON s.match_id = m.id
+    WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL
+      AND s.match_id IS NULL
+    ORDER BY m.ended_at, m.id LIMIT 100`).all() as { id: string }[];
+  const resolved: string[] = [];
+  for (const { id } of pending) {
+    try {
+      settleRankedMatch(db, id, now);
+      resolved.push(id);
+    } catch (error) {
+      console.error(`Could not settle Ranked match ${id}`, error);
+      try {
+        const voided = db.transaction(() => {
+          db.prepare(`INSERT INTO settlement_failures (match_id, attempts, first_failed_at, last_failed_at)
+            VALUES (?, 1, ?, ?) ON CONFLICT(match_id) DO UPDATE SET
+            attempts = attempts + 1, last_failed_at = excluded.last_failed_at`).run(id, now, now);
+          const failure = db.prepare('SELECT attempts, first_failed_at FROM settlement_failures WHERE match_id = ?')
+            .get(id) as { attempts: number; first_failed_at: number };
+          if (failure.attempts < 3 || now - failure.first_failed_at < 2_000) return false;
+          const match = rankedMatch(db, id);
+          if (!match || match.status !== 'finished') return false;
+          let state: MatchState;
+          try { state = JSON.parse(match.state_json) as MatchState; }
+          catch { state = createInitialState(); }
+          const voidState = { ...state, status: 'finished', winner: null, endingReason: null };
+          db.prepare(`UPDATE matches SET state_json = ?, status = 'voided', result_type = 'server-error',
+            revision = revision + 1 WHERE id = ? AND status = 'finished'`)
+            .run(JSON.stringify(voidState), id);
+          db.prepare('DELETE FROM ranked_ownership WHERE match_id = ?').run(id);
+          return true;
+        }).immediate();
+        if (voided) resolved.push(id);
+      } catch (recoveryError) {
+        console.error(`Could not record settlement failure for Ranked match ${id}`, recoveryError);
+      }
+    }
+  }
+  return resolved;
 }
 
 /** Read a previously committed settlement; callers must authorize the match participant first. */

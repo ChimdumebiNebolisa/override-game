@@ -33,6 +33,20 @@ npm start
 
 `npm start` serves the built client and API from one process on `PORT`. The default SQLite file is `data/override.sqlite`; use a persistent disk in deployment. The server stores match deadlines, hidden actions, round results, queue ownership, and rating settlements in the database so a process restart can resume due work. Run a single server process against this SQLite file.
 
+## Metrics and operations
+
+```powershell
+npm run report:metrics
+npm run ops:status
+npm run backup:db
+```
+
+`report:metrics` prints aggregate funnel, gameplay, rematch, and side results as JSON. It reads revealed rounds and finished matches; it never reads pending actions. Guest matches and telemetry are retained for 30 days, while Ranked matches and settlement records remain for rating integrity. `ops:status` lists overdue deadlines, stuck ready shells, expired searches, and unsettled Ranked matches. Match transitions and settlements also produce JSON log lines keyed by match ID, without hidden moves or provider tokens.
+
+`backup:db` creates a timestamped, integrity-checked SQLite backup under ignored `data/backups/`. To rehearse a restore, stop the server, copy a backup to a **new** database path, set `DB_PATH` to that path, run `npm run ops:status` and `npm run report:metrics`, then start the server against it. Use the same procedure for a real restore after preserving the old database and its WAL files. Back up the persistent database regularly; an ephemeral filesystem will lose sessions, matches, and Ranked ratings.
+
+The service caps new guest sessions by source address and bot match creation by session. Put the public service behind HTTPS and an edge rate limit as well. Set `PUBLIC_ORIGIN` to the exact public origin, configure Google OAuth for that origin, and keep credentials outside the repository. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for checks already run and release gates still open.
+
 ## Product boundaries
 
 - Guest games and bot games never affect Ranked ratings.

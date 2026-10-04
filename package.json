@@ -8,6 +8,9 @@
     "dev:server": "tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
+    "report:metrics": "tsx server/report.ts",
+    "backup:db": "tsx server/backup.ts",
+    "ops:status": "tsx server/ops.ts",
     "start": "tsx server/start.ts"
   },
   "dependencies": {

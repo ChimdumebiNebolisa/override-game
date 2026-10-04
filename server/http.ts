@@ -44,6 +44,24 @@ export interface Session {
   expiresAt: number;
 }
 
+const newSessionsByAddress = new Map<string, { startedAt: number; count: number }>();
+
+function limitNewSession(req: IncomingMessage, now: number): void {
+  const address = req.socket.remoteAddress ?? 'unknown';
+  const current = newSessionsByAddress.get(address);
+  if (!current || current.startedAt <= now - 5 * 60_000) {
+    newSessionsByAddress.set(address, { startedAt: now, count: 1 });
+  } else {
+    if (current.count >= 60) throw new HttpError(429, 'Too many new sessions. Try again later');
+    current.count++;
+  }
+  if (newSessionsByAddress.size > 10_000) {
+    for (const [key, value] of newSessionsByAddress) {
+      if (value.startedAt <= now - 5 * 60_000) newSessionsByAddress.delete(key);
+    }
+  }
+}
+
 function cookieValue(req: IncomingMessage, name: string): string | null {
   const cookie = req.headers.cookie ?? '';
   const pair = cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${name}=`));
@@ -62,6 +80,7 @@ export function requireSession(req: IncomingMessage, res: ServerResponse, db: Da
   const found = existingSession(req, db);
   if (found) return found;
   const now = Date.now();
+  limitNewSession(req, now);
   const session: Session = { id: randomBytes(32).toString('hex'), uid: null, createdAt: now, expiresAt: now + 30 * 24 * 60 * 60_000 };
   db.prepare('INSERT INTO sessions (id, uid, created_at, expires_at) VALUES (?, NULL, ?, ?)')
     .run(session.id, now, session.expiresAt);

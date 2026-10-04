@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
+import { afterEach, test, vi } from 'vitest';
 import { openDatabase } from './db.js';
 import { HttpError } from './http.js';
+import { dueMatches, resignMatch } from './matches.js';
 import {
   acknowledgeRankedReady,
   createRankedShell,
@@ -10,6 +14,7 @@ import {
   joinRankedQueue,
   rankedQueueStatus,
   settleRankedMatch,
+  settlePendingRankedMatches,
 } from './ranked.js';
 
 const databases: ReturnType<typeof openDatabase>[] = [];
@@ -27,14 +32,12 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 
-test('active queue polling renews its lease while an abandoned search expires', () => {
+test('search stops at 15 seconds even when the client keeps polling', () => {
   const db = makeDb();
   joinRankedQueue(db, 'a', 1_000);
-  assert.equal(rankedQueueStatus(db, 'a', 50_000)?.state, 'searching');
-  expireRankedLeases(db, 61_000);
-  assert.equal(rankedQueueStatus(db, 'a', 61_000)?.state, 'searching');
-  expireRankedLeases(db, 122_000);
-  assert.equal(rankedQueueStatus(db, 'a', 122_000), null);
+  assert.equal(rankedQueueStatus(db, 'a', 14_999)?.state, 'searching');
+  assert.equal(rankedQueueStatus(db, 'a', 16_000), null);
+  assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM ranked_ownership WHERE uid = ?', 'a').count, 0);
 });
 
 function row<T>(db: ReturnType<typeof openDatabase>, sql: string, ...values: unknown[]): T {
@@ -178,6 +181,72 @@ test('settlement atomically updates ratings/stats once and returns saved result 
     row<{ player_a_key: string }>(db, 'SELECT player_a_key FROM matches WHERE id = ?', shell.matchId).player_a_key).wins, 1);
   assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM rating_settlements WHERE match_id = ?', shell.matchId).count, 1);
   assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM ranked_ownership WHERE match_id = ?', shell.matchId).count, 0);
+});
+
+test('worker retry settles a finished Ranked match after an interrupted terminal write', () => {
+  const db = makeDb();
+  const shell = createRankedShell(db, 'a', 'b', 500_000);
+  bindBoth(db, shell.matchId, 500_100);
+  const match = row<{ state_json: string }>(db, 'SELECT state_json FROM matches WHERE id = ?', shell.matchId);
+  const state = JSON.parse(match.state_json) as Record<string, unknown>;
+  state.status = 'finished';
+  state.winner = 'A';
+  db.prepare("UPDATE matches SET state_json = ?, status = 'finished', result_type = 'standard', ended_at = ? WHERE id = ?")
+    .run(JSON.stringify(state), 600_000, shell.matchId);
+
+  assert.deepEqual(settlePendingRankedMatches(db, 600_001), [shell.matchId]);
+  assert.deepEqual(settlePendingRankedMatches(db, 600_002), []);
+  assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM rating_settlements WHERE match_id = ?', shell.matchId).count, 1);
+  assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM ranked_ownership WHERE match_id = ?', shell.matchId).count, 0);
+});
+
+test('file-backed restart recovers a resigned Ranked match with no settlement', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'override-recovery-'));
+  const path = join(directory, 'game.sqlite');
+  let db = openDatabase(path);
+  try {
+    db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)')
+      .run('a', 'Alpha', 'alpha', 1);
+    db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)')
+      .run('b', 'Bravo', 'bravo', 1);
+    const shell = createRankedShell(db, 'a', 'b', 500_000);
+    bindBoth(db, shell.matchId, 500_100);
+    resignMatch(db, shell.matchId, { id: 'session-a', uid: 'a', createdAt: 0, expiresAt: 1_000_000 }, 500_200);
+    assert.deepEqual(dueMatches(db, 500_300), []);
+    db.close();
+    db = openDatabase(path);
+    assert.deepEqual(settlePendingRankedMatches(db, 500_300), [shell.matchId]);
+    assert.deepEqual(settlePendingRankedMatches(db, 500_301), []);
+    assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM rating_settlements WHERE match_id = ?', shell.matchId).count, 1);
+    assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM ranked_ownership WHERE match_id = ?', shell.matchId).count, 0);
+  } finally {
+    db.close();
+    assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('repeated internal settlement failure voids a bound match without changing ratings', () => {
+  const db = makeDb();
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const shell = createRankedShell(db, 'a', 'b', 500_000);
+    bindBoth(db, shell.matchId, 500_100);
+    resignMatch(db, shell.matchId, { id: 'session-a', uid: 'a', createdAt: 0, expiresAt: 1_000_000 }, 500_200);
+    db.prepare('UPDATE matches SET credit_assessed_at = NULL WHERE id = ?').run(shell.matchId);
+    assert.deepEqual(settlePendingRankedMatches(db, 500_300), []);
+    assert.deepEqual(settlePendingRankedMatches(db, 501_300), []);
+    assert.deepEqual(settlePendingRankedMatches(db, 502_300), [shell.matchId]);
+    assert.deepEqual(row<{ status: string; result_type: string }>(db,
+      'SELECT status, result_type FROM matches WHERE id = ?', shell.matchId),
+    { status: 'voided', result_type: 'server-error' });
+    assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM rating_settlements WHERE match_id = ?', shell.matchId).count, 0);
+    assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM ranked_ownership WHERE match_id = ?', shell.matchId).count, 0);
+    assert.equal(row<{ rating: number }>(db, 'SELECT rating FROM profiles WHERE uid = ?', 'a').rating, 1000);
+    assert.equal(row<{ rating: number }>(db, 'SELECT rating FROM profiles WHERE uid = ?', 'b').rating, 1000);
+  } finally {
+    errors.mockRestore();
+  }
 });
 
 test('no contest creates only the audit ledger and disconnect incidents, with no competitive changes', () => {

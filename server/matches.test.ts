@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from './db';
-import { createQuickRoom, joinQuickRoom } from './rooms';
+import { createQuickRoom, joinQuickRoom, openRoomForSession } from './rooms';
 import {
-  createBotMatch, expireGrace, getMatch, lockAction as serviceLockAction, markConnected, markDisconnected,
+  activeMatchForSession, createBotMatch, dueMatches, expireGrace, getMatch, lockAction as serviceLockAction, markConnected, markDisconnected, reconcilePresenceOnStartup,
   matchForSession, resignMatch, resolveMatch, startNextRound,
 } from './matches';
 import { createInitialState, validateAction, type Action, type MatchState, type RoundResult } from '../src/shared/rules';
@@ -52,6 +52,37 @@ describe('guest matches', () => {
       B: row.player_b_key === host.id ? host : guest,
     };
   }
+
+  it('resumes a guest room and active match only for its participant', () => {
+    const host = session('host');
+    const guest = session('guest');
+    const stranger = session('stranger');
+    const room = createQuickRoom(db, host, 'Host');
+    expect(openRoomForSession(db, host)?.id).toBe(room.id);
+    expect(openRoomForSession(db, stranger)).toBeNull();
+    const joined = joinQuickRoom(db, guest, { code: room.code }, 'Guest');
+    expect(activeMatchForSession(db, host)?.id).toBe(joined.matchId);
+    expect(activeMatchForSession(db, guest)?.id).toBe(joined.matchId);
+    expect(activeMatchForSession(db, stranger)).toBeNull();
+  });
+
+  it('marks lost sockets offline before resolving an overdue round after restart', () => {
+    const match = humanMatch();
+    reconcilePresenceOnStartup(db, 106_000);
+    expect(dueMatches(db, 106_000)).toEqual([match.id]);
+    const after = getMatch(db, match.id)!;
+    expect(after.status).toBe('grace');
+    expect([after.afk_a, after.afk_b]).toEqual([0, 0]);
+    expect([after.disconnect_a, after.disconnect_b]).toEqual([0, 0]);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM presence_events WHERE match_id = ? AND offline = 1')
+      .get(match.id)).toMatchObject({ count: 2 });
+  });
+
+  it('caps concurrent bot matches for one guest session', () => {
+    const guest = session('guest');
+    for (let index = 0; index < 3; index++) createBotMatch(db, guest, 'Guest', 'quick', 'easy');
+    expectStatus(() => createBotMatch(db, guest, 'Guest', 'quick', 'easy'), 429);
+  });
 
   function facingState(energyA = 0, energyB = 0): MatchState {
     return {

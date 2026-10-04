@@ -159,6 +159,8 @@ button:not(:disabled) { cursor: pointer; }
 .energy-bar strong { margin-left: auto; font: 12px var(--mono); }
 .coach-note { margin: 12px 0 0 30px; padding: 12px 14px; border-left: 4px solid var(--blue); background: white; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .coach-note b { color: var(--blue); text-transform: uppercase; font: 9px var(--mono); margin-right: 10px; }
+.hint-control { margin: 10px 0 0 30px; }
+.hint-control button { border: 0; background: transparent; color: var(--blue); font: 700 11px var(--mono); text-decoration: underline; cursor: pointer; }
 
 .move-panel { padding-top: 8px; }
 .move-heading { display: flex; justify-content: space-between; align-items: end; margin-bottom: 18px; }

@@ -181,7 +181,7 @@ function ModeSelect({
       <div className="panel-heading">
         <p className="eyebrow">{kind === "practice" ? "Learn the grid" : "Quick Duel · Bot"}</p>
         <h1>{kind === "practice" ? "Practice" : "Choose your rival."}</h1>
-        <p>{kind === "practice" ? "Legal targets, optional hints, and outcome explanations stay on while you play." : "A full unranked match with no coaching and no sign-in."}</p>
+        <p>{kind === "practice" ? "Legal targets and outcome explanations stay on. You can show or hide hints while you play." : "A full unranked match with no coaching and no sign-in."}</p>
       </div>
       <fieldset className="difficulty-picker">
         <legend>Bot difficulty</legend>
@@ -226,6 +226,8 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
   const [resultType, setResultType] = useState(initialMatch.resultType);
   const [confirmResign, setConfirmResign] = useState(false);
   const [afkWarning, setAfkWarning] = useState(Boolean(initialMatch.afkWarning));
+  const [serverStatus, setServerStatus] = useState(initialMatch.status);
+  const [showHint, setShowHint] = useState(true);
   const [deadlineAt, setDeadlineAt] = useState(initialMatch.deadline ? Date.now() + (initialMatch.deadline - initialMatch.serverNow) : null);
   const lockingRef = useRef(false);
   const me = initialMatch.player;
@@ -263,6 +265,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
 
   const receiveSnapshot = (snapshot: PublicMatch) => {
     setMatch(snapshot.state);
+    setServerStatus(snapshot.status);
     setReveal(snapshot.status === "decision" ? null : snapshot.lastResult);
     setRevision(snapshot.revision);
     revisionRef.current = snapshot.revision;
@@ -363,7 +366,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
     return first ? `Try ${actionText(first)}. Legal targets are outlined on the grid.` : "No territory move is available. Pass this round.";
   }, [match, me]);
 
-  if (match.status === "finished") {
+  if (match.status === "finished" || serverStatus === "voided") {
     return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={onRestart} onExit={onExit} onOpenRanked={onOpenRanked} onQuickRematch={onQuickRematch} />;
   }
 
@@ -400,7 +403,8 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
             {[1, 2, 3].map((value) => <i key={value} className={value <= match.energy[me] ? "charged" : ""}>ϟ</i>)}
             <strong>{match.energy[me]} / 3</strong>
           </div>
-          {mode === "practice" && !reveal && <p className="coach-note"><b>Hint</b>{hint}</p>}
+          {mode === "practice" && <div className="hint-control"><button type="button" onClick={() => setShowHint((value) => !value)} aria-pressed={showHint}>{showHint ? "Hide hints" : "Show hints"}</button></div>}
+          {mode === "practice" && showHint && !reveal && <p className="coach-note"><b>Hint</b>{hint}</p>}
         </section>
 
         <section className="move-panel" aria-labelledby="move-title">
@@ -429,6 +433,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
           </div>
           {networkError && <p className="form-error" role="alert">{networkError}</p>}
           {connectionError && <p className="form-error" role="status">{connectionError}</p>}
+          {serverStatus === "grace" && <p className="status-note" role="status">Match paused while a player reconnects. The server will resume or finish it after the grace period.</p>}
           {afkWarning && <p className="afk-warning" role="alert"><b>AFK warning</b> Choose a move this round. A third connected miss ends the match.</p>}
           <button className="lock-button" disabled={!selectedAction || locked || Boolean(reveal)} onClick={() => void commit()}>
             {locked ? "Move locked" : "Lock move"}<span>{locked ? "✓" : "→"}</span>
@@ -515,7 +520,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   onQuickRematch: (match: PublicMatch) => void;
 }) {
   const rival: Player = player === "A" ? "B" : "A";
-  const title = resultType === "no-contest" ? "No contest" : match.winner === player ? "Victory" : match.winner === rival ? "Defeat" : "Draw";
+  const title = resultType === "server-error" ? "Match voided" : resultType === "no-contest" ? "No contest" : match.winner === player ? "Victory" : match.winner === rival ? "Defeat" : "Draw";
   const [settlement, setSettlement] = useState<RankedSettlement | null>(null);
   const [profile, setProfile] = useState<RankedProfile | null>(null);
   const [invitation, setInvitation] = useState<RankedInvitation | null>(null);
@@ -527,7 +532,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   const mine = settlement?.[player === "A" ? "playerA" : "playerB"] ?? null;
 
   useEffect(() => {
-    if (!ranked) return;
+    if (!ranked || resultType === "server-error") return;
     let active = true;
     const load = async () => {
       try {
@@ -599,7 +604,8 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
       <p className="eyebrow">{ranked ? "Ranked Duel" : "Unranked match"} · Complete</p>
       <h1>{title}</h1>
       <div className="result-score"><span>{totals[player]}</span><i>—</i><span>{totals[rival]}</span></div>
-      <p>{resultType === "no-contest" ? "Neither player receives competitive credit for this match." :
+      <p>{resultType === "server-error" ? "Match voided due to a connection or server error. No rating was changed." :
+        resultType === "no-contest" ? "Neither player receives competitive credit for this match." :
         resultType === "resignation" ? "The match ended by resignation." :
           resultType === "forfeit" ? "The match ended by forfeit." :
             match.endingReason === "board-exhaustion" ? "No legal territory-changing moves remained." : "Final territory after the last round."}</p>
@@ -615,7 +621,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
       {friend && quickRequested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your friend.</p></div>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="result-actions">
-        {ranked ? !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" onClick={onRestart}>Rematch <span>↻</span></button>}
+        {ranked ? resultType !== "server-error" && !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" onClick={onRestart}>Rematch <span>↻</span></button>}
         <button className="secondary-cta" onClick={onExit}>Home</button>
       </div>
       {!ranked && <small>Practice and Quick Duel results do not affect Ranked statistics.</small>}
@@ -623,11 +629,11 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   );
 }
 
-function RoomScreen({ navigate, onMatch, inviteToken }: { navigate: (screen: Screen) => void; onMatch: (match: PublicMatch) => void; inviteToken?: string | null }) {
+function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate: (screen: Screen) => void; onMatch: (match: PublicMatch) => void; inviteToken?: string | null; initialRoom?: Room | null }) {
   const [tab, setTab] = useState<"create" | "join">(inviteToken ? "join" : "create");
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
-  const [room, setRoom] = useState<Room | null>(null);
+  const [room, setRoom] = useState<Room | null>(initialRoom ?? null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -725,13 +731,19 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
   const googleButton = useRef<HTMLDivElement>(null);
   const acceptingInvite = useRef(false);
 
+  const openActiveMatch = async (next: RankedQueue | null) => {
+    if (next?.state === "active" && next.matchId) {
+      onMatch((await api.getMatch<PublicMatch>(next.matchId)).match);
+    }
+  };
+
   const refreshQueue = async () => {
     const response = await api.getRankedQueue();
-    setQueue(response.queue);
-    if (response.queue?.state === "active" && response.queue.matchId) {
-      const match = await api.getMatch<PublicMatch>(response.queue.matchId);
-      onMatch(match.match);
-    }
+    if (!response.queue && queue?.state === "readying") setInviteUrl("");
+    setQueue((current) => !response.queue && (current?.state === "searching" || current?.state === "readying")
+      ? { state: current.state === "searching" ? "timed-out" : "ready-expired", matchId: null, competitiveMultiplier: null, readyDeadline: null }
+      : response.queue);
+    await openActiveMatch(response.queue);
   };
 
   useEffect(() => {
@@ -747,10 +759,10 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
   }, []);
 
   useEffect(() => {
-    if (!queue || queue.state === "active") return;
+    if ((!queue && !inviteUrl) || queue?.state === "active" || queue?.state === "timed-out" || queue?.state === "ready-expired") return;
     const timer = window.setInterval(() => void refreshQueue().catch(() => undefined), 900);
     return () => window.clearInterval(timer);
-  }, [queue?.state, queue?.matchId]);
+  }, [queue?.state, queue?.matchId, inviteUrl]);
 
   useEffect(() => {
     if (signedIn || !clientId || !googleButton.current) return;
@@ -760,7 +772,8 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
         client_id: clientId,
         callback: ({ credential }) => {
           setBusy(true);
-          api.googleSignIn(credential).then((response) => {
+          api.trackEvent("ranked_auth_started", "ranked").catch(() => undefined)
+            .then(() => api.googleSignIn(credential)).then((response) => {
             setSignedIn(true);
             setProfile(response.profile);
             setError("");
@@ -801,20 +814,20 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
   };
   const findOpponent = async () => {
     setBusy(true); setError("");
-    try { setQueue((await api.enterRankedQueue()).queue); }
+    try { const next = (await api.enterRankedQueue()).queue; setQueue(next); await openActiveMatch(next); void api.trackEvent("opponent_selected", "ranked-queue").catch(() => undefined); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Matchmaking could not start."); }
     finally { setBusy(false); }
   };
   const ready = async () => {
     if (!queue?.matchId) return;
     setBusy(true); setError("");
-    try { setQueue((await api.readyRankedMatch(queue.matchId)).queue); }
+    try { const next = (await api.readyRankedMatch(queue.matchId)).queue; setQueue(next); await openActiveMatch(next); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Ready status could not be saved."); }
     finally { setBusy(false); }
   };
   const challenge = async () => {
     setBusy(true); setError("");
-    try { setInviteUrl((await api.createRankedChallenge()).invitation.inviteUrl); }
+    try { setInviteUrl((await api.createRankedChallenge()).invitation.inviteUrl); void api.trackEvent("opponent_selected", "ranked-friend").catch(() => undefined); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "The challenge could not be created."); }
     finally { setBusy(false); }
   };
@@ -827,9 +840,11 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
       {!signedIn && clientId && <div className="google-slot" ref={googleButton} aria-label="Sign in with Google" />}
       {!signedIn && !clientId && <button className="google-button" disabled><span>G</span> Google sign-in is not configured</button>}
       {signedIn && !profile?.handle && <section className="room-form ranked-setup"><label>Choose a public handle<input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><button className="primary-cta full" disabled={busy || !/^[A-Za-z0-9_]{3,16}$/.test(handle)} onClick={claim}>Claim handle <span>→</span></button></section>}
-      {profile?.handle && !queue && !inviteIntent && <section className="ranked-console"><p>Signed in as <strong>{profile.handle}</strong></p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Find opponent <span>→</span></button><button className="secondary-cta full challenge-button" disabled={busy} onClick={challenge}>Challenge friend</button>{inviteUrl && <div className="invite-output"><span>Ranked invite ready</span><button onClick={() => navigator.clipboard.writeText(inviteUrl)}>Copy invite link</button></div>}</section>}
+      {profile?.handle && !queue && !inviteIntent && <section className="ranked-console"><p>Signed in as <strong>{profile.handle}</strong></p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Find opponent <span>→</span></button><button className="secondary-cta full challenge-button" disabled={busy} onClick={challenge}>Challenge friend</button>{inviteUrl && <div className="invite-output"><span>Waiting for friend to accept</span><button onClick={() => navigator.clipboard.writeText(inviteUrl)}>Copy invite link</button></div>}</section>}
       {profile?.handle && inviteIntent && !queue && <section className="ranked-console"><div className="queue-pulse" /><strong>Opening {inviteIntent.kind}…</strong><p>Your destination was preserved through sign-in.</p></section>}
       {queue?.state === "searching" && <section className="ranked-console"><div className="queue-pulse" /><strong>Finding an opponent…</strong><p>Search expands over 15 seconds.</p><button className="secondary-cta full" onClick={() => void api.leaveRankedQueue().then(() => setQueue(null))}>Cancel</button></section>}
+      {queue?.state === "timed-out" && <section className="ranked-console"><strong>No opponent found this time.</strong><p>Search timed out after 15 seconds.</p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Try again <span>→</span></button></section>}
+      {queue?.state === "ready-expired" && <section className="ranked-console"><strong>Ready window expired.</strong><p>Both players need to confirm within 15 seconds. This match did not affect ratings.</p><button className="secondary-cta full" onClick={() => setQueue(null)}>Return to Ranked</button></section>}
       {queue?.state === "readying" && <section className="ranked-console"><p className="eyebrow">Opponent found</p><strong>{queue.competitiveMultiplier === 1 ? "Full competitive credit" : `${Math.round((queue.competitiveMultiplier ?? 0) * 100)}% RP credit`}</strong><p>Opponent identity appears after both players commit.</p><button className="primary-cta full" disabled={busy} onClick={ready}>Ready <span>→</span></button></section>}
       {queue?.state === "cooldown" && <section className="ranked-console"><strong>Ranked cooldown</strong><p>Matchmaking is temporarily unavailable after repeated disconnect incidents.</p></section>}
       {error && <p className="form-error" role="alert">{error}</p>}
@@ -842,10 +857,11 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
 function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | "how-to"; navigate: (screen: Screen) => void }) {
   const [profile, setProfile] = useState<RankedProfile | null>(null);
   const [leaders, setLeaders] = useState<LeaderboardEntry[]>([]);
+  const [around, setAround] = useState<LeaderboardEntry[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
     if (screen === "profile") api.getProfile().then((response) => setProfile(response.profile)).catch(() => setProfile(null));
-    if (screen === "leaderboard") api.getLeaderboard().then((response) => setLeaders(response.top)).catch((reason) => setError(reason instanceof Error ? reason.message : "Leaderboard unavailable."));
+    if (screen === "leaderboard") api.getLeaderboard().then((response) => { setLeaders(response.top); setAround(response.around); }).catch((reason) => setError(reason instanceof Error ? reason.message : "Leaderboard unavailable."));
   }, [screen]);
   if (screen === "how-to") return <HowTo navigate={navigate} />;
   return (
@@ -858,6 +874,7 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
       </div>
       {screen === "profile" && profile && <div className="profile-stats"><p><strong>{profile.rating ?? 1000}</strong><span>RP</span></p><p><strong>{profile.peakRating ?? profile.rating ?? 1000}</strong><span>Peak RP</span></p><p><strong>{profile.placementProgress ?? 0}/5</strong><span>Placement</span></p><p><strong>{profile.wins ?? 0}-{profile.losses ?? 0}-{profile.draws ?? 0}</strong><span>W-L-D</span></p></div>}
       {screen === "leaderboard" && leaders.length > 0 && <ol className="leaderboard-list">{leaders.map((entry) => <li key={entry.handle}><b>#{entry.rank}</b><strong>{entry.handle}</strong><span>{entry.tier}</span><em>{entry.rating} RP</em></li>)}</ol>}
+      {screen === "leaderboard" && around.length > 0 && <section aria-labelledby="around-title"><h2 id="around-title">Around you</h2><ol className="leaderboard-list">{around.map((entry) => <li key={entry.handle}><b>#{entry.rank}</b><strong>{entry.handle}</strong><span>{entry.tier}</span><em>{entry.rating} RP</em></li>)}</ol></section>}
       {((screen === "profile" && !profile) || (screen === "leaderboard" && leaders.length === 0)) && <div className="empty-state"><span aria-hidden="true">{screen === "profile" ? "G" : "#"}</span><strong>{screen === "profile" ? "No persistent profile yet" : "No placed players yet"}</strong><p>{screen === "profile" ? "Guest games do not carry into Ranked statistics." : "Bots and benchmark Rivals never appear in the human rankings."}</p></div>}
       <RivalsPanel rating={profile?.rating ?? 1000} />
       {error && <p className="form-error" role="alert">{error}</p>}
@@ -903,14 +920,41 @@ export function App() {
   const [gameKey, setGameKey] = useState(0);
   const [solo, setSolo] = useState<{ mode: PlayMode; difficulty: Difficulty }>({ mode: "practice", difficulty: "Normal" });
   const [botMatch, setBotMatch] = useState<PublicMatch | null>(null);
+  const [resumedRoom, setResumedRoom] = useState<Room | null>(null);
+
+  useEffect(() => {
+    if (inviteIntent || guestInvite || quickRematchToken) return;
+    let active = true;
+    api.getResume().then(({ match, room, rankedQueue }) => {
+      if (!active) return;
+      if (match) {
+        setSolo({ mode: match.mode, difficulty: "Normal" });
+        setBotMatch(match);
+        setScreen((current) => current === "home" ? "game" : current);
+      } else if (room) {
+        setResumedRoom(room);
+        setScreen((current) => current === "home" ? "room" : current);
+      } else if (rankedQueue) {
+        setScreen((current) => current === "home" ? "ranked" : current);
+      } else {
+        void api.trackEvent("homepage_opened").catch(() => undefined);
+      }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   const navigate = (next: Screen) => {
     if ((inviteIntent && next !== "ranked") || (guestInvite && next !== "room") || (quickRematchToken && next !== "quick-rematch")) window.history.replaceState(null, "", "/");
+    if (next !== "room") setResumedRoom(null);
+    if (next === "home") void api.trackEvent("homepage_opened").catch(() => undefined);
+    if (next === "practice" || next === "quick" || next === "ranked") void api.trackEvent("mode_selected", next).catch(() => undefined);
+    if (next === "room") void api.trackEvent("opponent_selected", "quick-human").catch(() => undefined);
     setScreen(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
-  const start = async (mode: SoloMode, difficulty: Difficulty) => {
-    const response = await api.createBotMatch(mode, difficulty.toLowerCase() as Lowercase<Difficulty>);
+  const start = async (mode: SoloMode, difficulty: Difficulty, parentMatchId?: string) => {
+    if (!parentMatchId) void api.trackEvent("opponent_selected", `${mode}-bot`).catch(() => undefined);
+    const response = await api.createBotMatch(mode, difficulty.toLowerCase() as Lowercase<Difficulty>, parentMatchId);
     setSolo({ mode, difficulty });
     setBotMatch(response.match);
     setGameKey((value) => value + 1);
@@ -923,8 +967,8 @@ export function App() {
       {screen === "home" && <Home navigate={navigate} />}
       {screen === "practice" && <ModeSelect kind="practice" onStart={start} navigate={navigate} />}
       {screen === "quick" && <ModeSelect kind="quick" onStart={start} navigate={navigate} />}
-      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={() => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else void start(solo.mode, solo.difficulty); }} />}
-      {screen === "room" && <RoomScreen inviteToken={guestInvite} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
+      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={() => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else void start(solo.mode, solo.difficulty, botMatch.id); }} />}
+      {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {(screen === "leaderboard" || screen === "profile" || screen === "how-to") && <InfoScreen screen={screen} navigate={navigate} />}

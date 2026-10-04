@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-const databasePath = process.env.DB_PATH ?? resolve('data/override.sqlite');
+export const databasePath = process.env.DB_PATH ?? resolve('data/override.sqlite');
 
 export function openDatabase(path = databasePath): Database.Database {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -55,6 +55,7 @@ export function openDatabase(path = databasePath): Database.Database {
     CREATE TABLE IF NOT EXISTS matches (
       id TEXT PRIMARY KEY,
       room_id TEXT,
+      parent_match_id TEXT REFERENCES matches(id),
       mode TEXT NOT NULL CHECK (mode IN ('quick', 'ranked', 'practice')),
       bot_difficulty TEXT,
       player_a_key TEXT NOT NULL,
@@ -112,6 +113,14 @@ export function openDatabase(path = databasePath): Database.Database {
       FOREIGN KEY (match_id) REFERENCES matches(id)
     );
     CREATE INDEX IF NOT EXISTS presence_at_deadline ON presence_events(match_id, player, changed_at, id);
+    CREATE TABLE IF NOT EXISTS telemetry_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      mode TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS telemetry_by_time ON telemetry_events(created_at, name);
     CREATE TABLE IF NOT EXISTS ranked_ownership (
       uid TEXT PRIMARY KEY,
       state TEXT NOT NULL,
@@ -129,6 +138,12 @@ export function openDatabase(path = databasePath): Database.Database {
       settlement_json TEXT NOT NULL,
       settled_at INTEGER NOT NULL,
       FOREIGN KEY (match_id) REFERENCES matches(id)
+    );
+    CREATE TABLE IF NOT EXISTS settlement_failures (
+      match_id TEXT PRIMARY KEY REFERENCES matches(id),
+      attempts INTEGER NOT NULL,
+      first_failed_at INTEGER NOT NULL,
+      last_failed_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS disconnect_incidents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,6 +187,9 @@ export function openDatabase(path = databasePath): Database.Database {
   const matchColumns = db.prepare('PRAGMA table_info(matches)').all() as { name: string }[];
   if (!matchColumns.some((column) => column.name === 'decision_duration_ms')) {
     db.exec('ALTER TABLE matches ADD COLUMN decision_duration_ms INTEGER NOT NULL DEFAULT 5000');
+  }
+  if (!matchColumns.some((column) => column.name === 'parent_match_id')) {
+    db.exec('ALTER TABLE matches ADD COLUMN parent_match_id TEXT REFERENCES matches(id)');
   }
   return db;
 }

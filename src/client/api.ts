@@ -55,7 +55,7 @@ export interface RankedProfile {
 }
 
 export interface RankedQueue {
-  state: "searching" | "readying" | "active" | "cooldown";
+  state: "searching" | "readying" | "active" | "cooldown" | "timed-out" | "ready-expired";
   matchId: string | null;
   competitiveMultiplier: number | null;
   readyDeadline: number | null;
@@ -185,10 +185,10 @@ export const api = {
     return request<{ closed: boolean }>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
   },
 
-  createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard") {
+  createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", parentMatchId?: string) {
     return request<MatchResponse<PublicMatch>>("/api/bot-matches", {
       method: "POST",
-      body: JSON.stringify({ displayName: "Player", mode, difficulty }),
+      body: JSON.stringify({ displayName: "Player", mode, difficulty, parentMatchId }),
     });
   },
 
@@ -232,6 +232,17 @@ export const api = {
 
   getSession() {
     return request<{ signedIn: boolean; profile: RankedProfile | null }>("/api/session");
+  },
+
+  getResume() {
+    return request<{ match: PublicMatch | null; room: Room | null; rankedQueue: RankedQueue | null }>("/api/resume");
+  },
+
+  trackEvent(name: "homepage_opened" | "mode_selected" | "opponent_selected" | "ranked_auth_started", mode?: string) {
+    return request<{ recorded: boolean }>("/api/telemetry", {
+      method: "POST",
+      body: JSON.stringify({ name, mode: mode ?? null }),
+    });
   },
 
   googleSignIn(idToken: string) {

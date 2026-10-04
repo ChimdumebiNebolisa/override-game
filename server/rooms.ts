@@ -50,6 +50,13 @@ export function roomForSession(db: Database.Database, id: string, session: Sessi
   return roomView(row);
 }
 
+export function openRoomForSession(db: Database.Database, session: Session) {
+  const row = db.prepare(`SELECT * FROM rooms WHERE mode = 'quick' AND status = 'open'
+    AND host_key = ? AND expires_at > ? ORDER BY created_at DESC, id DESC LIMIT 1`)
+    .get(session.id, Date.now()) as RoomRow | undefined;
+  return row ? roomView(row) : null;
+}
+
 export function createQuickRoom(db: Database.Database, session: Session, name: string) {
   const now = Date.now();
   const count = db.prepare("SELECT count(*) AS count FROM rooms WHERE host_key = ? AND status IN ('open', 'full', 'active') AND expires_at > ?")

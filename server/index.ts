@@ -6,16 +6,26 @@ import { openDatabase } from './db';
 import { port, publicOrigin } from './config';
 import { attachGoogleIdentity, claimHandle, getPublicProfile, renameHandle } from './auth';
 import { HttpError, displayName, existingSession, json, readJson, requireSession } from './http';
-import { createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, resignMatch } from './matches';
-import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, roomForSession } from './rooms';
-import { acknowledgeRankedReady, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, rankedQueueStatus, settleRankedMatch } from './ranked';
+import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, reconcilePresenceOnStartup, resignMatch } from './matches';
+import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
+import { acknowledgeRankedReady, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
 import { leaderboard, profileView } from './progression';
 import { acceptRankedChallenge, acceptRankedRematch, createRankedChallenge, expireRankedInvitations, pendingRankedRematch, requestRankedRematch } from './invitations';
 import { acceptQuickRematch, expireQuickRematches, pendingQuickRematch, requestQuickRematch } from './quick-rematch';
+import { recordClientTelemetry, recordTelemetryEvent } from './metrics';
+import { pruneExpiredGuestData } from './maintenance';
 
 const db = openDatabase();
+reconcilePresenceOnStartup(db);
+pruneExpiredGuestData(db);
 const sockets = new Set<{ ws: WebSocket; roomId: string | null; matchId: string | null; sessionId: string; key: string; alive: boolean }>();
 const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 1024 });
+
+function logMatchEvent(event: string, matchId: string): void {
+  const match = getMatch(db, matchId);
+  if (!match) return;
+  console.info(JSON.stringify({ at: new Date().toISOString(), event, matchId, status: match.status, revision: match.revision }));
+}
 
 function notifyRoom(roomId: string): void {
   for (const connection of sockets) {
@@ -77,6 +87,21 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return json(res, 200, { signedIn: Boolean(session.uid), profile: session.uid ? profileView(db, session.uid) : null });
     }
     if (path === '/api/config' && method === 'GET') return json(res, 200, { googleClientId: process.env.GOOGLE_CLIENT_ID ?? null });
+    if (path === '/api/telemetry' && method === 'POST') {
+      const session = requireSession(req, res, db);
+      const body = await readJson(req);
+      recordClientTelemetry(db, session.id, body.name, body.mode);
+      return json(res, 200, { recorded: true });
+    }
+    if (path === '/api/resume' && method === 'GET') {
+      const session = requireSession(req, res, db);
+      const match = activeMatchForSession(db, session);
+      return json(res, 200, {
+        match,
+        room: match ? null : openRoomForSession(db, session),
+        rankedQueue: session.uid && !match ? rankedQueueStatus(db, session.uid) : null,
+      });
+    }
 
     if (path === '/api/rooms' && method === 'POST') {
       const session = requireSession(req, res, db);
@@ -90,6 +115,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const token = typeof body.token === 'string' ? body.token.trim() : undefined;
       if (!code && !token) throw new HttpError(400, 'Enter a room code or use an invite link');
       const room = joinQuickRoom(db, session, { code, token }, displayName(body.displayName));
+      if (room.matchId) logMatchEvent('match_started', room.matchId);
       notifyRoom(room.id);
       return json(res, 200, { room });
     }
@@ -116,14 +142,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const body = await readJson(req);
       const mode = body.mode === 'practice' ? 'practice' : 'quick';
       const difficulty = body.difficulty === 'normal' || body.difficulty === 'hard' ? body.difficulty : 'easy';
-      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty);
+      const parentMatchId = typeof body.parentMatchId === 'string' ? body.parentMatchId : undefined;
+      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty, parentMatchId);
+      logMatchEvent('match_started', id);
       return json(res, 201, { match: matchForSession(db, id, session) });
     }
     if (path === '/api/ranked/queue') {
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       if (method === 'GET') return json(res, 200, { queue: rankedQueueStatus(db, session.uid) });
-      if (method === 'POST') return json(res, 200, { queue: joinRankedQueue(db, session.uid) });
+      if (method === 'POST') {
+        const queue = joinRankedQueue(db, session.uid);
+        recordTelemetryEvent(db, session.id, 'matchmaking_started', 'ranked-queue');
+        return json(res, 200, { queue });
+      }
       if (method === 'DELETE') return json(res, 200, { left: leaveRankedQueue(db, session.uid) });
     }
     if (path === '/api/ranked/challenges' && method === 'POST') {
@@ -164,12 +196,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       const queue = acknowledgeRankedReady(db, rankedReady[1], session.uid);
+      if (queue.state === 'active') logMatchEvent('match_started', rankedReady[1]);
       notifyMatch(rankedReady[1]);
       return json(res, 200, { queue });
     }
     if (path === '/api/leaderboard' && method === 'GET') {
-      const session = requireSession(req, res, db);
-      return json(res, 200, leaderboard(db, session.uid));
+      const session = existingSession(req, db);
+      return json(res, 200, leaderboard(db, session?.uid ?? null));
     }
     const actionMatch = path.match(/^\/api\/matches\/([a-f0-9-]{36})\/actions$/);
     if (actionMatch && method === 'POST') {
@@ -188,7 +221,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       if (body.confirm !== true) throw new HttpError(400, 'Confirm resignation to end the match');
       resignMatch(db, resign[1], session);
       const match = getMatch(db, resign[1]);
-      if (match?.mode === 'ranked') settleRankedMatch(db, resign[1]);
+      if (match?.mode === 'ranked') {
+        settleRankedMatch(db, resign[1]);
+        logMatchEvent('ranked_settled', resign[1]);
+      }
+      logMatchEvent('match_finished', resign[1]);
       if (match?.room_id) notifyRoom(match.room_id);
       notifyMatch(resign[1]);
       return json(res, 200, { match: matchForSession(db, resign[1], session) });
@@ -251,6 +288,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const session = requireSession(req, res, db);
       const body = await readJson(req);
       const identity = await attachGoogleIdentity(db, session.id, body.idToken);
+      recordTelemetryEvent(db, session.id, 'ranked_auth_completed', 'ranked');
       return json(res, 200, { profile: profileView(db, identity.uid) });
     }
     if (path === '/api/profile/me' && method === 'GET') {
@@ -338,9 +376,13 @@ setInterval(() => {
   try {
     for (const id of dueMatches(db)) {
       const match = getMatch(db, id);
+      logMatchEvent(match?.status === 'finished' ? 'match_finished' : match?.status === 'decision' ? 'round_opened' : 'round_resolved', id);
       if (match?.room_id) notifyRoom(match.room_id);
       notifyMatch(id);
-      if (match?.mode === 'ranked' && match.status === 'finished') settleRankedMatch(db, id);
+      if (match?.mode === 'ranked' && match.status === 'finished') {
+        settleRankedMatch(db, id);
+        logMatchEvent('ranked_settled', id);
+      }
     }
     for (const id of expireRankedLeases(db)) notifyMatch(id);
     expireRankedInvitations(db);
@@ -351,5 +393,17 @@ setInterval(() => {
     console.error('Deadline worker failed', error);
   }
 }, 100);
+
+setInterval(() => {
+  for (const id of settlePendingRankedMatches(db)) {
+    logMatchEvent(getMatch(db, id)?.status === 'voided' ? 'ranked_voided' : 'ranked_settled', id);
+    notifyMatch(id);
+  }
+}, 1_000);
+
+setInterval(() => {
+  try { pruneExpiredGuestData(db); }
+  catch (error) { console.error('Guest retention failed', error); }
+}, 60 * 60_000);
 
 server.listen(port, () => console.log(`OVERRIDE server listening on http://localhost:${port}`));

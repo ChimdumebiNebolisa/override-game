@@ -10,6 +10,7 @@ import { HttpError, type Session } from './http';
 export interface MatchRow {
   id: string;
   room_id: string | null;
+  parent_match_id: string | null;
   mode: 'quick' | 'ranked' | 'practice';
   bot_difficulty: BotDifficulty | null;
   player_a_key: string;
@@ -93,6 +94,16 @@ export function matchForSession(db: Database.Database, id: string, session: Sess
   };
 }
 
+/** Find the most recent match this browser can safely resume. */
+export function activeMatchForSession(db: Database.Database, session: Session) {
+  const row = db.prepare(`SELECT id FROM matches WHERE status IN ('decision', 'transition', 'grace')
+    AND ((mode = 'ranked' AND ? IS NOT NULL AND (player_a_key = ? OR player_b_key = ?))
+      OR (mode <> 'ranked' AND (player_a_key = ? OR player_b_key = ?)))
+    ORDER BY started_at DESC, id DESC LIMIT 1`)
+    .get(session.uid, session.uid, session.uid, session.id, session.id) as { id: string } | undefined;
+  return row ? matchForSession(db, row.id, session) : null;
+}
+
 export function parseAction(value: unknown): Action {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'Choose an action');
   const data = value as Record<string, unknown>;
@@ -104,13 +115,25 @@ export function parseAction(value: unknown): Action {
   throw new HttpError(400, 'Unknown action');
 }
 
-export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy') {
+export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy', parentMatchId?: string) {
+  if (parentMatchId) {
+    const parent = getMatch(db, parentMatchId);
+    if (!parent || parent.mode !== mode || parent.player_a_key !== session.id ||
+        !parent.player_b_key.startsWith('bot:') || parent.status !== 'finished') {
+      throw new HttpError(404, 'Completed bot match not found');
+    }
+  }
   const now = Date.now();
+  const recent = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ?
+    AND player_b_key LIKE 'bot:%' AND started_at > ?`).get(session.id, now - 5 * 60_000) as { count: number };
+  const active = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ?
+    AND player_b_key LIKE 'bot:%' AND status IN ('decision', 'transition', 'grace')`).get(session.id) as { count: number };
+  if (recent.count >= 10 || active.count >= 3) throw new HttpError(429, 'Finish an existing bot match before starting another');
   const id = randomUUID();
   db.prepare(`INSERT INTO matches
-    (id, room_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status, deadline, started_at, revision)
-    VALUES (?, NULL, ?, ?, ?, ?, ?, 'Bot', ?, 'decision', ?, ?, 1)`)
-    .run(id, mode, difficulty, session.id, `bot:${id}`, name, JSON.stringify(createInitialState()), now + 5_000, now);
+    (id, room_id, parent_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status, deadline, started_at, revision)
+    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'Bot', ?, 'decision', ?, ?, 1)`)
+    .run(id, parentMatchId ?? null, mode, difficulty, session.id, `bot:${id}`, name, JSON.stringify(createInitialState()), now + 5_000, now);
   return id;
 }
 
@@ -263,6 +286,28 @@ export function markConnected(db: Database.Database, id: string, player: Player,
     if (row?.status === 'grace' && row.disconnected_a_at === null && row.disconnected_b_at === null) {
       db.prepare("UPDATE matches SET status = 'decision', deadline = ?, grace_until = NULL, revision = revision + 1 WHERE id = ? AND status = 'grace'")
         .run(now + row.decision_duration_ms, id);
+    }
+  }).immediate();
+}
+
+/** Treat sockets lost with a server process as offline before replaying overdue deadlines. */
+export function reconcilePresenceOnStartup(db: Database.Database, now = Date.now()): void {
+  db.transaction(() => {
+    const matches = db.prepare(`SELECT id, player_b_key, status, deadline, disconnected_a_at, disconnected_b_at
+      FROM matches WHERE status IN ('decision', 'transition', 'grace') AND started_at IS NOT NULL`)
+      .all() as Pick<MatchRow, 'id' | 'player_b_key' | 'status' | 'deadline' | 'disconnected_a_at' | 'disconnected_b_at'>[];
+    for (const match of matches) {
+      for (const player of (['A', 'B'] as const)) {
+        if (player === 'B' && match.player_b_key.startsWith('bot:')) continue;
+        if (player === 'A' ? match.disconnected_a_at !== null : match.disconnected_b_at !== null) continue;
+        const column = player === 'A' ? 'a' : 'b';
+        const offlineAt = match.status === 'decision' && match.deadline !== null
+          ? Math.min(now, match.deadline) : now;
+        db.prepare(`UPDATE matches SET disconnected_${column}_at = ?, revision = revision + 1 WHERE id = ?`)
+          .run(offlineAt, match.id);
+        db.prepare('INSERT INTO presence_events (match_id, player, changed_at, offline) VALUES (?, ?, ?, 1)')
+          .run(match.id, player, offlineAt);
+      }
     }
   }).immediate();
 }
