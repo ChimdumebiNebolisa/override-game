@@ -432,6 +432,7 @@ describe('guest matches', () => {
     };
     db.prepare('UPDATE matches SET state_json = ?, disconnect_a = 2 WHERE id = ?')
       .run(JSON.stringify(leading), match.id);
+    lockAction(db, match.id, match.A, { type: 'expand', target: 12 });
     markDisconnected(db, match.id, 'A', 100_100);
     lockAction(db, match.id, match.B, pass);
     const deadline = getMatch(db, match.id)!.deadline!;
@@ -440,6 +441,11 @@ describe('guest matches', () => {
     expect(row.status).toBe('finished');
     expect(row.result_type).toBe('forfeit');
     expect((JSON.parse(row.state_json) as MatchState).winner).toBe('B');
+    const result = JSON.parse(row.last_result_json!) as RoundResult;
+    expect(result.outcomes.A.reason).toBe('claimed');
+    expect(result.outcomes.B.reason).toBe('passed');
+    expect(result.state.board[12]).toBe('A');
+    expect(result.state.round).toBe(12);
   });
 
   it('allows only a participant to resign and records the opponent as winner once', () => {

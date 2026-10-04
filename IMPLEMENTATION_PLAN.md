@@ -120,7 +120,7 @@ Recommended command surface: create/join/leave room; ready; lock action; fetch m
 
 ## 10. Approved rule clarifications
 
-The product owner explicitly signed off on all ten recommendations (D1–D10) in the project conversation on 2026-10-04. These clarify gaps or tensions in the frozen PRD; they do not add game modes or change its product invariants. Implement and test the rules below at their listed milestones.
+The product owner explicitly signed off on all ten recommendations (D1–D10) in the project conversation on 2026-10-04 and reaffirmed that approval for the complete decision set. This approval is recorded here as the decision log. These clarify gaps or tensions in the frozen PRD; they do not add game modes or change its product invariants. Implement and test the rules below at their listed milestones.
 
 | ID | Approved rule | Implementation and verification |
 | --- | --- | --- |

@@ -244,7 +244,12 @@ export function resolveMatch(db: Database.Database, id: string, now = Date.now()
     const bForfeit = misses.B >= 3 || disconnectsAtDeadline(db, id, 'B', row.disconnect_b, row.deadline!) >= 3;
     const noContest = aForfeit && bForfeit || offline.A && offline.B && (aForfeit || bForfeit);
     const forfeiting = noContest ? null : aForfeit ? 'A' : bForfeit ? 'B' : null;
-    const result = resolveRound(state, actions, forfeiting);
+    const afkForfeiting = forfeiting && misses[forfeiting] >= 3 ? forfeiting : null;
+    const result = resolveRound(state, actions, afkForfeiting);
+    if (forfeiting && !afkForfeiting) result.state = {
+      ...result.state, round: state.round, phase: state.phase, status: 'finished',
+      winner: forfeiting === 'A' ? 'B' : 'A', endingReason: 'forfeit',
+    };
     if (noContest) result.state = { ...result.state, status: 'finished', winner: null, endingReason: null };
     let status: MatchRow['status'] = result.state.status === 'finished' ? 'finished' : 'transition';
     let graceUntil: number | null = null;
