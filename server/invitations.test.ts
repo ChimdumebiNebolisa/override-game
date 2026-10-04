@@ -1,0 +1,156 @@
+import assert from 'node:assert/strict';
+import { afterEach, test } from 'vitest';
+import { openDatabase } from './db.js';
+import { HttpError } from './http.js';
+import { acknowledgeRankedReady, createRankedShell, settleRankedMatch } from './ranked.js';
+import {
+  acceptRankedChallenge,
+  acceptRankedRematch,
+  createRankedChallenge,
+  expireRankedInvitations,
+  pendingRankedRematch,
+  rankedRematchLifetimeMs,
+  requestRankedRematch,
+} from './invitations.js';
+
+const databases: ReturnType<typeof openDatabase>[] = [];
+const makeDb = () => {
+  const db = openDatabase(':memory:');
+  databases.push(db);
+  db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)')
+    .run('a', 'Alpha', 'alpha', 1);
+  db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)')
+    .run('b', 'Bravo', 'bravo', 1);
+  return db;
+};
+
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+});
+
+function row<T>(db: ReturnType<typeof openDatabase>, sql: string, ...values: unknown[]): T {
+  return db.prepare(sql).get(...values) as T;
+}
+
+function assertHttpError(error: unknown, status: number): void {
+  assert.ok(error instanceof HttpError);
+  assert.equal(error.status, status);
+}
+
+function makeSettledMatch(db: ReturnType<typeof openDatabase>, now: number) {
+  const shell = createRankedShell(db, 'a', 'b', now);
+  const players = row<{ player_a_key: string; player_b_key: string }>(db,
+    'SELECT player_a_key, player_b_key FROM matches WHERE id = ?', shell.matchId);
+  acknowledgeRankedReady(db, shell.matchId, players.player_a_key, now + 1);
+  acknowledgeRankedReady(db, shell.matchId, players.player_b_key, now + 2);
+  const match = row<{ state_json: string; player_a_key: string; player_b_key: string }>(db,
+    'SELECT state_json, player_a_key, player_b_key FROM matches WHERE id = ?', shell.matchId);
+  const state = JSON.parse(match.state_json) as Record<string, unknown>;
+  state.status = 'finished';
+  state.winner = 'A';
+  state.endingReason = 'standard';
+  db.prepare(`UPDATE matches SET state_json = ?, status = 'finished', ended_at = ?, result_type = 'standard'
+    WHERE id = ?`).run(JSON.stringify(state), now + 10_000, shell.matchId);
+  settleRankedMatch(db, shell.matchId, now + 10_001);
+  return { id: shell.matchId, playerA: match.player_a_key, playerB: match.player_b_key };
+}
+
+test('challenge token is high entropy, private, expiring, and redeems once into a ready shell', () => {
+  const db = makeDb();
+  const now = 1_000_000;
+  const invite = createRankedChallenge(db, 'a', now);
+  assert.equal(invite.kind, 'challenge');
+  assert.equal(Buffer.from(invite.token, 'base64url').length, 32);
+  assert.equal(invite.expiresAt, now + 30 * 60_000);
+  assert.ok(invite.inviteUrl.endsWith(`/ranked/challenge/${invite.token}`));
+  assert.throws(() => acceptRankedChallenge(db, invite.token, 'a', now + 1), (error) => {
+    assertHttpError(error, 400);
+    return true;
+  });
+
+  const accepted = acceptRankedChallenge(db, invite.token, 'b', now + 2);
+  assert.equal(accepted.competitiveMultiplier, 1);
+  assert.equal(accepted.readyDeadline, now + 2 + 15_000);
+  assert.deepEqual(acceptRankedChallenge(db, invite.token, 'b', now + 3), accepted);
+  assert.throws(() => acceptRankedChallenge(db, invite.token, 'a', now + 3), (error) => {
+    assertHttpError(error, 410);
+    return true;
+  });
+});
+
+test('challenge expiry is enforced and cleanup marks expired links', () => {
+  const db = makeDb();
+  const invite = createRankedChallenge(db, 'a', 2_000_000);
+  assert.equal(expireRankedInvitations(db, invite.expiresAt), 1);
+  assert.throws(() => acceptRankedChallenge(db, invite.token, 'b', invite.expiresAt), (error) => {
+    assertHttpError(error, 410);
+    return true;
+  });
+});
+
+test('rematch invitation expires after 30 seconds and can be accepted only by the opponent', () => {
+  const db = makeDb();
+  const previous = makeSettledMatch(db, 3_000_000);
+  const invite = requestRankedRematch(db, previous.id, previous.playerA, 3_020_000);
+  assert.equal(invite.kind, 'rematch');
+  assert.ok(invite.inviteUrl.endsWith(`/ranked/rematch/${invite.token}`));
+  assert.equal(invite.expiresAt, 3_020_000 + rankedRematchLifetimeMs());
+  assert.throws(() => acceptRankedRematch(db, invite.token, previous.playerA, 3_020_001), (error) => {
+    assertHttpError(error, 404);
+    return true;
+  });
+  assert.equal(expireRankedInvitations(db, invite.expiresAt), 1);
+  assert.throws(() => acceptRankedRematch(db, invite.token, previous.playerB, invite.expiresAt), (error) => {
+    assertHttpError(error, 410);
+    return true;
+  });
+});
+
+test('accepted rematch creates a fresh shell with sides swapped and fresh credit assessment', () => {
+  const db = makeDb();
+  db.prepare('UPDATE profiles SET placement_progress = 5, rated_match_count = 5 WHERE uid IN (?, ?)').run('a', 'b');
+  const previous = makeSettledMatch(db, 4_000_000);
+  const invite = requestRankedRematch(db, previous.id, previous.playerA, 4_020_000);
+  const accepted = acceptRankedRematch(db, invite.token, previous.playerB, 4_020_001);
+  const rematch = row<{ player_a_key: string; player_b_key: string; started_at: number | null; credit_assessed_at: number; competitive_multiplier: number }>(
+    db, 'SELECT player_a_key, player_b_key, started_at, credit_assessed_at, competitive_multiplier FROM matches WHERE id = ?', accepted.matchId);
+  assert.equal(rematch.player_a_key, previous.playerB);
+  assert.equal(rematch.player_b_key, previous.playerA);
+  assert.equal(rematch.started_at, null);
+  assert.equal(rematch.credit_assessed_at, 4_020_001);
+  assert.equal(rematch.competitive_multiplier, 1);
+  assert.deepEqual(acceptRankedRematch(db, invite.token, previous.playerB, 4_020_002), accepted);
+});
+
+test('only one open rematch invitation exists per completed match', () => {
+  const db = makeDb();
+  const previous = makeSettledMatch(db, 5_000_000);
+  const first = requestRankedRematch(db, previous.id, previous.playerA, 5_020_000);
+  const retry = requestRankedRematch(db, previous.id, previous.playerA, 5_020_001);
+  const responseFromInvitee = requestRankedRematch(db, previous.id, previous.playerB, 5_020_002);
+  assert.equal(retry.token, first.token);
+  assert.equal(responseFromInvitee.token, first.token);
+});
+
+test('pending rematch lookup is participant-only and hides expired invitations', () => {
+  const db = makeDb();
+  const previous = makeSettledMatch(db, 5_500_000);
+  const invite = requestRankedRematch(db, previous.id, previous.playerA, 5_520_000);
+  assert.equal(pendingRankedRematch(db, previous.id, previous.playerA, 5_520_001)?.token, invite.token);
+  assert.equal(pendingRankedRematch(db, previous.id, previous.playerB, 5_520_001)?.token, invite.token);
+  assert.throws(() => pendingRankedRematch(db, previous.id, 'intruder', 5_520_001), (error) => {
+    assertHttpError(error, 404);
+    return true;
+  });
+  assert.equal(pendingRankedRematch(db, previous.id, previous.playerB, invite.expiresAt), null);
+});
+
+test('expired and unbound matches cannot issue a rematch', () => {
+  const db = makeDb();
+  const shell = createRankedShell(db, 'a', 'b', 6_000_000);
+  const players = row<{ player_a_key: string }>(db, 'SELECT player_a_key FROM matches WHERE id = ?', shell.matchId);
+  assert.throws(() => requestRankedRematch(db, shell.matchId, players.player_a_key, 6_000_001), (error) => {
+    assertHttpError(error, 409);
+    return true;
+  });
+});
