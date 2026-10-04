@@ -819,6 +819,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [inviteUrl, setInviteUrl] = useState("");
+  const [arenaConnected, setArenaConnected] = useState(false);
   const googleButton = useRef<HTMLDivElement>(null);
   const acceptingInvite = useRef(false);
 
@@ -866,6 +867,15 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
     const timer = window.setInterval(() => void refreshQueue().catch(() => undefined), 900);
     return () => window.clearInterval(timer);
   }, [queue?.state, queue?.matchId, inviteUrl]);
+
+  useEffect(() => {
+    if (queue?.state !== "readying" || !queue.matchId) {
+      setArenaConnected(false);
+      return;
+    }
+    setArenaConnected(false);
+    return api.subscribeMatch(queue.matchId, () => void refreshQueue(), () => setArenaConnected(true), () => setArenaConnected(false));
+  }, [queue?.state, queue?.matchId]);
 
   useEffect(() => {
     if (signedIn || !clientId || !googleButton.current) return;
@@ -949,7 +959,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
       {queue?.state === "searching" && <section className="ranked-console"><div className="queue-pulse" /><strong>Finding an opponent…</strong><p>Search expands over 15 seconds.</p><button className="secondary-cta full" onClick={() => void api.leaveRankedQueue().then(() => setQueue(null))}>Cancel</button></section>}
       {queue?.state === "timed-out" && <section className="ranked-console"><strong>No opponent found this time.</strong><p>Search timed out after 15 seconds.</p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Try again <span>→</span></button></section>}
       {queue?.state === "ready-expired" && <section className="ranked-console"><strong>Ready window expired.</strong><p>Both players need to confirm within 15 seconds. This match did not affect ratings.</p><button className="secondary-cta full" onClick={() => setQueue(null)}>Return to Ranked</button></section>}
-      {queue?.state === "readying" && <section className="ranked-console"><p className="eyebrow">Opponent found</p><strong>{queue.competitiveMultiplier === 1 ? "Full competitive credit" : `${Math.round((queue.competitiveMultiplier ?? 0) * 100)}% RP credit`}</strong><p>{creditExplanation(queue.competitiveMultiplier ?? 0)}</p><p>Opponent identity appears after both players commit.</p><button className="primary-cta full" disabled={busy} onClick={ready}>Ready <span>→</span></button></section>}
+      {queue?.state === "readying" && <section className="ranked-console"><p className="eyebrow">Opponent found</p><strong>{queue.competitiveMultiplier === 1 ? "Full competitive credit" : `${Math.round((queue.competitiveMultiplier ?? 0) * 100)}% RP credit`}</strong><p>{creditExplanation(queue.competitiveMultiplier ?? 0)}</p><p>{arenaConnected ? "Opponent identity appears after both players commit." : "Connecting to the arena…"}</p><button className="primary-cta full" disabled={busy || !arenaConnected} onClick={ready}>Ready <span>→</span></button></section>}
       {queue?.state === "cooldown" && <section className="ranked-console"><strong>Ranked cooldown</strong><p>Matchmaking is temporarily unavailable after repeated disconnect incidents.</p></section>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="ranked-facts"><p><strong>1000</strong><span>Starting RP</span></p><p><strong>5</strong><span>Placements</span></p><p><strong>Human</strong><span>Opponents only</span></p></div>

@@ -40,6 +40,8 @@ interface MatchShellRow {
   ready_deadline: number | null;
   ready_a: number;
   ready_b: number;
+  ready_connected_a: number;
+  ready_connected_b: number;
   started_at: number | null;
   competitive_multiplier: number | null;
   credit_assessed_at: number | null;
@@ -82,6 +84,7 @@ function ownership(db: Database.Database, uid: string): OwnershipRow | undefined
 
 function rankedMatch(db: Database.Database, id: string): MatchShellRow | undefined {
   return db.prepare(`SELECT id, mode, player_a_key, player_b_key, status, ready_deadline, ready_a, ready_b,
+      ready_connected_a, ready_connected_b,
       started_at, competitive_multiplier, credit_assessed_at, state_json, result_type,
       disconnected_a_at, disconnected_b_at
     FROM matches WHERE id = ?`).get(id) as MatchShellRow | undefined;
@@ -294,7 +297,44 @@ export function expireRankedReady(db: Database.Database, matchId: string, now = 
   return db.transaction(() => expireRankedReadyInTransaction(db, matchId, now)).immediate();
 }
 
-/** Acknowledge ready; only the second ready atomically binds the match and opens Round 1. */
+function bindReadyMatchInTransaction(db: Database.Database, match: MatchShellRow, now: number): boolean {
+  if (!match.ready_a || !match.ready_b || !match.ready_connected_a || !match.ready_connected_b) return false;
+  const a = profile(db, match.player_a_key);
+  const b = profile(db, match.player_b_key);
+  const bound = db.prepare(`UPDATE matches SET status = 'decision', started_at = ?, deadline = ?, ready_deadline = NULL,
+      player_a_name = ?, player_b_name = ?, revision = revision + 1
+    WHERE id = ? AND status = 'readying' AND started_at IS NULL AND ready_a = 1 AND ready_b = 1
+      AND ready_connected_a = 1 AND ready_connected_b = 1 AND ready_deadline > ?`)
+    .run(now, now + 5_000, a.handle, b.handle, match.id, now);
+  if (bound.changes !== 1) return false;
+  initializeHumanPresence(db, match.id, now);
+  db.prepare(`UPDATE ranked_ownership SET state = 'active_match', lease_expires_at = NULL
+    WHERE match_id = ? AND state = 'match_shell'`).run(match.id);
+  return true;
+}
+
+/** Record a participant's arena connection while its Ranked shell is awaiting ready acknowledgements. */
+export function markRankedReadyPresence(db: Database.Database, matchId: string, uid: string, connected: boolean, now = Date.now()): boolean {
+  return db.transaction(() => {
+    const match = rankedMatch(db, matchId);
+    if (!match || match.mode !== 'ranked') return false;
+    const column = match.player_a_key === uid ? 'ready_connected_a' : match.player_b_key === uid ? 'ready_connected_b' : null;
+    if (!column || match.status !== 'readying' || match.started_at !== null) return false;
+    db.prepare(`UPDATE matches SET ${column} = ?, revision = revision + 1
+      WHERE id = ? AND status = 'readying' AND started_at IS NULL`).run(connected ? 1 : 0, matchId);
+    const updated = rankedMatch(db, matchId)!;
+    return connected && bindReadyMatchInTransaction(db, updated, now);
+  }).immediate();
+}
+
+/** Socket presence is process-local, so a restart must not reuse it to bind an existing shell. */
+export function clearRankedReadyPresenceOnStartup(db: Database.Database): void {
+  db.prepare(`UPDATE matches SET ready_connected_a = 0, ready_connected_b = 0, revision = revision + 1
+    WHERE mode = 'ranked' AND status = 'readying' AND started_at IS NULL
+      AND (ready_connected_a <> 0 OR ready_connected_b <> 0)`).run();
+}
+
+/** Acknowledge ready; only two connected participants atomically bind the match and open Round 1. */
 export function acknowledgeRankedReady(db: Database.Database, matchId: string, uid: string, now = Date.now()): RankedQueueResult {
   let expired = false;
   const result = db.transaction((): RankedQueueResult | null => {
@@ -315,19 +355,9 @@ export function acknowledgeRankedReady(db: Database.Database, matchId: string, u
     db.prepare(`UPDATE matches SET ${readyColumn} = 1, revision = revision + 1 WHERE id = ? AND status = 'readying'`)
       .run(matchId);
     const updated = rankedMatch(db, matchId)!;
-    if (!updated.ready_a || !updated.ready_b) {
+    if (!bindReadyMatchInTransaction(db, updated, now)) {
       return { state: 'readying', matchId, competitiveMultiplier: updated.competitive_multiplier, readyDeadline: updated.ready_deadline } as RankedQueueResult;
     }
-    const a = profile(db, updated.player_a_key);
-    const b = profile(db, updated.player_b_key);
-    const bound = db.prepare(`UPDATE matches SET status = 'decision', started_at = ?, deadline = ?, ready_deadline = NULL,
-        player_a_name = ?, player_b_name = ?, revision = revision + 1
-      WHERE id = ? AND status = 'readying' AND started_at IS NULL AND ready_a = 1 AND ready_b = 1 AND ready_deadline > ?`)
-      .run(now, now + 5_000, a.handle, b.handle, matchId, now);
-    if (bound.changes !== 1) throw new HttpError(409, 'Ranked match could not bind');
-    initializeHumanPresence(db, matchId, now);
-    db.prepare(`UPDATE ranked_ownership SET state = 'active_match', lease_expires_at = NULL
-      WHERE match_id = ? AND state = 'match_shell'`).run(matchId);
     return { state: 'active', matchId, competitiveMultiplier: updated.competitive_multiplier, readyDeadline: null } as RankedQueueResult;
   }).immediate();
   if (expired) throw new HttpError(409, 'Ranked ready window expired');

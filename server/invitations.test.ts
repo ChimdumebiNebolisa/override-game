@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'vitest';
 import { openDatabase } from './db.js';
 import { HttpError } from './http.js';
-import { acknowledgeRankedReady, createRankedShell, settleRankedMatch } from './ranked.js';
+import { acknowledgeRankedReady, createRankedShell, markRankedReadyPresence, settleRankedMatch } from './ranked.js';
 import {
   acceptRankedChallenge,
   acceptRankedRematch,
@@ -42,6 +42,8 @@ function makeSettledMatch(db: ReturnType<typeof openDatabase>, now: number) {
   const shell = createRankedShell(db, 'a', 'b', now);
   const players = row<{ player_a_key: string; player_b_key: string }>(db,
     'SELECT player_a_key, player_b_key FROM matches WHERE id = ?', shell.matchId);
+  markRankedReadyPresence(db, shell.matchId, players.player_a_key, true);
+  markRankedReadyPresence(db, shell.matchId, players.player_b_key, true);
   acknowledgeRankedReady(db, shell.matchId, players.player_a_key, now + 1);
   acknowledgeRankedReady(db, shell.matchId, players.player_b_key, now + 2);
   const match = row<{ state_json: string; player_a_key: string; player_b_key: string }>(db,

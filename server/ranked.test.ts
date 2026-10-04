@@ -8,10 +8,12 @@ import { HttpError } from './http.js';
 import { dueMatches, markConnected, resignMatch, resolveMatch } from './matches.js';
 import {
   acknowledgeRankedReady,
+  clearRankedReadyPresenceOnStartup,
   createRankedShell,
   expireRankedLeases,
   expireRankedReady,
   joinRankedQueue,
+  markRankedReadyPresence,
   rankedQueueStatus,
   settleRankedMatch,
   settlePendingRankedMatches,
@@ -52,6 +54,8 @@ function assertHttpError(error: unknown, status: number): void {
 function bindBoth(db: ReturnType<typeof openDatabase>, matchId: string, now: number): void {
   const match = row<{ player_a_key: string; player_b_key: string }>(db,
     'SELECT player_a_key, player_b_key FROM matches WHERE id = ?', matchId);
+  markRankedReadyPresence(db, matchId, match.player_a_key, true);
+  markRankedReadyPresence(db, matchId, match.player_b_key, true);
   acknowledgeRankedReady(db, matchId, match.player_a_key, now);
   acknowledgeRankedReady(db, matchId, match.player_b_key, now + 1);
   markConnected(db, matchId, 'A', now + 1);
@@ -95,6 +99,8 @@ test('ready handshake binds only when both players confirm and freezes startedAt
   const shell = createRankedShell(db, 'a', 'b', 50_000);
   const match = row<{ player_a_key: string; player_b_key: string; player_a_name: string; player_b_name: string }>(db,
     'SELECT player_a_key, player_b_key, player_a_name, player_b_name FROM matches WHERE id = ?', shell.matchId);
+  markRankedReadyPresence(db, shell.matchId, match.player_a_key, true);
+  markRankedReadyPresence(db, shell.matchId, match.player_b_key, true);
   const first = acknowledgeRankedReady(db, shell.matchId, match.player_a_key, 50_100);
   assert.equal(first.state, 'readying');
   assert.equal(row<{ started_at: number | null }>(db, 'SELECT started_at FROM matches WHERE id = ?', shell.matchId).started_at, null);
@@ -109,11 +115,59 @@ test('ready handshake binds only when both players confirm and freezes startedAt
     'SELECT state, lease_expires_at FROM ranked_ownership WHERE match_id = ? LIMIT 1', shell.matchId).state, 'active_match');
 });
 
-test('a bound Ranked match with no sockets enters disconnect grace', () => {
+test('ready acknowledgements cannot bind a Ranked shell before both arena connections are present', () => {
   const db = makeDb();
   const shell = createRankedShell(db, 'a', 'b', 50_000);
   const match = row<{ player_a_key: string; player_b_key: string }>(db,
     'SELECT player_a_key, player_b_key FROM matches WHERE id = ?', shell.matchId);
+
+  acknowledgeRankedReady(db, shell.matchId, match.player_a_key, 50_100);
+  acknowledgeRankedReady(db, shell.matchId, match.player_b_key, 50_200);
+
+  assert.deepEqual(row<{ status: string; started_at: number | null }>(db,
+    'SELECT status, started_at FROM matches WHERE id = ?', shell.matchId),
+  { status: 'readying', started_at: null });
+});
+
+test('a reconnect binds a shell after both players already acknowledged ready', () => {
+  const db = makeDb();
+  const shell = createRankedShell(db, 'a', 'b', 50_000);
+  const match = row<{ player_a_key: string; player_b_key: string }>(db,
+    'SELECT player_a_key, player_b_key FROM matches WHERE id = ?', shell.matchId);
+
+  markRankedReadyPresence(db, shell.matchId, match.player_a_key, true);
+  acknowledgeRankedReady(db, shell.matchId, match.player_a_key, 50_100);
+  acknowledgeRankedReady(db, shell.matchId, match.player_b_key, 50_200);
+  assert.equal(row<{ status: string }>(db, 'SELECT status FROM matches WHERE id = ?', shell.matchId).status, 'readying');
+
+  markRankedReadyPresence(db, shell.matchId, match.player_b_key, true, 50_300);
+  assert.deepEqual(row<{ status: string; started_at: number | null }>(db,
+    'SELECT status, started_at FROM matches WHERE id = ?', shell.matchId),
+  { status: 'decision', started_at: 50_300 });
+});
+
+test('startup clears stale readying presence without discarding ready acknowledgements', () => {
+  const db = makeDb();
+  const shell = createRankedShell(db, 'a', 'b', 50_000);
+  const match = row<{ player_a_key: string }>(db, 'SELECT player_a_key FROM matches WHERE id = ?', shell.matchId);
+  db.prepare(`UPDATE matches SET ready_a = 1, ready_b = 1, ready_connected_a = 1, ready_connected_b = 1
+    WHERE id = ?`).run(shell.matchId);
+
+  clearRankedReadyPresenceOnStartup(db);
+
+  assert.deepEqual(row<{ ready_a: number; ready_b: number; ready_connected_a: number; ready_connected_b: number }>(db,
+    'SELECT ready_a, ready_b, ready_connected_a, ready_connected_b FROM matches WHERE id = ?', shell.matchId),
+  { ready_a: 1, ready_b: 1, ready_connected_a: 0, ready_connected_b: 0 });
+  assert.equal(acknowledgeRankedReady(db, shell.matchId, match.player_a_key, 50_100).state, 'readying');
+});
+
+test('a bound Ranked match enters disconnect grace when its arena connections are gone', () => {
+  const db = makeDb();
+  const shell = createRankedShell(db, 'a', 'b', 50_000);
+  const match = row<{ player_a_key: string; player_b_key: string }>(db,
+    'SELECT player_a_key, player_b_key FROM matches WHERE id = ?', shell.matchId);
+  markRankedReadyPresence(db, shell.matchId, match.player_a_key, true);
+  markRankedReadyPresence(db, shell.matchId, match.player_b_key, true);
   acknowledgeRankedReady(db, shell.matchId, match.player_a_key, 50_100);
   acknowledgeRankedReady(db, shell.matchId, match.player_b_key, 50_101);
   const start = row<{ deadline: number; disconnected_a_at: number | null; disconnected_b_at: number | null }>(db,

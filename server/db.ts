@@ -72,6 +72,8 @@ export function openDatabase(path = databasePath): Database.Database {
       ready_deadline INTEGER,
       ready_a INTEGER NOT NULL DEFAULT 0,
       ready_b INTEGER NOT NULL DEFAULT 0,
+      ready_connected_a INTEGER NOT NULL DEFAULT 0,
+      ready_connected_b INTEGER NOT NULL DEFAULT 0,
       started_at INTEGER,
       ended_at INTEGER,
       revision INTEGER NOT NULL DEFAULT 0,
@@ -205,6 +207,12 @@ export function openDatabase(path = databasePath): Database.Database {
   }
   if (!matchColumns.some((column) => column.name === 'parent_match_id')) {
     db.exec('ALTER TABLE matches ADD COLUMN parent_match_id TEXT REFERENCES matches(id)');
+  }
+  if (!matchColumns.some((column) => column.name === 'ready_connected_a')) {
+    db.exec('ALTER TABLE matches ADD COLUMN ready_connected_a INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!matchColumns.some((column) => column.name === 'ready_connected_b')) {
+    db.exec('ALTER TABLE matches ADD COLUMN ready_connected_b INTEGER NOT NULL DEFAULT 0');
   }
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS one_room_per_creation_key
     ON rooms(host_key, creation_key) WHERE creation_key IS NOT NULL;

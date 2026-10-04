@@ -176,6 +176,35 @@ describe("simultaneous resolution", () => {
     expect(b).toEqual([11]);
     expect(a.filter((target) => b.includes(target))).toEqual([]);
   });
+
+  it("cannot produce a same-cell Override pairing with any targeted action", () => {
+    const before = state([".....", ".....", ".AB..", ".....", "....."], 3, 3);
+    const types = ["expand", "ambush", "surge", "override"] as const;
+    const actionsA = legalActions(before, "A");
+    const actionsB = legalActions(before, "B");
+
+    expect(actionsA.some((candidate) => candidate.type === "override")).toBe(true);
+    expect(actionsB.some((candidate) => candidate.type === "override")).toBe(true);
+    for (const actionA of actionsA) {
+      for (const actionB of actionsB) {
+        if (actionA.type === "pass" || actionB.type === "pass" ||
+            (actionA.type !== "override" && actionB.type !== "override")) continue;
+        expect(actionA.target).not.toBe(actionB.target);
+      }
+    }
+
+    for (const target of before.board.keys()) {
+      for (const type of types) {
+        const overrideA = validateAction(before, "A", action("override", target));
+        const otherB = validateAction(before, "B", action(type, target));
+        expect(overrideA.ok && otherB.ok).toBe(false);
+
+        const otherA = validateAction(before, "A", action(type, target));
+        const overrideB = validateAction(before, "B", action("override", target));
+        expect(otherA.ok && overrideB.ok).toBe(false);
+      }
+    }
+  });
 });
 
 describe("match progression", () => {

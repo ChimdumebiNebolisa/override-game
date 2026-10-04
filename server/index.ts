@@ -8,7 +8,7 @@ import { attachGoogleIdentity, claimHandle, getPublicProfile, renameHandle } fro
 import { HttpError, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
 import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, reconcilePresenceOnStartup, resignMatch } from './matches';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
-import { acknowledgeRankedReady, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
+import { acknowledgeRankedReady, clearRankedReadyPresenceOnStartup, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, markRankedReadyPresence, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
 import { leaderboard, profileView } from './progression';
 import { acceptRankedChallenge, acceptRankedRematch, createRankedChallenge, expireRankedInvitations, pendingRankedChallenge, pendingRankedRematch, requestRankedRematch } from './invitations';
 import { acceptQuickRematch, expireQuickRematches, pendingQuickRematch, requestQuickRematch } from './quick-rematch';
@@ -16,6 +16,7 @@ import { recordClientTelemetry, recordTelemetryEvent } from './metrics';
 import { pruneExpiredGuestData } from './maintenance';
 
 const db = openDatabase();
+clearRankedReadyPresenceOnStartup(db);
 reconcilePresenceOnStartup(db);
 pruneExpiredGuestData(db);
 const sockets = new Set<{ ws: WebSocket; roomId: string | null; matchId: string | null; sessionId: string; key: string; alive: boolean }>();
@@ -381,6 +382,10 @@ server.on('upgrade', (req, socket, head) => {
       const activeMatchId = directMatchId ?? room?.match_id;
       const side = activeMatchId ? sideForMatch(activeMatchId, key) : null;
       if (activeMatchId && side) {
+        const bound = match?.mode === 'ranked' && match.status === 'readying'
+          ? markRankedReadyPresence(db, activeMatchId, key, true)
+          : false;
+        if (bound) connectLiveParticipants(activeMatchId);
         markConnected(db, activeMatchId, side);
         if (roomId) notifyRoom(roomId);
         notifyMatch(activeMatchId);
@@ -397,6 +402,7 @@ server.on('upgrade', (req, socket, head) => {
           if (hasLiveMatchConnection(latestMatchId, latestMatch?.room_id ?? null, key)) return;
           const latestSide = latestMatchId ? sideForMatch(latestMatchId, key) : null;
           if (latestMatchId && latestSide) {
+            if (latestMatch?.mode === 'ranked' && latestMatch.status === 'readying') markRankedReadyPresence(db, latestMatchId, key, false);
             markDisconnected(db, latestMatchId, latestSide);
             if (roomId) notifyRoom(roomId);
             notifyMatch(latestMatchId);

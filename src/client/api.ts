@@ -149,6 +149,46 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
+function subscribeLive(path: string, onInvalidate: () => void, onOpen?: () => void, onClose?: () => void) {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${protocol}//${window.location.host}${path}`;
+  let socket: WebSocket | null = null;
+  let retryTimer: number | null = null;
+  let stopped = false;
+
+  const connect = () => {
+    if (stopped) return;
+    const current = new WebSocket(url);
+    socket = current;
+    current.addEventListener("open", () => {
+      if (stopped || socket !== current) return;
+      onOpen?.();
+      onInvalidate();
+    });
+    current.addEventListener("message", () => {
+      if (!stopped && socket === current) onInvalidate();
+    });
+    current.addEventListener("error", () => current.close());
+    current.addEventListener("close", () => {
+      if (stopped || socket !== current) return;
+      socket = null;
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        connect();
+      }, 1_000);
+      onClose?.();
+    });
+  };
+
+  connect();
+  return () => {
+    stopped = true;
+    if (retryTimer !== null) window.clearTimeout(retryTimer);
+    socket?.close();
+    socket = null;
+  };
+}
+
 export const api = {
   createRoom(displayName: string, creationKey: string) {
     return request<RoomResponse>("/api/rooms", {
@@ -210,21 +250,11 @@ export const api = {
   },
 
   subscribe(roomId: string, onInvalidate: () => void) {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(
-      `${protocol}//${window.location.host}/api/live?roomId=${encodeURIComponent(roomId)}`,
-    );
-    socket.addEventListener("message", onInvalidate);
-    return () => socket.close();
+    return subscribeLive(`/api/live?roomId=${encodeURIComponent(roomId)}`, onInvalidate);
   },
 
-  subscribeMatch(matchId: string, onInvalidate: () => void) {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(
-      `${protocol}//${window.location.host}/api/live?matchId=${encodeURIComponent(matchId)}`,
-    );
-    socket.addEventListener("message", onInvalidate);
-    return () => socket.close();
+  subscribeMatch(matchId: string, onInvalidate: () => void, onOpen?: () => void, onClose?: () => void) {
+    return subscribeLive(`/api/live?matchId=${encodeURIComponent(matchId)}`, onInvalidate, onOpen, onClose);
   },
 
   getConfig() {
