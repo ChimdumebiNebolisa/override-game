@@ -4,7 +4,8 @@ The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.m
 
 ## Verified locally
 
-- Pure 5×5 rules, Energy, simultaneous resolution, bots, match persistence, guest room authorization, Ranked queue/ready/settlement, rematches, and leaderboard service behavior have automated coverage. `npm test` passes 101 tests across 12 files.
+- Pure 5×5 rules, Energy, simultaneous resolution, bots, match persistence, guest room authorization, Ranked queue/ready/settlement, rematches, and leaderboard service behavior have automated coverage. `npm test` passes 104 tests across 12 files.
+- Room and bot match creation use persisted request IDs so a retried request returns the original resource. A copy of the existing local SQLite database migrated to the new columns and indexes successfully.
 - TypeScript and the production Vite build pass with `npm run build`.
 - Two independent browser sessions joined a Quick Duel room. Reloading the host restored the open room with the original code; reloading during a newly joined match returned to the match screen. A solo Practice match and responsive views were exercised earlier in the local browser.
 - A synthetic two-account browser check created a Ranked challenge, showed the creator's Ready prompt when the invitee accepted, and opened the same bound game for both players. This bypassed Google only for the local fixture; it does not verify real OAuth.

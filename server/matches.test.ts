@@ -84,6 +84,18 @@ describe('guest matches', () => {
     expectStatus(() => createBotMatch(db, guest, 'Guest', 'quick', 'easy'), 429);
   });
 
+  it('returns one bot match for a retried creation request', () => {
+    const guest = session('guest');
+    const key = 'faad872a-89b5-44e8-8fb9-f72098ec39c4';
+    const first = createBotMatch(db, guest, 'Guest', 'quick', 'normal', undefined, key);
+    createBotMatch(db, guest, 'Guest', 'quick', 'easy');
+    createBotMatch(db, guest, 'Guest', 'quick', 'easy');
+    expect(createBotMatch(db, guest, 'Guest', 'quick', 'normal', undefined, key)).toBe(first);
+    expectStatus(() => createBotMatch(db, guest, 'Guest', 'practice', 'normal', undefined, key), 409);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ? AND bot_difficulty IS NOT NULL")
+      .get(guest.id)).toEqual({ count: 3 });
+  });
+
   function facingState(energyA = 0, energyB = 0): MatchState {
     return {
       ...createInitialState(),

@@ -53,6 +53,25 @@ describe('guest rooms', () => {
     expect(joinQuickRoom(db, session('guest'), { token }, 'Guest').matchId).toBeTruthy();
   });
 
+  it('returns the original room for a repeated creation request', () => {
+    const host = session('host');
+    const key = 'a3db6d39-159d-4ff3-965c-d8969bd318e8';
+    const first = createQuickRoom(db, host, 'Host', key);
+    createQuickRoom(db, host, 'Host');
+    createQuickRoom(db, host, 'Host');
+    expect(createQuickRoom(db, host, 'Host', key)).toEqual(first);
+    expectStatus(() => createQuickRoom(db, host, 'Changed', key), 409);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM rooms WHERE host_key = ?').get(host.id)).toEqual({ count: 3 });
+  });
+
+  it('returns the existing seat and match when a guest retries joining', () => {
+    const room = createQuickRoom(db, session('host'), 'Host');
+    const guest = session('guest');
+    const joined = joinQuickRoom(db, guest, { code: room.code }, 'Guest');
+    expect(joinQuickRoom(db, guest, { code: room.code }, 'Guest')).toEqual(joined);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM matches WHERE room_id = ?').get(room.id)).toEqual({ count: 1 });
+  });
+
   it('throttles repeated invalid room-code guesses', () => {
     const guesser = session('guesser');
     for (let attempt = 0; attempt < 10; attempt++) {

@@ -9,6 +9,7 @@ const ROOM_LIFETIME = 30 * 60_000;
 
 export interface RoomRow {
   id: string;
+  creation_key: string | null;
   code: string;
   invite_token: string;
   mode: 'quick' | 'ranked';
@@ -57,29 +58,39 @@ export function openRoomForSession(db: Database.Database, session: Session) {
   return row ? roomView(row) : null;
 }
 
-export function createQuickRoom(db: Database.Database, session: Session, name: string) {
-  const now = Date.now();
-  const count = db.prepare("SELECT count(*) AS count FROM rooms WHERE host_key = ? AND status IN ('open', 'full', 'active') AND expires_at > ?")
-    .get(session.id, now) as { count: number };
-  if (count.count >= 3) throw new HttpError(429, 'Close an existing room before creating another');
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const row: RoomRow = {
-      id: randomUUID(), code: roomCode(), invite_token: randomBytes(24).toString('base64url'),
-      mode: 'quick', host_key: session.id, guest_key: null, host_name: name, guest_name: null,
-      status: 'open', match_id: null, created_at: now, expires_at: now + ROOM_LIFETIME,
-    };
-    try {
-      db.prepare(`INSERT INTO rooms
-        (id, code, invite_token, mode, host_key, guest_key, host_name, guest_name, status, match_id, created_at, expires_at)
-        VALUES (@id, @code, @invite_token, @mode, @host_key, @guest_key, @host_name, @guest_name, @status, @match_id, @created_at, @expires_at)`)
-        .run(row);
-      return roomView(row);
-    } catch (error) {
-      if (String(error).includes('UNIQUE constraint')) continue;
-      throw error;
+export function createQuickRoom(db: Database.Database, session: Session, name: string, creationKey?: string) {
+  return db.transaction(() => {
+    if (creationKey) {
+      const existing = db.prepare('SELECT * FROM rooms WHERE host_key = ? AND creation_key = ?')
+        .get(session.id, creationKey) as RoomRow | undefined;
+      if (existing) {
+        if (existing.host_name !== name) throw new HttpError(409, 'Creation key was used for another room');
+        return roomView(existing);
+      }
     }
-  }
-  throw new HttpError(503, 'Could not create a room');
+    const now = Date.now();
+    const count = db.prepare("SELECT count(*) AS count FROM rooms WHERE host_key = ? AND status IN ('open', 'full', 'active') AND expires_at > ?")
+      .get(session.id, now) as { count: number };
+    if (count.count >= 3) throw new HttpError(429, 'Close an existing room before creating another');
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const row: RoomRow = {
+        id: randomUUID(), creation_key: creationKey ?? null, code: roomCode(), invite_token: randomBytes(24).toString('base64url'),
+        mode: 'quick', host_key: session.id, guest_key: null, host_name: name, guest_name: null,
+        status: 'open', match_id: null, created_at: now, expires_at: now + ROOM_LIFETIME,
+      };
+      try {
+        db.prepare(`INSERT INTO rooms
+          (id, creation_key, code, invite_token, mode, host_key, guest_key, host_name, guest_name, status, match_id, created_at, expires_at)
+          VALUES (@id, @creation_key, @code, @invite_token, @mode, @host_key, @guest_key, @host_name, @guest_name, @status, @match_id, @created_at, @expires_at)`)
+          .run(row);
+        return roomView(row);
+      } catch (error) {
+        if (String(error).includes('UNIQUE constraint')) continue;
+        throw error;
+      }
+    }
+    throw new HttpError(503, 'Could not create a room');
+  }).immediate();
 }
 
 export function closeQuickRoom(db: Database.Database, id: string, session: Session): void {
@@ -104,6 +115,11 @@ function checkJoinRate(db: Database.Database, session: Session, now: number): vo
 }
 
 export function joinQuickRoom(db: Database.Database, session: Session, lookup: { code?: string; token?: string }, name: string) {
+  const previouslyJoined = (lookup.token
+    ? db.prepare('SELECT * FROM rooms WHERE invite_token = ?').get(lookup.token)
+    : db.prepare('SELECT * FROM rooms WHERE code = ?').get(lookup.code?.toUpperCase())) as RoomRow | undefined;
+  if (previouslyJoined?.mode === 'quick' && previouslyJoined.guest_key === session.id &&
+      previouslyJoined.expires_at > Date.now()) return roomView(previouslyJoined);
   // A failed lookup still counts toward the guess limit; keep this write outside
   // the room-claim transaction so an expected 404 cannot roll it back.
   checkJoinRate(db, session, Date.now());
@@ -114,6 +130,7 @@ export function joinQuickRoom(db: Database.Database, session: Session, lookup: {
       : db.prepare('SELECT * FROM rooms WHERE code = ?').get(lookup.code?.toUpperCase())) as RoomRow | undefined;
     if (!row || row.mode !== 'quick' || row.expires_at <= now) throw new HttpError(404, 'Room not found or expired');
     if (row.host_key === session.id) throw new HttpError(400, 'You already host this room');
+    if (row.guest_key === session.id) return roomView(row);
     if (row.guest_key) throw new HttpError(409, 'Room is full');
     const claimed = db.prepare("UPDATE rooms SET guest_key = ?, guest_name = ?, status = 'full' WHERE id = ? AND guest_key IS NULL AND status = 'open' AND expires_at > ?")
       .run(session.id, name, row.id, now);

@@ -149,10 +149,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  createRoom(displayName: string) {
+  createRoom(displayName: string, creationKey: string) {
     return request<RoomResponse>("/api/rooms", {
       method: "POST",
-      body: JSON.stringify({ displayName }),
+      body: JSON.stringify({ displayName, creationKey }),
     });
   },
 
@@ -185,10 +185,10 @@ export const api = {
     return request<{ closed: boolean }>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
   },
 
-  createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", parentMatchId?: string) {
+  createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", creationKey: string, parentMatchId?: string) {
     return request<MatchResponse<PublicMatch>>("/api/bot-matches", {
       method: "POST",
-      body: JSON.stringify({ displayName: "Player", mode, difficulty, parentMatchId }),
+      body: JSON.stringify({ displayName: "Player", mode, difficulty, parentMatchId, creationKey }),
     });
   },
 

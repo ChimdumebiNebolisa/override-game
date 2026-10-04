@@ -5,7 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { openDatabase } from './db';
 import { port, publicOrigin } from './config';
 import { attachGoogleIdentity, claimHandle, getPublicProfile, renameHandle } from './auth';
-import { HttpError, displayName, existingSession, json, readJson, requireSession } from './http';
+import { HttpError, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
 import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, reconcilePresenceOnStartup, resignMatch } from './matches';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
 import { acknowledgeRankedReady, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
@@ -107,7 +107,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (path === '/api/rooms' && method === 'POST') {
       const session = requireSession(req, res, db);
       const body = await readJson(req);
-      return json(res, 201, { room: createQuickRoom(db, session, displayName(body.displayName)) });
+      return json(res, 201, { room: createQuickRoom(db, session, displayName(body.displayName), parseCreationKey(body.creationKey)) });
     }
     if (path === '/api/rooms/join' && method === 'POST') {
       const session = requireSession(req, res, db);
@@ -144,7 +144,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const mode = body.mode === 'practice' ? 'practice' : 'quick';
       const difficulty = body.difficulty === 'normal' || body.difficulty === 'hard' ? body.difficulty : 'easy';
       const parentMatchId = typeof body.parentMatchId === 'string' ? body.parentMatchId : undefined;
-      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty, parentMatchId);
+      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty, parentMatchId, parseCreationKey(body.creationKey));
       logMatchEvent('match_started', id);
       return json(res, 201, { match: matchForSession(db, id, session) });
     }

@@ -162,16 +162,18 @@ function ModeSelect({
   navigate,
 }: {
   kind: SoloMode;
-  onStart: (mode: SoloMode, difficulty: Difficulty) => Promise<void>;
+  onStart: (mode: SoloMode, difficulty: Difficulty, creationKey: string) => Promise<void>;
   navigate: (screen: Screen) => void;
 }) {
   const [difficulty, setDifficulty] = useState<Difficulty>("Normal");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const creationRef = useRef<{ difficulty: Difficulty; key: string } | null>(null);
   const launch = async () => {
     setBusy(true);
     setError("");
-    try { await onStart(kind, difficulty); }
+    if (creationRef.current?.difficulty !== difficulty) creationRef.current = { difficulty, key: crypto.randomUUID() };
+    try { await onStart(kind, difficulty, creationRef.current.key); creationRef.current = null; }
     catch (reason) { setError(reason instanceof Error ? reason.message : "The match could not start."); }
     finally { setBusy(false); }
   };
@@ -209,7 +211,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
   difficulty: Difficulty;
   initialMatch: PublicMatch;
   onExit: () => void;
-  onRestart: () => void;
+  onRestart: (creationKey: string) => Promise<void>;
   onOpenRanked: () => void;
   onQuickRematch: (match: PublicMatch) => void;
 }) {
@@ -514,7 +516,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   friend: boolean;
   matchId: string;
   resultType: string | null;
-  onRestart: () => void;
+  onRestart: (creationKey: string) => Promise<void>;
   onExit: () => void;
   onOpenRanked: () => void;
   onQuickRematch: (match: PublicMatch) => void;
@@ -529,6 +531,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   const [quickRequested, setQuickRequested] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const restartKey = useRef<string | null>(null);
   const mine = settlement?.[player === "A" ? "playerA" : "playerB"] ?? null;
 
   useEffect(() => {
@@ -599,6 +602,14 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
     finally { setBusy(false); }
   };
 
+  const restart = async () => {
+    setBusy(true); setError("");
+    restartKey.current ??= crypto.randomUUID();
+    try { await onRestart(restartKey.current); restartKey.current = null; }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "The rematch could not start."); }
+    finally { setBusy(false); }
+  };
+
   return (
     <main className="result-page">
       <p className="eyebrow">{ranked ? "Ranked Duel" : "Unranked match"} · Complete</p>
@@ -621,7 +632,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
       {friend && quickRequested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your friend.</p></div>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="result-actions">
-        {ranked ? resultType !== "server-error" && !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" onClick={onRestart}>Rematch <span>↻</span></button>}
+        {ranked ? resultType !== "server-error" && !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" disabled={busy} onClick={restart}>Rematch <span>↻</span></button>}
         <button className="secondary-cta" onClick={onExit}>Home</button>
       </div>
       {!ranked && <small>Practice and Quick Duel results do not affect Ranked statistics.</small>}
@@ -636,6 +647,7 @@ function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate:
   const [room, setRoom] = useState<Room | null>(initialRoom ?? null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const creationRef = useRef<{ name: string; key: string } | null>(null);
 
   useEffect(() => {
     if (!room) return;
@@ -660,11 +672,14 @@ function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate:
     setError("");
     setBusy(true);
     try {
+      const roomName = name.trim();
+      if (tab === "create" && creationRef.current?.name !== roomName) creationRef.current = { name: roomName, key: crypto.randomUUID() };
       const response = tab === "create"
-        ? await api.createRoom(name.trim())
+        ? await api.createRoom(roomName, creationRef.current!.key)
         : inviteToken
-          ? await api.joinInvite(inviteToken, name.trim())
-          : await api.joinRoom(code.trim().toUpperCase(), name.trim());
+          ? await api.joinInvite(inviteToken, roomName)
+          : await api.joinRoom(code.trim().toUpperCase(), roomName);
+      if (tab === "create") creationRef.current = null;
       if (inviteToken) window.history.replaceState(null, "", "/");
       setRoom(response.room);
     } catch (reason) {
@@ -964,9 +979,9 @@ export function App() {
     setScreen(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
-  const start = async (mode: SoloMode, difficulty: Difficulty, parentMatchId?: string) => {
+  const start = async (mode: SoloMode, difficulty: Difficulty, creationKey: string, parentMatchId?: string) => {
     if (!parentMatchId) void api.trackEvent("opponent_selected", `${mode}-bot`).catch(() => undefined);
-    const response = await api.createBotMatch(mode, difficulty.toLowerCase() as Lowercase<Difficulty>, parentMatchId);
+    const response = await api.createBotMatch(mode, difficulty.toLowerCase() as Lowercase<Difficulty>, creationKey, parentMatchId);
     setSolo({ mode, difficulty });
     setBotMatch(response.match);
     setGameKey((value) => value + 1);
@@ -979,7 +994,7 @@ export function App() {
       {screen === "home" && <Home navigate={navigate} />}
       {screen === "practice" && <ModeSelect kind="practice" onStart={start} navigate={navigate} />}
       {screen === "quick" && <ModeSelect kind="quick" onStart={start} navigate={navigate} />}
-      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={() => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else void start(solo.mode, solo.difficulty, botMatch.id); }} />}
+      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.id); }} />}
       {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}

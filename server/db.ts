@@ -34,6 +34,7 @@ export function openDatabase(path = databasePath): Database.Database {
     );
     CREATE TABLE IF NOT EXISTS rooms (
       id TEXT PRIMARY KEY,
+      creation_key TEXT,
       code TEXT NOT NULL UNIQUE,
       invite_token TEXT NOT NULL UNIQUE,
       mode TEXT NOT NULL CHECK (mode IN ('quick', 'ranked')),
@@ -55,6 +56,7 @@ export function openDatabase(path = databasePath): Database.Database {
     CREATE TABLE IF NOT EXISTS matches (
       id TEXT PRIMARY KEY,
       room_id TEXT,
+      creation_key TEXT,
       parent_match_id TEXT REFERENCES matches(id),
       mode TEXT NOT NULL CHECK (mode IN ('quick', 'ranked', 'practice')),
       bot_difficulty TEXT,
@@ -185,11 +187,22 @@ export function openDatabase(path = databasePath): Database.Database {
       ON quick_rematch_invitations(parent_match_id) WHERE status = 'open';
   `);
   const matchColumns = db.prepare('PRAGMA table_info(matches)').all() as { name: string }[];
+  const roomColumns = db.prepare('PRAGMA table_info(rooms)').all() as { name: string }[];
+  if (!roomColumns.some((column) => column.name === 'creation_key')) {
+    db.exec('ALTER TABLE rooms ADD COLUMN creation_key TEXT');
+  }
+  if (!matchColumns.some((column) => column.name === 'creation_key')) {
+    db.exec('ALTER TABLE matches ADD COLUMN creation_key TEXT');
+  }
   if (!matchColumns.some((column) => column.name === 'decision_duration_ms')) {
     db.exec('ALTER TABLE matches ADD COLUMN decision_duration_ms INTEGER NOT NULL DEFAULT 5000');
   }
   if (!matchColumns.some((column) => column.name === 'parent_match_id')) {
     db.exec('ALTER TABLE matches ADD COLUMN parent_match_id TEXT REFERENCES matches(id)');
   }
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS one_room_per_creation_key
+    ON rooms(host_key, creation_key) WHERE creation_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS one_bot_match_per_creation_key
+    ON matches(player_a_key, creation_key) WHERE creation_key IS NOT NULL AND bot_difficulty IS NOT NULL;`);
   return db;
 }

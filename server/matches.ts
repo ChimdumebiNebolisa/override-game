@@ -10,6 +10,7 @@ import { HttpError, type Session } from './http';
 export interface MatchRow {
   id: string;
   room_id: string | null;
+  creation_key: string | null;
   parent_match_id: string | null;
   mode: 'quick' | 'ranked' | 'practice';
   bot_difficulty: BotDifficulty | null;
@@ -115,26 +116,39 @@ export function parseAction(value: unknown): Action {
   throw new HttpError(400, 'Unknown action');
 }
 
-export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy', parentMatchId?: string) {
-  if (parentMatchId) {
-    const parent = getMatch(db, parentMatchId);
-    if (!parent || parent.mode !== mode || parent.player_a_key !== session.id ||
-        !parent.player_b_key.startsWith('bot:') || parent.status !== 'finished') {
-      throw new HttpError(404, 'Completed bot match not found');
+export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy', parentMatchId?: string, creationKey?: string) {
+  return db.transaction(() => {
+    if (creationKey) {
+      const existing = db.prepare(`SELECT * FROM matches WHERE player_a_key = ? AND creation_key = ?
+        AND bot_difficulty IS NOT NULL`).get(session.id, creationKey) as MatchRow | undefined;
+      if (existing) {
+        if (existing.mode !== mode || existing.bot_difficulty !== difficulty || existing.player_a_name !== name ||
+            existing.parent_match_id !== (parentMatchId ?? null)) {
+          throw new HttpError(409, 'Creation key was used for another bot match');
+        }
+        return existing.id;
+      }
     }
-  }
-  const now = Date.now();
-  const recent = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ?
-    AND player_b_key LIKE 'bot:%' AND started_at > ?`).get(session.id, now - 5 * 60_000) as { count: number };
-  const active = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ?
-    AND player_b_key LIKE 'bot:%' AND status IN ('decision', 'transition', 'grace')`).get(session.id) as { count: number };
-  if (recent.count >= 10 || active.count >= 3) throw new HttpError(429, 'Finish an existing bot match before starting another');
-  const id = randomUUID();
-  db.prepare(`INSERT INTO matches
-    (id, room_id, parent_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status, deadline, started_at, revision)
-    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'Bot', ?, 'decision', ?, ?, 1)`)
-    .run(id, parentMatchId ?? null, mode, difficulty, session.id, `bot:${id}`, name, JSON.stringify(createInitialState()), now + 5_000, now);
-  return id;
+    if (parentMatchId) {
+      const parent = getMatch(db, parentMatchId);
+      if (!parent || parent.mode !== mode || parent.player_a_key !== session.id ||
+          !parent.player_b_key.startsWith('bot:') || parent.status !== 'finished') {
+        throw new HttpError(404, 'Completed bot match not found');
+      }
+    }
+    const now = Date.now();
+    const recent = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ?
+      AND player_b_key LIKE 'bot:%' AND started_at > ?`).get(session.id, now - 5 * 60_000) as { count: number };
+    const active = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ?
+      AND player_b_key LIKE 'bot:%' AND status IN ('decision', 'transition', 'grace')`).get(session.id) as { count: number };
+    if (recent.count >= 10 || active.count >= 3) throw new HttpError(429, 'Finish an existing bot match before starting another');
+    const id = randomUUID();
+    db.prepare(`INSERT INTO matches
+      (id, room_id, creation_key, parent_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status, deadline, started_at, revision)
+      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, 'Bot', ?, 'decision', ?, ?, 1)`)
+      .run(id, creationKey ?? null, parentMatchId ?? null, mode, difficulty, session.id, `bot:${id}`, name, JSON.stringify(createInitialState()), now + 5_000, now);
+    return id;
+  }).immediate();
 }
 
 function chooseCommittedBotAction(db: Database.Database, row: MatchRow, state: MatchState, now: number): Action {
