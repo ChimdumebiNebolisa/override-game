@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openDatabase } from './db';
 import { createQuickRoom, joinQuickRoom, openRoomForSession } from './rooms';
 import {
@@ -130,6 +133,46 @@ describe('guest matches', () => {
     const result = matchForSession(db, match.id, match.A).lastResult!;
     expect(result.state.board[2]).toBe('A');
     expect(result.state.board[22]).toBe('B');
+  });
+
+  it('locks an action atomically against a deadline worker on another connection', () => {
+    db.close();
+    const folder = mkdtempSync(join(tmpdir(), 'override-lock-'));
+    db = openDatabase(join(folder, 'match.sqlite'));
+    const workerDb = openDatabase(join(folder, 'match.sqlite'));
+    workerDb.pragma('busy_timeout = 0');
+    try {
+      const match = humanMatch();
+      const deadline = getMatch(db, match.id)!.deadline!;
+      const snapshot = matchForSession(db, match.id, match.A);
+      const prepare = db.prepare.bind(db);
+      let workerBlocked = false;
+      const spy = vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+        if (sql.startsWith('INSERT INTO pending_actions')) {
+          try {
+            resolveMatch(workerDb, match.id, deadline + 1);
+          } catch (error) {
+            workerBlocked = String(error).includes('database is locked');
+          }
+        }
+        return prepare(sql);
+      }) as typeof db.prepare);
+      try {
+        serviceLockAction(db, match.id, match.A, pass, snapshot.state!.round, snapshot.revision);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(workerBlocked).toBe(true);
+      expect(resolveMatch(workerDb, match.id, deadline + 1)).toBe(true);
+      const result = JSON.parse(getMatch(db, match.id)!.last_result_json!) as RoundResult;
+      expect(result.outcomes.A.action).toEqual(pass);
+    } finally {
+      workerDb.close();
+      db.close();
+      db = openDatabase(':memory:');
+      for (const file of readdirSync(folder)) unlinkSync(join(folder, file));
+      rmdirSync(folder);
+    }
   });
 
   it('rejects illegal and duplicate locks without consuming the first valid lock', () => {
@@ -291,6 +334,47 @@ describe('guest matches', () => {
     markDisconnected(db, match.id, 'A', deadline + 100);
     expect(resolveMatch(db, match.id, deadline + 200)).toBe(true);
     expect(getMatch(db, match.id)?.afk_a).toBe(1);
+  });
+
+  it('keeps a third connected-miss forfeit when both disconnect after the deadline', () => {
+    const match = humanMatch();
+    db.prepare('UPDATE matches SET afk_a = 2 WHERE id = ?').run(match.id);
+    lockAction(db, match.id, match.B, pass);
+    const deadline = getMatch(db, match.id)!.deadline!;
+    markDisconnected(db, match.id, 'A', deadline + 100);
+    markDisconnected(db, match.id, 'B', deadline + 150);
+    expect(resolveMatch(db, match.id, deadline + 200)).toBe(true);
+    const finished = getMatch(db, match.id)!;
+    expect(finished.afk_a).toBe(3);
+    expect(finished.result_type).toBe('forfeit');
+    expect((JSON.parse(finished.state_json) as MatchState).winner).toBe('B');
+  });
+
+  it('defers a third disconnect after the deadline to the next round', () => {
+    const match = humanMatch();
+    db.prepare('UPDATE matches SET disconnect_a = 2 WHERE id = ?').run(match.id);
+    lockAction(db, match.id, match.B, pass);
+    const deadline = getMatch(db, match.id)!.deadline!;
+    markDisconnected(db, match.id, 'A', deadline + 100);
+    expect(resolveMatch(db, match.id, deadline + 200)).toBe(true);
+    const current = getMatch(db, match.id)!;
+    expect(current.status).toBe('grace');
+    expect(current.result_type).toBeNull();
+    expect(current.afk_a).toBe(1);
+  });
+
+  it('keeps a third disconnect forfeit when reconnection happens after the deadline', () => {
+    const match = humanMatch();
+    db.prepare('UPDATE matches SET disconnect_a = 2 WHERE id = ?').run(match.id);
+    lockAction(db, match.id, match.B, pass);
+    const deadline = getMatch(db, match.id)!.deadline!;
+    markDisconnected(db, match.id, 'A', deadline - 100);
+    markConnected(db, match.id, 'A', deadline + 100);
+    expect(resolveMatch(db, match.id, deadline + 200)).toBe(true);
+    const finished = getMatch(db, match.id)!;
+    expect(finished.status).toBe('finished');
+    expect(finished.result_type).toBe('forfeit');
+    expect((JSON.parse(finished.state_json) as MatchState).winner).toBe('B');
   });
 
   it('does not count a disconnected missed deadline after reconnecting before worker resolution', () => {

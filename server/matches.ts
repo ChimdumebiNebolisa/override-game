@@ -162,32 +162,34 @@ function chooseCommittedBotAction(db: Database.Database, row: MatchRow, state: M
 }
 
 export function lockAction(db: Database.Database, id: string, session: Session, action: Action, expectedRound: number, expectedRevision: number): void {
-  const row = getMatch(db, id);
-  if (!row) throw new HttpError(404, 'Match not found');
-  const player = playerFor(row, session);
-  if (!player) throw new HttpError(404, 'Match not found');
-  const now = Date.now();
-  if (row.status !== 'decision' || row.deadline === null || now >= row.deadline) {
-    throw new HttpError(409, 'This round is no longer accepting moves');
-  }
-  const state = stateOf(row);
-  if (!Number.isInteger(expectedRound) || !Number.isInteger(expectedRevision) ||
-      expectedRound !== state.round || expectedRevision !== row.revision) {
-    throw new HttpError(409, 'Match state changed. Refresh before locking a move');
-  }
-  const validation = validateAction(state, player, action);
-  if (!validation.ok) throw new HttpError(400, `Illegal action: ${validation.reason}`);
-  try {
-    db.prepare('INSERT INTO pending_actions (match_id, round, player, action_json, locked_at) VALUES (?, ?, ?, ?, ?)')
-      .run(id, state.round, player, JSON.stringify(action), now);
-  } catch (error) {
-    if (String(error).includes('UNIQUE constraint')) throw new HttpError(409, 'Move already locked');
-    throw error;
-  }
-  if (row.player_b_key.startsWith('bot:') && player === 'A') {
-    chooseCommittedBotAction(db, row, state, now);
-    resolveMatch(db, id, now, true);
-  }
+  db.transaction(() => {
+    const row = getMatch(db, id);
+    if (!row) throw new HttpError(404, 'Match not found');
+    const player = playerFor(row, session);
+    if (!player) throw new HttpError(404, 'Match not found');
+    const now = Date.now();
+    if (row.status !== 'decision' || row.deadline === null || now >= row.deadline) {
+      throw new HttpError(409, 'This round is no longer accepting moves');
+    }
+    const state = stateOf(row);
+    if (!Number.isInteger(expectedRound) || !Number.isInteger(expectedRevision) ||
+        expectedRound !== state.round || expectedRevision !== row.revision) {
+      throw new HttpError(409, 'Match state changed. Refresh before locking a move');
+    }
+    const validation = validateAction(state, player, action);
+    if (!validation.ok) throw new HttpError(400, `Illegal action: ${validation.reason}`);
+    try {
+      db.prepare('INSERT INTO pending_actions (match_id, round, player, action_json, locked_at) VALUES (?, ?, ?, ?, ?)')
+        .run(id, state.round, player, JSON.stringify(action), now);
+    } catch (error) {
+      if (String(error).includes('UNIQUE constraint')) throw new HttpError(409, 'Move already locked');
+      throw error;
+    }
+    if (row.player_b_key.startsWith('bot:') && player === 'A') {
+      chooseCommittedBotAction(db, row, state, now);
+      resolveMatch(db, id, now, true);
+    }
+  }).immediate();
 }
 
 function pendingAction(db: Database.Database, id: string, round: number, player: Player): Action | null {
@@ -208,6 +210,13 @@ function offlineAtDeadline(db: Database.Database, id: string, player: Player, de
   return event?.offline === 1;
 }
 
+function disconnectsAtDeadline(db: Database.Database, id: string, player: Player, total: number, deadline: number): number {
+  const later = db.prepare(`SELECT COUNT(*) AS count FROM presence_events
+    WHERE match_id = ? AND player = ? AND offline = 1 AND changed_at > ?`)
+    .get(id, player, deadline) as { count: number };
+  return Math.max(0, total - later.count);
+}
+
 export function resolveMatch(db: Database.Database, id: string, now = Date.now(), allowEarlyBot = false): boolean {
   return db.transaction(() => {
     const row = getMatch(db, id);
@@ -221,14 +230,17 @@ export function resolveMatch(db: Database.Database, id: string, now = Date.now()
       A: pendingAction(db, id, state.round, 'A'),
       B: pendingAction(db, id, state.round, 'B'),
     };
-    const misses = {
-      A: actions.A || offlineAtDeadline(db, id, 'A', row.deadline!) ? 0 : row.afk_a + 1,
-      B: actions.B || offlineAtDeadline(db, id, 'B', row.deadline!) || row.player_b_key.startsWith('bot:') ? 0 : row.afk_b + 1,
+    const offline = {
+      A: offlineAtDeadline(db, id, 'A', row.deadline!),
+      B: offlineAtDeadline(db, id, 'B', row.deadline!),
     };
-    const bothGone = row.disconnected_a_at !== null && row.disconnected_b_at !== null;
-    const aForfeit = misses.A >= 3 || row.disconnected_a_at !== null && row.disconnect_a >= 3;
-    const bForfeit = misses.B >= 3 || row.disconnected_b_at !== null && row.disconnect_b >= 3;
-    const noContest = aForfeit && bForfeit || bothGone && (aForfeit || bForfeit);
+    const misses = {
+      A: actions.A || offline.A ? 0 : row.afk_a + 1,
+      B: actions.B || offline.B || row.player_b_key.startsWith('bot:') ? 0 : row.afk_b + 1,
+    };
+    const aForfeit = misses.A >= 3 || disconnectsAtDeadline(db, id, 'A', row.disconnect_a, row.deadline!) >= 3;
+    const bForfeit = misses.B >= 3 || disconnectsAtDeadline(db, id, 'B', row.disconnect_b, row.deadline!) >= 3;
+    const noContest = aForfeit && bForfeit || offline.A && offline.B && (aForfeit || bForfeit);
     const forfeiting = noContest ? null : aForfeit ? 'A' : bForfeit ? 'B' : null;
     const result = resolveRound(state, actions, forfeiting);
     if (noContest) result.state = { ...result.state, status: 'finished', winner: null, endingReason: null };
