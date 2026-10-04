@@ -261,6 +261,10 @@ export const api = {
     return request<{ googleClientId: string | null }>("/api/config");
   },
 
+  getGoogleNonce() {
+    return request<{ nonce: string }>("/api/auth/google/nonce", { method: "POST", body: "{}" });
+  },
+
   getSession() {
     return request<{ signedIn: boolean; profile: RankedProfile | null }>("/api/session");
   },

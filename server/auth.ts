@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { HttpError } from './http.js';
 
@@ -6,16 +7,37 @@ const GOOGLE_ISSUERS = ['https://accounts.google.com', 'accounts.google.com'];
 const GOOGLE_JWKS = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HANDLE_COOLDOWN_MS = 30 * DAY_MS;
+const GOOGLE_NONCE_TTL_MS = 5 * 60_000;
 const PROFANITY = ['fuck', 'shit', 'bitch', 'cunt'];
 
 export interface GoogleVerificationOptions {
   /** Test seam; production callers should use GOOGLE_CLIENT_ID and Google's JWKS. */
   clientId?: string;
   keySet?: JWTVerifyGetKey;
+  expectedNonceHash?: string;
 }
 
 export interface VerifiedGoogleIdentity {
   uid: string;
+}
+
+function hashNonce(nonce: string): string {
+  return createHash('sha256').update(nonce).digest('hex');
+}
+
+/** Issue a short-lived Google ID-token nonce bound to the current anonymous session. */
+export function issueGoogleNonce(db: Database.Database, sessionId: string, now = Date.now()): string {
+  const nonce = randomBytes(32).toString('base64url');
+  const update = db.transaction(() => {
+    const session = db.prepare('SELECT uid FROM sessions WHERE id = ? AND expires_at > ?').get(sessionId, now) as
+      { uid: string | null } | undefined;
+    if (!session) throw new HttpError(401, 'Session expired');
+    if (session.uid) throw new HttpError(409, 'Session is already signed in');
+    db.prepare('UPDATE sessions SET google_nonce_hash = ?, google_nonce_expires_at = ? WHERE id = ?')
+      .run(hashNonce(nonce), now + GOOGLE_NONCE_TTL_MS, sessionId);
+  });
+  update.immediate();
+  return nonce;
 }
 
 export interface PublicProfile {
@@ -65,6 +87,13 @@ export async function verifyGoogleIdToken(
     if (typeof payload.sub !== 'string' || payload.sub.length === 0) {
       throw new HttpError(401, 'Google ID token has no user identity');
     }
+    if (options.expectedNonceHash) {
+      const suppliedNonce = typeof payload.nonce === 'string' ? Buffer.from(hashNonce(payload.nonce), 'hex') : null;
+      const expectedNonce = Buffer.from(options.expectedNonceHash, 'hex');
+      if (!suppliedNonce || suppliedNonce.length !== expectedNonce.length || !timingSafeEqual(suppliedNonce, expectedNonce)) {
+        throw new HttpError(401, 'Google sign-in state is invalid');
+      }
+    }
     return { uid: payload.sub };
   } catch (error) {
     if (error instanceof HttpError) throw error;
@@ -80,16 +109,42 @@ export async function attachGoogleIdentity(
   now = Date.now(),
   options: GoogleVerificationOptions = {},
 ): Promise<VerifiedGoogleIdentity> {
-  const identity = await verifyGoogleIdToken(idToken, options);
+  const challenge = db.prepare(`SELECT uid, expires_at, google_nonce_hash, google_nonce_expires_at
+    FROM sessions WHERE id = ?`).get(sessionId) as {
+      uid: string | null;
+      expires_at: number;
+      google_nonce_hash: string | null;
+      google_nonce_expires_at: number | null;
+    } | undefined;
+  if (!challenge || challenge.expires_at <= now) throw new HttpError(401, 'Session expired');
+  if (challenge.uid) throw new HttpError(409, 'Session belongs to another account');
+  if (!challenge.google_nonce_hash || !challenge.google_nonce_expires_at || challenge.google_nonce_expires_at <= now) {
+    throw new HttpError(401, 'Google sign-in state expired');
+  }
+
+  const identity = await verifyGoogleIdToken(idToken, { ...options, expectedNonceHash: challenge.google_nonce_hash });
   const attach = db.transaction(() => {
-    const session = db.prepare('SELECT uid FROM sessions WHERE id = ? AND expires_at > ?').get(sessionId, now) as
-      { uid: string | null } | undefined;
+    const session = db.prepare(`SELECT uid, expires_at, google_nonce_hash, google_nonce_expires_at
+      FROM sessions WHERE id = ?`).get(sessionId) as {
+        uid: string | null;
+        expires_at: number;
+        google_nonce_hash: string | null;
+        google_nonce_expires_at: number | null;
+      } | undefined;
     if (!session) throw new HttpError(401, 'Session expired');
+    if (session.expires_at <= now) throw new HttpError(401, 'Session expired');
     if (session.uid && session.uid !== identity.uid) throw new HttpError(409, 'Session belongs to another account');
+    if (session.uid || session.google_nonce_hash !== challenge.google_nonce_hash ||
+        !session.google_nonce_expires_at || session.google_nonce_expires_at <= now) {
+      throw new HttpError(401, 'Google sign-in state expired');
+    }
 
     db.prepare('INSERT OR IGNORE INTO profiles (uid, created_at) VALUES (?, ?)').run(identity.uid, now);
-    db.prepare('UPDATE sessions SET uid = ? WHERE id = ? AND (uid IS NULL OR uid = ?)')
-      .run(identity.uid, sessionId, identity.uid);
+    const consumed = db.prepare(`UPDATE sessions
+      SET uid = ?, google_nonce_hash = NULL, google_nonce_expires_at = NULL
+      WHERE id = ? AND uid IS NULL AND google_nonce_hash = ? AND google_nonce_expires_at > ?`)
+      .run(identity.uid, sessionId, challenge.google_nonce_hash, now);
+    if (consumed.changes !== 1) throw new HttpError(401, 'Google sign-in state expired');
     return identity;
   });
   return attach.immediate();

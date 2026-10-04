@@ -116,17 +116,23 @@ function mutualIncidentCooldownUntil(db: Database.Database, uid: string, now: nu
 
 /** Current queue/match state, or null when this account has no lease and no active cooldown. */
 export function rankedQueueStatus(db: Database.Database, uid: string, now = Date.now()): RankedQueueResult | null {
-  expireRankedLeases(db, now);
-  const result = queueResultFor(db, uid);
-  if (result) {
-    if (result.state === 'searching') db.prepare("UPDATE ranked_ownership SET lease_expires_at = ? WHERE uid = ? AND state = 'searching'")
-      .run(now + QUEUE_LEASE_MS, uid);
-    return result;
-  }
-  const cooldownUntil = mutualIncidentCooldownUntil(db, uid, now);
-  return cooldownUntil === null
-    ? null
-    : { state: 'cooldown', matchId: null, competitiveMultiplier: null, readyDeadline: null, cooldownUntil };
+  return db.transaction((): RankedQueueResult | null => {
+    expireStaleSearchingInTransaction(db, now);
+    expireDueReadyShellsInTransaction(db, now);
+    const result = queueResultFor(db, uid);
+    if (result) {
+      if (result.state === 'searching') {
+        db.prepare("UPDATE ranked_ownership SET lease_expires_at = ? WHERE uid = ? AND state = 'searching'")
+          .run(now + QUEUE_LEASE_MS, uid);
+        return pairSearchingInTransaction(db, uid, profile(db, uid), now);
+      }
+      return result;
+    }
+    const cooldownUntil = mutualIncidentCooldownUntil(db, uid, now);
+    return cooldownUntil === null
+      ? null
+      : { state: 'cooldown', matchId: null, competitiveMultiplier: null, readyDeadline: null, cooldownUntil };
+  }).immediate();
 }
 
 function pairHistory(db: Database.Database, uidA: string, uidB: string) {
@@ -216,6 +222,36 @@ function currentResult(db: Database.Database, uid: string): RankedQueueResult | 
   return result;
 }
 
+function pairSearchingInTransaction(db: Database.Database, uid: string, ownProfile: RankedProfileRow, now: number): RankedQueueResult {
+  const ownQueue = db.prepare('SELECT uid, joined_at, rating FROM ranked_queue WHERE uid = ?').get(uid) as QueueRow | undefined;
+  if (!ownQueue) throw new HttpError(409, 'Ranked queue lease expired');
+  const waited = Math.max(0, now - ownQueue.joined_at);
+  const radius = waited < 5_000 ? 150 : waited < 10_000 ? 300 : null;
+  const candidates = db.prepare(`SELECT q.uid, q.joined_at, q.rating FROM ranked_queue q
+    JOIN ranked_ownership o ON o.uid = q.uid AND o.state = 'searching'
+    WHERE q.uid <> ? AND (? IS NULL OR ABS(q.rating - ?) <= ?)
+    ORDER BY q.joined_at ASC, q.uid ASC`)
+    .all(uid, radius, ownQueue.rating, radius) as QueueRow[];
+
+  const rankedCandidates = candidates.map((candidate) => {
+    const candidateProfile = profile(db, candidate.uid);
+    const assessment = assessCompetitiveCredit({
+      assessedAt: now,
+      playerA: { id: ownProfile.uid, profile: ownProfile },
+      playerB: { id: candidate.uid, profile: candidateProfile },
+      pairHistory: pairHistory(db, uid, candidate.uid),
+    });
+    return { candidate, multiplier: assessment.multiplier };
+  }).sort((left, right) => right.multiplier - left.multiplier || left.candidate.joined_at - right.candidate.joined_at);
+
+  if (rankedCandidates.length) {
+    const selected = rankedCandidates[0].candidate;
+    const shell = createShellInTransaction(db, uid, selected.uid, now);
+    return { state: 'readying', matchId: shell.matchId, competitiveMultiplier: shell.competitiveMultiplier, readyDeadline: shell.readyDeadline };
+  }
+  return { state: 'searching', matchId: null, competitiveMultiplier: null, readyDeadline: null };
+}
+
 /** Join (or resume) the single Ranked queue lease for this UID and pair atomically when eligible. */
 export function joinRankedQueue(db: Database.Database, uid: string, now = Date.now()): RankedQueueResult {
   return db.transaction((): RankedQueueResult => {
@@ -239,33 +275,7 @@ export function joinRankedQueue(db: Database.Database, uid: string, now = Date.n
         .run(now + QUEUE_LEASE_MS, uid);
     }
 
-    const ownQueue = db.prepare('SELECT uid, joined_at, rating FROM ranked_queue WHERE uid = ?').get(uid) as QueueRow | undefined;
-    if (!ownQueue) throw new HttpError(409, 'Ranked queue lease expired');
-    const waited = Math.max(0, now - ownQueue.joined_at);
-    const radius = waited < 5_000 ? 150 : waited < 10_000 ? 300 : 2_147_483_647;
-    const candidates = db.prepare(`SELECT q.uid, q.joined_at, q.rating FROM ranked_queue q
-      JOIN ranked_ownership o ON o.uid = q.uid AND o.state = 'searching'
-      WHERE q.uid <> ? AND ABS(q.rating - ?) <= ?
-      ORDER BY q.joined_at ASC, q.uid ASC`)
-      .all(uid, ownQueue.rating, radius) as QueueRow[];
-
-    const rankedCandidates = candidates.map((candidate) => {
-      const candidateProfile = profile(db, candidate.uid);
-      const assessment = assessCompetitiveCredit({
-        assessedAt: now,
-        playerA: { id: ownProfile.uid, profile: ownProfile },
-        playerB: { id: candidate.uid, profile: candidateProfile },
-        pairHistory: pairHistory(db, uid, candidate.uid),
-      });
-      return { candidate, multiplier: assessment.multiplier };
-    }).sort((left, right) => right.multiplier - left.multiplier || left.candidate.joined_at - right.candidate.joined_at);
-
-    if (rankedCandidates.length) {
-      const selected = rankedCandidates[0].candidate;
-      const shell = createShellInTransaction(db, uid, selected.uid, now);
-      return { state: 'readying', matchId: shell.matchId, competitiveMultiplier: shell.competitiveMultiplier, readyDeadline: shell.readyDeadline };
-    }
-    return { state: 'searching', matchId: null, competitiveMultiplier: null, readyDeadline: null } as RankedQueueResult;
+    return pairSearchingInTransaction(db, uid, ownProfile, now);
   }).immediate();
 }
 

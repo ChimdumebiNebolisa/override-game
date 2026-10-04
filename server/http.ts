@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { isIP } from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type Database from 'better-sqlite3';
 
@@ -47,7 +48,7 @@ export interface Session {
 const newSessionsByAddress = new Map<string, { startedAt: number; count: number }>();
 
 function limitNewSession(req: IncomingMessage, now: number): void {
-  const address = req.socket.remoteAddress ?? 'unknown';
+  const address = rateLimitAddress(req);
   const current = newSessionsByAddress.get(address);
   if (!current || current.startedAt <= now - 5 * 60_000) {
     newSessionsByAddress.set(address, { startedAt: now, count: 1 });
@@ -60,6 +61,14 @@ function limitNewSession(req: IncomingMessage, now: number): void {
       if (value.startedAt <= now - 5 * 60_000) newSessionsByAddress.delete(key);
     }
   }
+}
+
+function rateLimitAddress(req: IncomingMessage): string {
+  const peer = req.socket.remoteAddress ?? 'unknown';
+  if (process.env.RENDER !== 'true') return peer;
+  const forwarded = req.headers['x-forwarded-for'];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
+  return first && isIP(first) ? first : peer;
 }
 
 function cookieValue(req: IncomingMessage, name: string): string | null {

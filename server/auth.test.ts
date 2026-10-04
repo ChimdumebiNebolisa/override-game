@@ -7,6 +7,7 @@ import {
   attachGoogleIdentity,
   claimHandle,
   getPublicProfile,
+  issueGoogleNonce,
   renameHandle,
   validateHandle,
   verifyGoogleIdToken,
@@ -92,8 +93,8 @@ test('Google ID token verifies signature, issuer, audience, expiry, and subject 
   const exported = await exportJWK(publicKey);
   const localJwks = createLocalJWKSet({ keys: [{ ...exported, kid: 'test-key', alg: 'RS256' } as JWK] });
   const now = Math.floor(Date.now() / 1000);
-  const sign = (subject: string, audience = 'client-id', issuer = 'https://accounts.google.com', expiry = now + 300) =>
-    new SignJWT({ email: 'private@example.com' })
+  const sign = (subject: string, audience = 'client-id', issuer = 'https://accounts.google.com', expiry = now + 300, nonce?: string) =>
+    new SignJWT({ email: 'private@example.com', ...(nonce ? { nonce } : {}) })
       .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
       .setIssuer(issuer)
       .setAudience(audience)
@@ -125,7 +126,10 @@ test('Google ID token verifies signature, issuer, audience, expiry, and subject 
   const sessionId = 's'.repeat(64);
   database.prepare('INSERT INTO sessions (id, uid, created_at, expires_at) VALUES (?, NULL, ?, ?)')
     .run(sessionId, Date.now(), Date.now() + 60_000);
-  assert.deepEqual(await attachGoogleIdentity(database, sessionId, token, Date.now(), {
+  const challengeTime = Date.now();
+  const nonce = issueGoogleNonce(database, sessionId, challengeTime);
+  const sessionToken = await sign('google-uid', 'client-id', 'https://accounts.google.com', now + 300, nonce);
+  assert.deepEqual(await attachGoogleIdentity(database, sessionId, sessionToken, challengeTime, {
     clientId: 'client-id', keySet: localJwks,
   }), { uid: 'google-uid' });
   assert.equal((database.prepare('SELECT uid FROM sessions WHERE id = ?').get(sessionId) as { uid: string }).uid, 'google-uid');

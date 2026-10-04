@@ -15,7 +15,9 @@ export function openDatabase(path = databasePath): Database.Database {
       id TEXT PRIMARY KEY,
       uid TEXT,
       created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL
+      expires_at INTEGER NOT NULL,
+      google_nonce_hash TEXT,
+      google_nonce_expires_at INTEGER
     );
     CREATE TABLE IF NOT EXISTS profiles (
       uid TEXT PRIMARY KEY,
@@ -196,6 +198,13 @@ export function openDatabase(path = databasePath): Database.Database {
   `);
   const matchColumns = db.prepare('PRAGMA table_info(matches)').all() as { name: string }[];
   const roomColumns = db.prepare('PRAGMA table_info(rooms)').all() as { name: string }[];
+  const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
+  if (!sessionColumns.some((column) => column.name === 'google_nonce_hash')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN google_nonce_hash TEXT');
+  }
+  if (!sessionColumns.some((column) => column.name === 'google_nonce_expires_at')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN google_nonce_expires_at INTEGER');
+  }
   if (!roomColumns.some((column) => column.name === 'creation_key')) {
     db.exec('ALTER TABLE rooms ADD COLUMN creation_key TEXT');
   }

@@ -89,7 +89,8 @@ test('queue broadens at 5 and 10 seconds and prefers a full-credit opponent', ()
   db.prepare('UPDATE profiles SET rating = 1200 WHERE uid = ?').run('b');
   joinRankedQueue(db, 'a', 0);
   assert.equal(joinRankedQueue(db, 'b', 1).state, 'searching');
-  const paired = joinRankedQueue(db, 'a', 5_000);
+  const paired = rankedQueueStatus(db, 'a', 5_000);
+  assert.ok(paired);
   assert.equal(paired.state, 'readying');
   assert.equal(paired.competitiveMultiplier, 1);
 });

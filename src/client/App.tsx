@@ -12,7 +12,7 @@ import { api, type LeaderboardEntry, type PublicMatch, type QuickRematchInvitati
 
 declare global {
   interface Window {
-    google?: { accounts: { id: { initialize(options: { client_id: string; callback: (response: { credential: string }) => void }): void; renderButton(element: HTMLElement, options: Record<string, unknown>): void } } };
+    google?: { accounts: { id: { initialize(options: { client_id: string; nonce: string; callback: (response: { credential: string }) => void }): void; renderButton(element: HTMLElement, options: Record<string, unknown>): void } } };
   }
 }
 
@@ -879,10 +879,20 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
 
   useEffect(() => {
     if (signedIn || !clientId || !googleButton.current) return;
-    const render = () => {
+    let active = true;
+    const render = async () => {
       if (!window.google || !googleButton.current) return;
+      let nonce: string;
+      try {
+        nonce = (await api.getGoogleNonce()).nonce;
+      } catch (reason) {
+        if (active) setError(reason instanceof Error ? reason.message : "Google sign-in could not start.");
+        return;
+      }
+      if (!active || !window.google || !googleButton.current) return;
       window.google.accounts.id.initialize({
         client_id: clientId,
+        nonce,
         callback: ({ credential }) => {
           setBusy(true);
           void api.trackEvent("ranked_auth_started", "ranked").catch(() => undefined);
@@ -890,21 +900,34 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
             setSignedIn(true);
             setProfile(response.profile);
             setError("");
-          }).catch((reason) => setError(reason instanceof Error ? reason.message : "Google sign-in failed."))
+          }).catch(async (reason) => {
+            const message = reason instanceof Error ? reason.message : "Google sign-in failed.";
+            try {
+              const session = await api.getSession();
+              if (session.signedIn) {
+                setSignedIn(true);
+                setProfile(session.profile);
+                setError("");
+                return;
+              }
+            } catch { /* Keep the original sign-in error visible. */ }
+            setError(message);
+            await render();
+          })
             .finally(() => setBusy(false));
         },
       });
       googleButton.current.replaceChildren();
       window.google.accounts.id.renderButton(googleButton.current, { theme: "outline", size: "large", width: 320 });
     };
-    if (window.google) { render(); return; }
+    if (window.google) { void render(); return () => { active = false; }; }
     const script = document.createElement("script");
     script.src = "https://accounts.google.com/gsi/client";
     script.async = true;
-    script.onload = render;
+    script.onload = () => { void render(); };
     script.onerror = () => setError("Google sign-in could not load. Check your connection and reload the page.");
     document.head.appendChild(script);
-    return () => script.remove();
+    return () => { active = false; script.remove(); };
   }, [clientId, signedIn]);
 
   useEffect(() => {

@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { openDatabase } from './db';
 import { port, publicOrigin } from './config';
-import { attachGoogleIdentity, claimHandle, getPublicProfile, renameHandle } from './auth';
+import { attachGoogleIdentity, claimHandle, getPublicProfile, issueGoogleNonce, renameHandle } from './auth';
 import { HttpError, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
 import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, reconcilePresenceOnStartup, resignMatch } from './matches';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
@@ -328,6 +328,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return json(res, 200, { match: matchForSession(db, matchMatch[1], session) });
     }
 
+    if (path === '/api/auth/google/nonce' && method === 'POST') {
+      const session = requireSession(req, res, db);
+      return json(res, 200, { nonce: issueGoogleNonce(db, session.id) });
+    }
     if (path === '/api/auth/google' && method === 'POST') {
       const session = requireSession(req, res, db);
       const body = await readJson(req);
