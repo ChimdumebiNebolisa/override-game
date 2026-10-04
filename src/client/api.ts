@@ -41,6 +41,10 @@ export interface PublicMatch {
   afkWarning?: boolean;
 }
 
+export function snapshotIsCurrent(snapshot: Pick<PublicMatch, "revision">, currentRevision: number): boolean {
+  return snapshot.revision >= currentRevision;
+}
+
 export interface RankedProfile {
   handle: string | null;
   rating?: number;

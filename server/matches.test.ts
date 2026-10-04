@@ -246,6 +246,8 @@ describe('guest matches', () => {
     expect(resolveMatch(db, match.id, deadline)).toBe(false);
     expect(db.prepare('SELECT count(*) AS count FROM round_results WHERE match_id = ?').get(match.id))
       .toEqual({ count: 1 });
+    expect(db.prepare('SELECT count(*) AS count FROM pending_actions WHERE match_id = ?').get(match.id))
+      .toEqual({ count: 0 });
     const result = matchForSession(db, match.id, match.A).lastResult!;
     expect(result.state.board[2]).toBe('A');
     expect(result.state.board[22]).toBe('B');
@@ -537,6 +539,7 @@ describe('guest matches', () => {
 
   it('allows only a participant to resign and records the opponent as winner once', () => {
     const match = humanMatch();
+    lockAction(db, match.id, match.A, move('expand', 2));
     expectStatus(() => resignMatch(db, match.id, session('outsider')), 404);
     expect(getMatch(db, match.id)?.status).toBe('decision');
     resignMatch(db, match.id, match.A, 101_000);
@@ -547,6 +550,8 @@ describe('guest matches', () => {
     expect((JSON.parse(row.state_json) as MatchState)).toMatchObject({
       status: 'finished', winner: 'B', endingReason: 'resignation',
     });
+    expect(db.prepare('SELECT count(*) AS count FROM pending_actions WHERE match_id = ?').get(match.id))
+      .toEqual({ count: 0 });
     expectStatus(() => resignMatch(db, match.id, match.A), 409);
     expect(resolveMatch(db, match.id, 105_000)).toBe(false);
   });

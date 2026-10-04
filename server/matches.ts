@@ -325,6 +325,7 @@ export function resolveMatch(db: Database.Database, id: string, now = Date.now()
     }
     db.prepare('INSERT INTO round_results (match_id, round, result_json, resolved_at) VALUES (?, ?, ?, ?)')
       .run(id, state.round, JSON.stringify(result), now);
+    db.prepare('DELETE FROM pending_actions WHERE match_id = ? AND round = ?').run(id, state.round);
     db.prepare(`UPDATE matches SET state_json = ?, status = ?, deadline = NULL, transition_at = ?, grace_until = ?,
       ended_at = ?, revision = revision + 1, last_result_json = ?, afk_a = ?, afk_b = ?, result_type = ?
       WHERE id = ? AND status = 'decision'`)
@@ -434,6 +435,7 @@ export function expireGrace(db: Database.Database, id: string, now = Date.now())
     db.prepare(`UPDATE matches SET state_json = ?, status = 'finished', ended_at = ?, deadline = NULL,
       grace_until = NULL, result_type = ?, revision = revision + 1 WHERE id = ? AND status = 'grace'`)
       .run(JSON.stringify(finalState), now, resultType, id);
+    db.prepare('DELETE FROM pending_actions WHERE match_id = ?').run(id);
     if (row.room_id) db.prepare("UPDATE rooms SET status = 'finished' WHERE id = ?").run(row.room_id);
     return true;
   })();
@@ -459,6 +461,7 @@ export function resignMatch(db: Database.Database, id: string, session: Session,
       transition_at = NULL, grace_until = NULL, ended_at = ?, result_type = 'resignation',
       revision = revision + 1 WHERE id = ?`)
       .run(JSON.stringify(finalState), now, id);
+    db.prepare('DELETE FROM pending_actions WHERE match_id = ?').run(id);
     if (row.room_id) db.prepare("UPDATE rooms SET status = 'finished' WHERE id = ?").run(row.room_id);
   })();
 }
@@ -478,6 +481,7 @@ function voidUntrustworthyMatch(db: Database.Database, id: string, now: number):
     db.prepare(`UPDATE matches SET state_json = ?, status = 'voided', result_type = 'server-error',
       deadline = NULL, transition_at = NULL, grace_until = NULL, ended_at = ?, last_result_json = NULL,
       revision = revision + 1 WHERE id = ?`).run(JSON.stringify(voidState), now, id);
+    db.prepare('DELETE FROM pending_actions WHERE match_id = ?').run(id);
     if (row.room_id) db.prepare("UPDATE rooms SET status = 'finished' WHERE id = ?").run(row.room_id);
     db.prepare('DELETE FROM ranked_ownership WHERE match_id = ?').run(id);
     return true;

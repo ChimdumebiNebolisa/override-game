@@ -10,7 +10,7 @@ import {
   type MatchState,
   type Player,
 } from "../shared/rules";
-import { api, type LeaderboardEntry, type PublicMatch, type QuickRematchInvitation, type RankedInvitation, type RankedProfile, type RankedQueue, type RankedSettlement, type Room } from "./api";
+import { api, snapshotIsCurrent, type LeaderboardEntry, type PublicMatch, type QuickRematchInvitation, type RankedInvitation, type RankedProfile, type RankedQueue, type RankedSettlement, type Room } from "./api";
 
 declare global {
   interface Window {
@@ -34,19 +34,25 @@ type SoloMode = "practice" | "quick";
 type PlayMode = SoloMode | "ranked";
 const CURRENT_MATCH_KEY = "override:current-match";
 
+function decodePathComponent(value: string): string | null {
+  try { return decodeURIComponent(value); }
+  catch { return null; }
+}
+
 function rankedInviteFromPath() {
   const match = window.location.pathname.match(/^\/ranked\/(challenge|rematch)\/([^/]+)$/);
-  return match ? { kind: match[1] as "challenge" | "rematch", token: decodeURIComponent(match[2]) } : null;
+  const token = match ? decodePathComponent(match[2]) : null;
+  return match && token ? { kind: match[1] as "challenge" | "rematch", token } : null;
 }
 
 function guestInviteFromPath() {
   const match = window.location.pathname.match(/^\/join\/([^/]+)$/);
-  return match ? decodeURIComponent(match[1]) : null;
+  return match ? decodePathComponent(match[1]) : null;
 }
 
 function quickRematchFromPath() {
   const match = window.location.pathname.match(/^\/quick\/rematch\/([^/]+)$/);
-  return match ? decodeURIComponent(match[1]) : null;
+  return match ? decodePathComponent(match[1]) : null;
 }
 
 const ACTIONS: ReadonlyArray<{
@@ -65,13 +71,33 @@ const ACTIONS: ReadonlyArray<{
 const OUTCOME_COPY: Record<ActionOutcome["reason"], string> = {
   claimed: "claimed the node",
   stolen: "took control of the node",
-  "ambush-hit": "read the Expand and gained 1 Energy",
+  "ambush-hit": "read the Expand",
   "ambush-missed": "did not catch an Expand",
   collision: "collided; the node stayed neutral",
   intercepted: "was stopped by an Ambush",
   passed: "passed",
   "automatic-pass": "ran out of time and passed",
 };
+
+function outcomeExplanation(outcome: ActionOutcome): string {
+  if (outcome.reason === "ambush-hit" && outcome.energyEarned === 0) {
+    return "read the Expand; Energy was already full";
+  }
+  return OUTCOME_COPY[outcome.reason];
+}
+
+function energyEffect(outcome: ActionOutcome): string {
+  const effects = [
+    ...(outcome.energySpent > 0 ? [`Spent ${outcome.energySpent} Energy`] : []),
+    ...(outcome.energyEarned > 0 ? [`Earned ${outcome.energyEarned} Energy`] : []),
+  ];
+  if (outcome.reason === "ambush-hit" && outcome.energyEarned === 0) effects.push("Energy was full; none earned");
+  return effects.length ? effects.join(" · ") : "No Energy change";
+}
+
+export function roundActionsDisabled(status: PublicMatch["status"], locked: boolean): boolean {
+  return status !== "decision" || locked;
+}
 
 function coordinate(index: number) {
   return `${String.fromCharCode(65 + (index % 5))}${Math.floor(index / 5) + 1}`;
@@ -274,9 +300,11 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
     : target === null
       ? null
       : { type: actionType, target };
+  const decisionOpen = serverStatus === "decision" && match.status === "active";
+  const canAct = decisionOpen && !roundActionsDisabled(serverStatus, locked);
 
   const commit = async (forcedAction?: Action) => {
-    if (lockingRef.current || match.status === "finished") return;
+    if (lockingRef.current || !canAct) return;
     const playerAction = forcedAction ?? selectedAction;
     if (!playerAction) return;
     lockingRef.current = true;
@@ -293,7 +321,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
     }
   };
 
-  const receiveSnapshot = (snapshot: PublicMatch) => {
+  const receiveSnapshot = (snapshot: PublicMatch, acknowledgeRound?: number): boolean => {
+    if (!snapshotIsCurrent(snapshot, revisionRef.current)) return false;
+    if (acknowledgeRound !== undefined) acknowledgedRoundRef.current = acknowledgeRound;
     setMatch(snapshot.state);
     setServerStatus(snapshot.status);
     setReveal(snapshot.status === "finished" || (snapshot.lastResult && snapshot.lastResult.state.round > acknowledgedRoundRef.current)
@@ -306,6 +336,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
     const nextDeadline = snapshot.deadline ? Date.now() + (snapshot.deadline - snapshot.serverNow) : null;
     setDeadlineAt((current) => current !== null && nextDeadline !== null && Math.abs(current - nextDeadline) < 250 ? current : nextDeadline);
     setTimeLeft(Math.max(0, Math.ceil(((snapshot.deadline ?? snapshot.serverNow) - snapshot.serverNow) / 1000)));
+    return true;
   };
 
   useEffect(() => {
@@ -314,7 +345,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
     const refresh = async () => {
       try {
         const snapshot = (await api.getMatch<PublicMatch>(initialMatch.id)).match;
-        if (active && snapshot.revision >= revisionRef.current) {
+        if (active && snapshotIsCurrent(snapshot, revisionRef.current)) {
           receiveSnapshot(snapshot);
           setConnectionError("");
         }
@@ -349,7 +380,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   };
 
   useEffect(() => {
-    if (locked || reveal || match.status === "finished") return;
+    if (!canAct || match.status === "finished") return;
     const timer = window.setInterval(() => {
       setTimeLeft((value) => {
         if (value <= 1) {
@@ -361,7 +392,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [locked, reveal, match]);
+  }, [canAct, match]);
 
   const nextRound = async () => {
     setNetworkError("");
@@ -373,9 +404,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
         if (snapshot.status !== "transition") break;
       }
       if (!snapshot) return;
-      acknowledgedRoundRef.current = reveal?.state.round ?? acknowledgedRoundRef.current;
+      const acknowledgedRound = reveal?.state.round;
       focusRoundAfterReveal.current = snapshot.status !== "finished";
-      receiveSnapshot(snapshot);
+      if (!receiveSnapshot(snapshot, acknowledgedRound)) return;
       setActionType("expand");
       setTarget(null);
       setTimeLeft(Math.max(0, Math.ceil(((snapshot.deadline ?? snapshot.serverNow) - snapshot.serverNow) / 1000)));
@@ -385,7 +416,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   };
 
   const chooseAction = (type: Action["type"]) => {
-    if (locked || reveal) return;
+    if (!canAct) return;
     setActionType(type);
     setTarget(null);
   };
@@ -447,17 +478,28 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
         <div className={`player-score bot side-${rival}`}><p><small>{mode === "ranked" || initialMatch.roomId ? initialMatch.playerNames[rival] : `${difficulty} bot`} · {rival}</small><strong>{totals[rival].toString().padStart(2, "0")}</strong></p><span className="owner-symbol">{rival === "A" ? "●" : "◆"}</span></div>
       </section>
 
+      {reveal && <RevealPanel result={reveal} player={me} finalRound={Boolean(finalRoundReveal)} activeRoundOpen={decisionOpen}
+        onContinue={() => {
+          if (finalRoundReveal) setShowFinalResult(true);
+          else if (decisionOpen) {
+            acknowledgedRoundRef.current = reveal.state.round;
+            setReveal(null);
+            focusRoundAfterReveal.current = true;
+          } else void nextRound();
+        }} />}
+
       <div className="game-layout">
         <section className="board-panel" aria-labelledby="board-title">
-          <div className="board-label"><span id="board-title">Territory grid</span><span>{locked ? "MOVE LOCKED" : reveal ? "ROUND REVEALED" : "CHOOSE A TARGET"}</span></div>
-          <GameBoard board={match.board} legal={legal} target={target} disabled={locked || Boolean(reveal)} onTarget={setTarget} />
-          <div className="energy-bar">
+          <div className="board-label"><span id="board-title">Territory grid</span><span>{locked ? "MOVE LOCKED" : reveal && !canAct ? "ROUND REVEALED" : "CHOOSE A TARGET"}</span></div>
+          <GameBoard board={match.board} legal={legal} target={target} disabled={!canAct} onTarget={setTarget} />
+          <div className="energy-bar" aria-label={`Your Energy ${match.energy[me]} of 3. Rival Energy ${match.energy[rival]} of 3.`}>
             <span>ENERGY</span>
             {[1, 2, 3].map((value) => <i key={value} className={value <= match.energy[me] ? "charged" : ""}>ϟ</i>)}
             <strong>{match.energy[me]} / 3</strong>
+            <small className="rival-energy">RIVAL {match.energy[rival]} / 3</small>
           </div>
           {mode === "practice" && <div className="hint-control"><button type="button" onClick={() => setShowHint((value) => !value)} aria-pressed={showHint}>{showHint ? "Hide hints" : "Show hints"}</button></div>}
-          {mode === "practice" && showHint && !reveal && <p className="coach-note"><b>Hint</b>{hint}</p>}
+          {mode === "practice" && showHint && canAct && <p className="coach-note"><b>Hint</b>{hint}</p>}
         </section>
 
         <section className="move-panel" aria-labelledby="move-title">
@@ -471,7 +513,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
                   key={action.type}
                   className={actionType === action.type ? "selected" : ""}
                   onClick={() => chooseAction(action.type)}
-                  disabled={locked || Boolean(reveal) || !canAfford || !hasTargets}
+                  disabled={!canAct || !canAfford || !hasTargets}
                   aria-pressed={actionType === action.type}
                 >
                   <span className={`action-glyph glyph-${action.type}`} aria-hidden="true" />
@@ -488,7 +530,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
           {connectionError && <p className="form-error" role="status">{connectionError}</p>}
           {serverStatus === "grace" && <p className="status-note" role="status">Match paused while a player reconnects. The server will resume or finish it after the grace period.</p>}
           {afkWarning && <p className="afk-warning" role="alert"><b>AFK warning</b> Choose a move this round. A third connected miss ends the match.</p>}
-          <button className="lock-button" disabled={!selectedAction || locked || Boolean(reveal)} onClick={() => void commit()}>
+          <button className="lock-button" disabled={!selectedAction || !canAct} onClick={() => void commit()}>
             {locked ? "Move locked" : "Lock move"}<span>{locked ? "✓" : "→"}</span>
           </button>
           {mode === "practice" && <button className="secondary-cta full" disabled={restartingPractice} onClick={() => void restartPractice()}>
@@ -498,8 +540,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
         </section>
       </div>
 
-      {reveal && <RevealPanel result={reveal} player={me} finalRound={Boolean(finalRoundReveal)} onContinue={() => finalRoundReveal ? setShowFinalResult(true) : void nextRound()} />}
-      {confirmResign && !reveal && <ResignDialog ranked={mode === "ranked"} onCancel={closeResign} onConfirm={() => void resign()} />}
+      {confirmResign && (!reveal || decisionOpen) && <ResignDialog ranked={mode === "ranked"} onCancel={closeResign} onConfirm={() => void resign()} />}
     </main>
   );
 }
@@ -552,35 +593,36 @@ function ResignDialog({ ranked, onCancel, onConfirm }: { ranked: boolean; onCanc
   );
 }
 
-function RevealPanel({ result, player, finalRound, onContinue }: { result: NonNullable<PublicMatch["lastResult"]>; player: Player; finalRound: boolean; onContinue: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const continueRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    dialog?.showModal();
-    continueRef.current?.focus();
-    return () => dialog?.close();
-  }, []);
+export function RevealPanel({ result, player, finalRound, activeRoundOpen, onContinue }: {
+  result: NonNullable<PublicMatch["lastResult"]>;
+  player: Player;
+  finalRound: boolean;
+  activeRoundOpen: boolean;
+  onContinue: () => void;
+}) {
   const rival: Player = player === "A" ? "B" : "A";
   const rows = ([player, rival] as const).map((side) => ({ side, outcome: result.outcomes[side] }));
   return (
-    <dialog ref={dialogRef} className="reveal-scrim" aria-labelledby="reveal-title" onCancel={(event) => event.preventDefault()}>
-      <section className="reveal-card">
+    <section className="round-review" role="region" aria-labelledby="reveal-title" aria-live="polite">
+      <div className="round-review-heading">
         <p className="eyebrow">Simultaneous reveal</p>
-        <h2 id="reveal-title">Round resolved.</h2>
+        <h2 id="reveal-title">Round {result.state.round} resolved.</h2>
+      </div>
         <div className="reveal-actions">
           {rows.map(({ side, outcome }) => (
             <div key={side} className={side === player ? "you" : "bot"}>
               <span>{side === player ? "YOU" : "RIVAL"}</span>
               <strong>{actionText(outcome.action)}</strong>
-              <p>{OUTCOME_COPY[outcome.reason]}.</p>
+              <p>{outcomeExplanation(outcome)}.</p>
+              <small>{energyEffect(outcome)}</small>
             </div>
           ))}
         </div>
         <div className="reveal-score"><span>{result.score[player]}</span><small>territory</small><span>{result.score[rival]}</span></div>
-        <button ref={continueRef} className="primary-cta full" onClick={onContinue}>{finalRound ? "See result" : "Next round"} <span>→</span></button>
+        <button className="secondary-cta full" onClick={onContinue}>
+          {finalRound ? "See result" : activeRoundOpen ? "Hide result" : "Next round"} <span>→</span>
+        </button>
       </section>
-    </dialog>
   );
 }
 
