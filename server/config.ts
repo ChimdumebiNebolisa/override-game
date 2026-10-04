@@ -15,7 +15,7 @@ export interface FirebaseWebConfig {
   projectId: string;
   appId: string;
 }
-let firebaseWebConfig: FirebaseWebConfig | null = null;
+export let firebaseWebConfig: FirebaseWebConfig | null = null;
 if (process.env.FIREBASE_WEB_CONFIG) {
   try {
     const value: unknown = JSON.parse(process.env.FIREBASE_WEB_CONFIG);
