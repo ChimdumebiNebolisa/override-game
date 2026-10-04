@@ -34,6 +34,8 @@ For staging or production, set `PUBLIC_ORIGIN` to the actual HTTPS origin, then 
 
 The [Dockerfile](Dockerfile) packages that one-process server and built client. Mount a persistent writable disk at `/data`, set `PUBLIC_ORIGIN` to the externally served HTTPS origin and `GOOGLE_CLIENT_ID` to that origin's OAuth web client, and run exactly one replica. The container uses `/data/override.sqlite`; its default backups go under `/data/backups/`. Put HTTPS termination and an edge rate limit in front of port 8787. `/api/health` is the container health check. Do not deploy without the persistent mount: a new container would lose sessions and Ranked ratings.
 
+[`render.yaml`](render.yaml) provides a Render staging Blueprint for the Docker service, one persistent `/data` disk, one instance, health checks, and deployment after branch checks pass. Render supplies `PUBLIC_ORIGIN` from the service URL; the Blueprint prompts for `GOOGLE_CLIENT_ID`. A custom domain requires updating `PUBLIC_ORIGIN` to that exact HTTPS origin and adding it to the Google OAuth client. Render persistent disks require a paid service, prevent multi-instance scaling, and cause a short interruption during deploys; see [Render disk limits](https://render.com/docs/disks). The Blueprint prepares the service but does not add the edge rate limit required before public launch.
+
 Room and bot match creation requests include a UUID `creationKey`. The client reuses it after an uncertain response, and the server returns the original room or match.
 
 ## Metrics and operations

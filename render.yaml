@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: override-game-staging
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: ohio
+    plan: 0.5c-512mb
+    numInstances: 1
+    autoDeployTrigger: checksPass
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: DB_PATH
+        value: /data/override.sqlite
+      - key: PUBLIC_ORIGIN
+        fromService:
+          name: override-game-staging
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+    disk:
+      name: override-game-data
+      mountPath: /data
+      sizeGB: 1
