@@ -24,18 +24,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Build and smoke-test image
+      - name: Build, back up, and restore image
         run: |
           docker build -t override-game:verify .
           docker volume create override-verify-data
           trap 'docker rm -f override-verify >/dev/null 2>&1 || true; docker volume rm override-verify-data >/dev/null 2>&1 || true' EXIT
+          wait_for_health() {
+            for attempt in {1..30}; do
+              if curl -fsS http://127.0.0.1:8787/api/health >/dev/null; then return 0; fi
+              sleep 1
+            done
+            docker logs override-verify
+            return 1
+          }
           docker run -d --name override-verify -p 8787:8787 -v override-verify-data:/data -e PUBLIC_ORIGIN=https://game.example override-game:verify
-          for attempt in {1..30}; do
-            if curl -fsS http://127.0.0.1:8787/api/health >/dev/null; then
-              docker exec override-verify test -f /data/override.sqlite
-              exit 0
-            fi
-            sleep 1
-          done
-          docker logs override-verify
-          exit 1
+          wait_for_health
+          docker exec override-verify test -f /data/override.sqlite
+          curl -fsS http://127.0.0.1:8787/api/session >/dev/null
+          docker exec override-verify npm run backup:db -- /data/backups/ci-backup.sqlite
+          docker rm -f override-verify
+          docker run --rm -v override-verify-data:/data --entrypoint node override-game:verify -e "require('node:fs').copyFileSync('/data/backups/ci-backup.sqlite', '/data/restore.sqlite')"
+          docker run -d --name override-verify -p 8787:8787 -v override-verify-data:/data -e PUBLIC_ORIGIN=https://game.example -e DB_PATH=/data/restore.sqlite override-game:verify
+          wait_for_health
+          docker exec override-verify node -e "const Database = require('better-sqlite3'); const db = new Database('/data/restore.sqlite'); const count = db.prepare('SELECT COUNT(*) AS count FROM sessions').get().count; db.close(); if (count !== 1) process.exit(1)"
