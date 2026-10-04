@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from './db';
 import { createQuickRoom, getRoom, joinQuickRoom, roomForSession } from './rooms';
+import { invitationTokenHash, revealInvitationSecret } from './invitation-secrets';
 import type { Session } from './http';
 
 const session = (id: string): Session => ({ id, uid: null, createdAt: 0, expiresAt: 1_000_000 });
@@ -30,6 +31,11 @@ describe('guest rooms', () => {
     const guest = session('guest');
     const other = session('other');
     const room = createQuickRoom(db, host, 'Host');
+    const storedInvite = db.prepare('SELECT invite_token, invite_token_hash FROM rooms WHERE id = ?').get(room.id) as { invite_token: string; invite_token_hash: string };
+    const rawInviteToken = room.inviteUrl.split('/join/')[1];
+    expect(storedInvite.invite_token).not.toBe(rawInviteToken);
+    expect(storedInvite.invite_token_hash).toBe(invitationTokenHash(rawInviteToken));
+    expect(revealInvitationSecret(storedInvite.invite_token)).toBe(rawInviteToken);
     expect(room.code).toMatch(/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/);
     expect(room.inviteUrl).toContain('/join/');
     expectStatus(() => joinQuickRoom(db, host, { code: room.code }, 'Host again'), 400);

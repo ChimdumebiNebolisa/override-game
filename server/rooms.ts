@@ -4,6 +4,7 @@ import { createInitialState } from '../src/shared/rules';
 import { HttpError, type Session } from './http';
 import { publicOrigin } from './config';
 import { initializeHumanPresence } from './matches';
+import { invitationTokenHash, protectInvitationSecret, revealInvitationSecret } from './invitation-secrets';
 
 const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const ROOM_LIFETIME = 30 * 60_000;
@@ -13,6 +14,7 @@ export interface RoomRow {
   creation_key: string | null;
   code: string;
   invite_token: string;
+  invite_token_hash: string;
   mode: 'quick' | 'ranked';
   host_key: string;
   guest_key: string | null;
@@ -33,7 +35,7 @@ function roomView(row: RoomRow) {
   return {
     id: row.id,
     code: row.code,
-    inviteUrl: `${publicOrigin}/join/${row.invite_token}`,
+    inviteUrl: `${publicOrigin}/join/${revealInvitationSecret(row.invite_token)}`,
     status: row.status,
     hostDisplayName: row.host_name,
     guestDisplayName: row.guest_name ?? undefined,
@@ -74,15 +76,17 @@ export function createQuickRoom(db: Database.Database, session: Session, name: s
       .get(session.id, now) as { count: number };
     if (count.count >= 3) throw new HttpError(429, 'Close an existing room before creating another');
     for (let attempt = 0; attempt < 5; attempt++) {
+      const rawInviteToken = randomBytes(24).toString('base64url');
       const row: RoomRow = {
-        id: randomUUID(), creation_key: creationKey ?? null, code: roomCode(), invite_token: randomBytes(24).toString('base64url'),
+        id: randomUUID(), creation_key: creationKey ?? null, code: roomCode(),
+        invite_token: protectInvitationSecret(rawInviteToken), invite_token_hash: invitationTokenHash(rawInviteToken),
         mode: 'quick', host_key: session.id, guest_key: null, host_name: name, guest_name: null,
         status: 'open', match_id: null, created_at: now, expires_at: now + ROOM_LIFETIME,
       };
       try {
         db.prepare(`INSERT INTO rooms
-          (id, creation_key, code, invite_token, mode, host_key, guest_key, host_name, guest_name, status, match_id, created_at, expires_at)
-          VALUES (@id, @creation_key, @code, @invite_token, @mode, @host_key, @guest_key, @host_name, @guest_name, @status, @match_id, @created_at, @expires_at)`)
+          (id, creation_key, code, invite_token, invite_token_hash, mode, host_key, guest_key, host_name, guest_name, status, match_id, created_at, expires_at)
+          VALUES (@id, @creation_key, @code, @invite_token, @invite_token_hash, @mode, @host_key, @guest_key, @host_name, @guest_name, @status, @match_id, @created_at, @expires_at)`)
           .run(row);
         return roomView(row);
       } catch (error) {
@@ -117,7 +121,7 @@ function checkJoinRate(db: Database.Database, session: Session, now: number): vo
 
 export function joinQuickRoom(db: Database.Database, session: Session, lookup: { code?: string; token?: string }, name: string) {
   const previouslyJoined = (lookup.token
-    ? db.prepare('SELECT * FROM rooms WHERE invite_token = ?').get(lookup.token)
+    ? db.prepare('SELECT * FROM rooms WHERE invite_token_hash = ?').get(invitationTokenHash(lookup.token))
     : db.prepare('SELECT * FROM rooms WHERE code = ?').get(lookup.code?.toUpperCase())) as RoomRow | undefined;
   if (previouslyJoined?.mode === 'quick' && previouslyJoined.guest_key === session.id &&
       previouslyJoined.expires_at > Date.now()) return roomView(previouslyJoined);
@@ -127,7 +131,7 @@ export function joinQuickRoom(db: Database.Database, session: Session, lookup: {
   return db.transaction(() => {
     const now = Date.now();
     const row = (lookup.token
-      ? db.prepare('SELECT * FROM rooms WHERE invite_token = ?').get(lookup.token)
+      ? db.prepare('SELECT * FROM rooms WHERE invite_token_hash = ?').get(invitationTokenHash(lookup.token))
       : db.prepare('SELECT * FROM rooms WHERE code = ?').get(lookup.code?.toUpperCase())) as RoomRow | undefined;
     if (!row || row.mode !== 'quick' || row.expires_at <= now) throw new HttpError(404, 'Room not found or expired');
     if (row.host_key === session.id) throw new HttpError(400, 'You already host this room');

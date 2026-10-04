@@ -71,6 +71,7 @@ export interface RankedInvitation {
   id: string;
   token: string;
   inviteUrl: string;
+  code?: string | null;
   kind: "challenge" | "rematch";
   expiresAt: number;
 }
@@ -361,6 +362,13 @@ export const api = {
     return request<{ shell: RankedShell }>(`/api/ranked/${kind === "challenge" ? "challenges" : "rematches"}/accept`, {
       method: "POST",
       body: JSON.stringify({ token }),
+    });
+  },
+
+  acceptRankedChallengeCode(code: string) {
+    return request<{ shell: RankedShell }>("/api/ranked/challenges/accept-code", {
+      method: "POST",
+      body: JSON.stringify({ code }),
     });
   },
 

@@ -10,7 +10,7 @@ import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
 import { acknowledgeRankedReady, clearRankedReadyPresenceOnStartup, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, markRankedReadyPresence, publicRankedSettlement, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
 import { leaderboard, profileView } from './progression';
-import { acceptRankedChallenge, acceptRankedRematch, createRankedChallenge, expireRankedInvitations, pendingRankedChallenge, pendingRankedRematch, requestRankedRematch } from './invitations';
+import { acceptRankedChallenge, acceptRankedChallengeByCode, acceptRankedRematch, createRankedChallenge, expireRankedInvitations, pendingRankedChallenge, pendingRankedRematch, requestRankedRematch } from './invitations';
 import { acceptQuickRematch, expireQuickRematches, pendingQuickRematch, requestQuickRematch } from './quick-rematch';
 import { recordClientTelemetry, recordTelemetryEvent } from './metrics';
 import { pruneExpiredGuestData } from './maintenance';
@@ -207,6 +207,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const body = await readJson(req);
       if (typeof body.token !== 'string') throw new HttpError(400, 'Challenge token required');
       return json(res, 200, { shell: acceptRankedChallenge(db, body.token, session.uid) });
+    }
+    if (path === '/api/ranked/challenges/accept-code' && method === 'POST') {
+      const session = requireSession(req, res, db);
+      if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
+      const body = await readJson(req);
+      if (typeof body.code !== 'string') throw new HttpError(400, 'Challenge code required');
+      return json(res, 200, { shell: acceptRankedChallengeByCode(db, body.code, session.uid) });
     }
     if (path === '/api/ranked/rematches/accept' && method === 'POST') {
       const session = requireSession(req, res, db);

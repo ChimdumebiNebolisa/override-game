@@ -917,6 +917,11 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [inviteUrl, setInviteUrl] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [challengeCode, setChallengeCode] = useState("");
+  const [inviteDismissed, setInviteDismissed] = useState(false);
+  const [inviteFailed, setInviteFailed] = useState(false);
+  const [inviteAttempt, setInviteAttempt] = useState(0);
   const [arenaConnected, setArenaConnected] = useState(false);
   const googleButton = useRef<HTMLDivElement>(null);
   const acceptingInvite = useRef(false);
@@ -952,7 +957,11 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
       setClientId(config.googleClientId);
       if (session.signedIn && session.profile?.handle) {
         if (!inviteIntent) void api.getCurrentRankedChallenge()
-          .then(({ invitation }) => active && setInviteUrl(invitation?.inviteUrl ?? ""))
+          .then(({ invitation }) => {
+            if (!active) return;
+            setInviteUrl(invitation?.inviteUrl ?? "");
+            setInviteCode(invitation?.code ?? "");
+          })
           .catch(() => undefined);
         void refreshQueue();
       }
@@ -1031,17 +1040,33 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
   }, [clientId, signedIn]);
 
   useEffect(() => {
-    if (!profile?.handle || !inviteIntent || acceptingInvite.current || queue) return;
+    if (!profile?.handle || !inviteIntent || inviteDismissed || acceptingInvite.current || queue) return;
     acceptingInvite.current = true;
+    setInviteFailed(false);
     setBusy(true);
     api.acceptRankedInvite(inviteIntent.kind, inviteIntent.token).then(({ shell }) => {
       setQueue({ state: "readying", matchId: shell.matchId, competitiveMultiplier: shell.competitiveMultiplier, readyDeadline: shell.readyDeadline });
       setError("");
     }).catch((reason) => {
       setError(reason instanceof Error ? reason.message : "This Ranked invitation could not be opened.");
+      setInviteFailed(true);
       acceptingInvite.current = false;
     }).finally(() => setBusy(false));
-  }, [profile?.handle, inviteIntent?.kind, inviteIntent?.token, queue]);
+  }, [profile?.handle, inviteIntent?.kind, inviteIntent?.token, queue, inviteDismissed, inviteAttempt]);
+
+  const dismissInvite = () => {
+    acceptingInvite.current = false;
+    setInviteDismissed(true);
+    setError("");
+    window.history.replaceState(null, "", "/");
+  };
+
+  const retryInvite = () => {
+    acceptingInvite.current = false;
+    setInviteFailed(false);
+    setError("");
+    setInviteAttempt((attempt) => attempt + 1);
+  };
 
   const claim = async () => {
     setBusy(true); setError("");
@@ -1064,8 +1089,24 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
   };
   const challenge = async () => {
     setBusy(true); setError("");
-    try { setInviteUrl((await api.createRankedChallenge()).invitation.inviteUrl); void api.trackEvent("opponent_selected", "ranked-friend").catch(() => undefined); }
+    try {
+      const invitation = (await api.createRankedChallenge()).invitation;
+      setInviteUrl(invitation.inviteUrl);
+      setInviteCode(invitation.code ?? "");
+      void api.trackEvent("opponent_selected", "ranked-friend").catch(() => undefined);
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : "The challenge could not be created."); }
+    finally { setBusy(false); }
+  };
+  const acceptChallengeCode = async () => {
+    setBusy(true); setError("");
+    try {
+      const { shell } = await api.acceptRankedChallengeCode(challengeCode.trim());
+      setChallengeCode("");
+      setInviteUrl("");
+      setInviteCode("");
+      setQueue({ state: "readying", matchId: shell.matchId, competitiveMultiplier: shell.competitiveMultiplier, readyDeadline: shell.readyDeadline });
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "That challenge code could not be opened."); }
     finally { setBusy(false); }
   };
 
@@ -1077,11 +1118,11 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
       {!signedIn && clientId && <div className="google-slot" ref={googleButton} aria-label="Sign in with Google" />}
       {!signedIn && !clientId && <button className="google-button" disabled><span>G</span> Google sign-in is not configured</button>}
       {signedIn && !profile?.handle && <section className="room-form ranked-setup"><label>Choose a public handle<input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><button className="primary-cta full" disabled={busy || !/^[A-Za-z0-9_]{3,16}$/.test(handle)} onClick={claim}>Claim handle <span>→</span></button></section>}
-      {profile?.handle && !queue && !inviteIntent && <section className="ranked-console"><p>Signed in as <strong>{profile.handle}</strong></p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Find opponent <span>→</span></button><button className="secondary-cta full challenge-button" disabled={busy} onClick={challenge}>Challenge friend</button>{inviteUrl && <div className="invite-output"><span>Waiting for friend to accept</span><button onClick={() => navigator.clipboard.writeText(inviteUrl)}>Copy invite link</button></div>}</section>}
-      {profile?.handle && inviteIntent && !queue && <section className="ranked-console"><div className="queue-pulse" /><strong>Opening {inviteIntent.kind}…</strong><p>Your destination was preserved through sign-in.</p></section>}
+      {profile?.handle && !queue && (!inviteIntent || inviteDismissed) && <section className="ranked-console"><p>Signed in as <strong>{profile.handle}</strong></p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Find opponent <span>→</span></button><button className="secondary-cta full challenge-button" disabled={busy} onClick={challenge}>Challenge friend</button>{inviteUrl && <div className="invite-output"><span>Waiting for friend to accept</span>{inviteCode && <p>Challenge code <strong>{inviteCode}</strong></p>}<div className="invite-actions">{inviteCode && <button onClick={() => navigator.clipboard.writeText(inviteCode)}>Copy code</button>}<button onClick={() => navigator.clipboard.writeText(inviteUrl)}>Copy invite link</button></div></div>}<form className="ranked-code-form" onSubmit={(event) => { event.preventDefault(); void acceptChallengeCode(); }}><label>Join a Ranked challenge<input value={challengeCode} onChange={(event) => setChallengeCode(event.target.value.toUpperCase())} placeholder="10-character code" maxLength={12} autoCapitalize="characters" /></label><button className="secondary-cta full" disabled={busy || !challengeCode.trim()}>Join challenge</button></form></section>}
+      {profile?.handle && inviteIntent && !inviteDismissed && !queue && <section className="ranked-console">{inviteFailed ? <><strong>Invitation could not be opened.</strong><p>Check that it is still valid, or return to Ranked.</p><button className="primary-cta full" disabled={busy} onClick={retryInvite}>Retry invitation <span>→</span></button><button className="secondary-cta full" disabled={busy} onClick={dismissInvite}>Return to Ranked</button></> : <><div className="queue-pulse" /><strong>Opening {inviteIntent.kind}…</strong><p>Your destination was preserved through sign-in.</p></>}</section>}
       {queue?.state === "searching" && <section className="ranked-console"><div className="queue-pulse" /><strong>Finding an opponent…</strong><p>Search expands over 15 seconds.</p><button className="secondary-cta full" onClick={() => void api.leaveRankedQueue().then(() => setQueue(null))}>Cancel</button></section>}
       {queue?.state === "timed-out" && <section className="ranked-console"><strong>No opponent found this time.</strong><p>Search timed out after 15 seconds.</p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Try again <span>→</span></button></section>}
-      {queue?.state === "ready-expired" && <section className="ranked-console"><strong>Ready window expired.</strong><p>Both players need to confirm within 15 seconds. This match did not affect ratings.</p><button className="secondary-cta full" onClick={() => setQueue(null)}>Return to Ranked</button></section>}
+      {queue?.state === "ready-expired" && <section className="ranked-console"><strong>Ready window expired.</strong><p>Both players need to confirm within 15 seconds. This match did not affect ratings.</p><button className="secondary-cta full" onClick={() => { if (inviteIntent) dismissInvite(); setQueue(null); }}>Return to Ranked</button></section>}
       {queue?.state === "readying" && <section className="ranked-console"><p className="eyebrow">Opponent found</p><strong>{queue.competitiveMultiplier === 1 ? "Full competitive credit" : `${Math.round((queue.competitiveMultiplier ?? 0) * 100)}% RP credit`}</strong><p>{creditExplanation(queue.competitiveMultiplier ?? 0)}</p><p>{arenaConnected ? "Opponent identity appears after both players commit." : "Connecting to the arena…"}</p><button className="primary-cta full" disabled={busy || !arenaConnected} onClick={ready}>Ready <span>→</span></button></section>}
       {queue?.state === "cooldown" && <section className="ranked-console"><strong>Ranked cooldown</strong><p>Matchmaking is temporarily unavailable after repeated disconnect incidents.</p></section>}
       {error && <p className="form-error" role="alert">{error}</p>}

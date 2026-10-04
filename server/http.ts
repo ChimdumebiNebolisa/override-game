@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type Database from 'better-sqlite3';
 import { publicOrigin } from './config.js';
+import { sessionTokenId } from './invitation-secrets.js';
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -21,6 +22,7 @@ export function applySecurityHeaders(res: Pick<ServerResponse, 'setHeader'>): vo
   res.setHeader('x-frame-options', 'DENY');
   res.setHeader('referrer-policy', 'no-referrer');
   res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+  if (process.env.NODE_ENV === 'production') res.setHeader('strict-transport-security', 'max-age=63072000; includeSubDomains');
   res.setHeader('content-security-policy', [
     "default-src 'self'",
     "base-uri 'self'",
@@ -102,8 +104,9 @@ function cookieValue(req: IncomingMessage, name: string): string | null {
 }
 
 export function existingSession(req: IncomingMessage, db: Database.Database): Session | null {
-  const id = cookieValue(req, 'override_session');
-  if (!id || !/^[a-f0-9]{64}$/.test(id)) return null;
+  const token = cookieValue(req, 'override_session');
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
+  const id = sessionTokenId(token);
   const row = db.prepare('SELECT id, uid, created_at, expires_at FROM sessions WHERE id = ? AND expires_at > ?')
     .get(id, Date.now()) as { id: string; uid: string | null; created_at: number; expires_at: number } | undefined;
   return row ? { id: row.id, uid: row.uid, createdAt: row.created_at, expiresAt: row.expires_at } : null;
@@ -114,10 +117,11 @@ export function requireSession(req: IncomingMessage, res: ServerResponse, db: Da
   if (found) return found;
   const now = Date.now();
   limitNewSession(req, now);
-  const session: Session = { id: randomBytes(32).toString('hex'), uid: null, createdAt: now, expiresAt: now + 30 * 24 * 60 * 60_000 };
+  const token = randomBytes(32).toString('hex');
+  const session: Session = { id: sessionTokenId(token), uid: null, createdAt: now, expiresAt: now + 30 * 24 * 60 * 60_000 };
   db.prepare('INSERT INTO sessions (id, uid, created_at, expires_at) VALUES (?, NULL, ?, ?)')
     .run(session.id, now, session.expiresAt);
-  res.setHeader('set-cookie', `override_session=${session.id}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+  res.setHeader('set-cookie', `override_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
   return session;
 }
 

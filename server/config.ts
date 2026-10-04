@@ -9,3 +9,9 @@ if (process.env.NODE_ENV === 'production' && origin.protocol !== 'https:') {
   throw new Error('PUBLIC_ORIGIN must use HTTPS in production');
 }
 export const publicOrigin = origin.origin;
+if (process.env.NODE_ENV === 'production' && !process.env.INVITATION_ENCRYPTION_KEY) {
+  throw new Error('INVITATION_ENCRYPTION_KEY is required in production');
+}
+if (process.env.NODE_ENV === 'production' && !process.env.GOOGLE_CLIENT_ID) {
+  throw new Error('GOOGLE_CLIENT_ID is required in production');
+}

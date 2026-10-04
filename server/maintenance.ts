@@ -8,6 +8,7 @@ export function pruneExpiredGuestData(db: Database.Database, now = Date.now()) {
   return db.transaction(() => {
     const telemetry = db.prepare('DELETE FROM telemetry_events WHERE created_at < ?').run(cutoff).changes;
     db.prepare('DELETE FROM join_attempts WHERE window_started_at < ?').run(now - 5 * 60_000);
+    const challengeAttempts = db.prepare('DELETE FROM ranked_code_attempts WHERE window_started_at <= ?').run(now - 60_000).changes;
     const invitations = db.prepare('DELETE FROM quick_rematch_invitations WHERE expires_at < ?').run(cutoff).changes
       + db.prepare('DELETE FROM ranked_invitations WHERE expires_at < ?').run(cutoff).changes;
     let matches = 0;
@@ -29,6 +30,6 @@ export function pruneExpiredGuestData(db: Database.Database, now = Date.now()) {
     const sessions = db.prepare(`DELETE FROM sessions WHERE expires_at < ?
       AND NOT EXISTS (SELECT 1 FROM quick_rematch_invitations i
         WHERE i.creator_session_id = sessions.id OR i.invitee_session_id = sessions.id)`).run(now).changes;
-    return { telemetry, invitations, matches, rooms, sessions };
+    return { telemetry, invitations, challengeAttempts, matches, rooms, sessions };
   }).immediate();
 }

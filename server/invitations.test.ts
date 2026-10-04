@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
+import { Worker } from 'node:worker_threads';
 import { afterEach, test } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openDatabase } from './db.js';
+import { invitationTokenHash, revealInvitationSecret } from './invitation-secrets.js';
 import { HttpError } from './http.js';
 import { acknowledgeRankedReady, createRankedShell, markRankedReadyPresence, settleRankedMatch } from './ranked.js';
 import {
   acceptRankedChallenge,
+  acceptRankedChallengeByCode,
   acceptRankedRematch,
   createRankedChallenge,
   expireRankedInvitations,
@@ -15,6 +21,7 @@ import {
 } from './invitations.js';
 
 const databases: ReturnType<typeof openDatabase>[] = [];
+const tempDirectories: string[] = [];
 const makeDb = () => {
   const db = openDatabase(':memory:');
   databases.push(db);
@@ -27,6 +34,10 @@ const makeDb = () => {
 
 afterEach(() => {
   for (const db of databases.splice(0)) db.close();
+  for (const directory of tempDirectories.splice(0)) {
+    try { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+    catch (error) { if (!(error instanceof Error) || !('code' in error) || error.code !== 'EPERM') throw error; }
+  }
 });
 
 function row<T>(db: ReturnType<typeof openDatabase>, sql: string, ...values: unknown[]): T {
@@ -62,7 +73,16 @@ test('challenge token is high entropy, private, expiring, and redeems once into 
   const db = makeDb();
   const now = 1_000_000;
   const invite = createRankedChallenge(db, 'a', now);
+  const stored = row<{ token: string; token_hash: string; code: string; code_hash: string }>(db,
+    'SELECT token, token_hash, code, code_hash FROM ranked_invitations WHERE id = ?', invite.id);
+  assert.notEqual(stored.token, invite.token);
+  assert.equal(stored.token_hash, invitationTokenHash(invite.token));
+  assert.equal(revealInvitationSecret(stored.token), invite.token);
+  assert.notEqual(stored.code, invite.code);
+  assert.equal(stored.code_hash, invitationTokenHash(invite.code ?? ''));
+  assert.equal(revealInvitationSecret(stored.code), invite.code);
   assert.equal(invite.kind, 'challenge');
+  assert.match(invite.code ?? '', /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$/);
   assert.equal(Buffer.from(invite.token, 'base64url').length, 32);
   assert.equal(invite.expiresAt, now + 30 * 60_000);
   assert.ok(invite.inviteUrl.endsWith(`/ranked/challenge/${invite.token}`));
@@ -74,15 +94,34 @@ test('challenge token is high entropy, private, expiring, and redeems once into 
     return true;
   });
 
-  const accepted = acceptRankedChallenge(db, invite.token, 'b', now + 2);
+  const splitCode = `${invite.code?.slice(0, 5)}-${invite.code?.slice(5)}`.toLowerCase();
+  const accepted = acceptRankedChallengeByCode(db, splitCode, 'b', now + 2);
   assert.equal(pendingRankedChallenge(db, 'a', now + 3), null);
   assert.equal(accepted.competitiveMultiplier, 1);
   assert.equal(accepted.readyDeadline, now + 2 + 15_000);
   assert.deepEqual(acceptRankedChallenge(db, invite.token, 'b', now + 3), accepted);
+  assert.deepEqual(acceptRankedChallengeByCode(db, splitCode, 'b', now + 3), accepted);
   assert.throws(() => acceptRankedChallenge(db, invite.token, 'a', now + 3), (error) => {
     assertHttpError(error, 410);
     return true;
   });
+});
+
+test('challenge code attempts are rate limited and the window resets', () => {
+  const db = makeDb();
+  const now = 1_500_000;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    assert.throws(() => acceptRankedChallengeByCode(db, 'AAAAAAAAAA', 'b', now), (error) => {
+      assertHttpError(error, 404);
+      return true;
+    });
+  }
+  assert.throws(() => acceptRankedChallengeByCode(db, 'AAAAAAAAAA', 'b', now + 1), (error) => {
+    assertHttpError(error, 429);
+    return true;
+  });
+  const invite = createRankedChallenge(db, 'a', now + 61_000);
+  assert.doesNotThrow(() => acceptRankedChallengeByCode(db, invite.code ?? '', 'b', now + 61_001));
 });
 
 test('challenge expiry is enforced and cleanup marks expired links', () => {
@@ -93,6 +132,79 @@ test('challenge expiry is enforced and cleanup marks expired links', () => {
     assertHttpError(error, 410);
     return true;
   });
+  assert.throws(() => acceptRankedChallengeByCode(db, invite.code ?? '', 'b', invite.expiresAt), (error) => {
+    assertHttpError(error, 410);
+    return true;
+  });
+});
+
+test('link and code competitors can create only one Ranked shell', () => {
+  const db = makeDb();
+  const now = 2_500_000;
+  db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)')
+    .run('c', 'Charlie', 'charlie', now);
+  const invite = createRankedChallenge(db, 'a', now);
+  const accepted = acceptRankedChallenge(db, invite.token, 'b', now + 1);
+  assert.throws(() => acceptRankedChallengeByCode(db, invite.code ?? '', 'c', now + 2), (error) => {
+    assertHttpError(error, 410);
+    return true;
+  });
+  assert.equal(row<{ count: number }>(db, "SELECT COUNT(*) AS count FROM matches WHERE mode = 'ranked'").count, 1);
+  assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM ranked_ownership').count, 2);
+  assert.deepEqual(acceptRankedChallenge(db, invite.token, 'b', now + 3), accepted);
+});
+
+test('concurrent link and code redemption across workers creates one shell', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'override-invite-race-'));
+  tempDirectories.push(directory);
+  const path = join(directory, 'race.sqlite');
+  try {
+    const db = openDatabase(path);
+    const now = 2_750_000;
+    db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)')
+      .run('a', 'Alpha', 'alpha', now);
+    db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)')
+      .run('b', 'Bravo', 'bravo', now);
+    db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)')
+      .run('c', 'Charlie', 'charlie', now);
+    const invite = createRankedChallenge(db, 'a', now);
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    db.pragma('journal_mode = DELETE');
+    db.close();
+
+    const race = (method: 'token' | 'code', value: string, uid: string) => new Promise<{ ok: boolean; matchId?: string; status?: number | null }>((resolve, reject) => {
+      const worker = new Worker(new URL('./invitation-race.worker.ts', import.meta.url), {
+        workerData: { path, method, value, uid, now: now + 1 },
+        execArgv: ['--import', 'tsx'],
+      });
+      let result: { ok: boolean; matchId?: string; status?: number | null } | null = null;
+      let exited = false;
+      const finish = () => { if (exited && result) resolve(result); };
+      worker.once('message', (message) => { result = message; finish(); });
+      worker.once('error', reject);
+      worker.once('exit', (code) => {
+        if (code !== 0) reject(new Error(`Race worker exited with ${code}`));
+        else { exited = true; finish(); }
+      });
+    });
+    const results = await Promise.all([
+      race('token', invite.token, 'b'),
+      race('code', invite.code ?? '', 'c'),
+    ]);
+    const check = openDatabase(path);
+    try {
+      assert.equal(results.filter((result) => result.ok).length, 1);
+      assert.equal(results.filter((result) => result.status === 410).length, 1);
+      assert.equal(row<{ count: number }>(check, "SELECT COUNT(*) AS count FROM matches WHERE mode = 'ranked'").count, 1);
+      assert.equal(row<{ count: number }>(check, 'SELECT COUNT(*) AS count FROM ranked_ownership').count, 2);
+    } finally {
+      check.pragma('wal_checkpoint(TRUNCATE)');
+      check.pragma('journal_mode = DELETE');
+      check.close();
+    }
+  } finally {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
 });
 
 test('rematch invitation expires after 30 seconds and can be accepted only by the opponent', () => {

@@ -22,6 +22,8 @@ services:
           envVarKey: RENDER_EXTERNAL_URL
       - key: GOOGLE_CLIENT_ID
         sync: false
+      - key: INVITATION_ENCRYPTION_KEY
+        generateValue: true
     disk:
       name: override-game-data
       mountPath: /data

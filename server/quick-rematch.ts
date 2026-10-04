@@ -4,6 +4,7 @@ import { createInitialState } from '../src/shared/rules.js';
 import { HttpError } from './http.js';
 import { publicOrigin } from './config.js';
 import { initializeHumanPresence } from './matches.js';
+import { invitationTokenHash, protectInvitationSecret, revealInvitationSecret } from './invitation-secrets.js';
 
 const OFFER_LIFETIME_MS = 30_000;
 const DECISION_DURATION_MS = 5_000;
@@ -33,6 +34,7 @@ interface Room {
 interface OfferRow {
   id: string;
   token: string;
+  token_hash: string;
   parent_match_id: string;
   room_id: string;
   creator_session_id: string;
@@ -97,8 +99,8 @@ function view(row: OfferRow): QuickRematchOffer {
   return {
     id: row.id,
     parentMatchId: row.parent_match_id,
-    token: row.token,
-    inviteUrl: `${publicOrigin}/quick/rematch/${row.token}`,
+    token: revealInvitationSecret(row.token),
+    inviteUrl: `${publicOrigin}/quick/rematch/${revealInvitationSecret(row.token)}`,
     expiresAt: row.expires_at,
     status: row.status === 'accepted' ? 'accepted' : 'open',
     newMatchId: row.new_match_id,
@@ -106,7 +108,7 @@ function view(row: OfferRow): QuickRematchOffer {
 }
 
 function offerForToken(db: Database.Database, token: string): OfferRow | undefined {
-  return db.prepare('SELECT * FROM quick_rematch_invitations WHERE token = ?').get(token) as OfferRow | undefined;
+  return db.prepare('SELECT * FROM quick_rematch_invitations WHERE token_hash = ?').get(invitationTokenHash(token)) as OfferRow | undefined;
 }
 
 function acceptedMatch(db: Database.Database, offer: OfferRow): AcceptedQuickRematch {
@@ -131,16 +133,17 @@ export function requestQuickRematch(db: Database.Database, matchId: string, sess
       WHERE parent_match_id = ? AND status = 'open' AND expires_at > ?`).get(matchId, now) as OfferRow | undefined;
     if (pending) return view(pending);
 
+    const rawToken = randomBytes(32).toString('base64url');
     const row: OfferRow = {
-      id: randomUUID(), token: randomBytes(32).toString('base64url'), parent_match_id: match.id,
+      id: randomUUID(), token: protectInvitationSecret(rawToken), token_hash: invitationTokenHash(rawToken), parent_match_id: match.id,
       room_id: room.id, creator_session_id: sessionId, invitee_session_id: inviteeSessionId,
       status: 'open', new_match_id: null, created_at: now, expires_at: now + OFFER_LIFETIME_MS,
       accepted_at: null,
     };
     db.prepare(`INSERT INTO quick_rematch_invitations
-      (id, token, parent_match_id, room_id, creator_session_id, invitee_session_id, status, new_match_id,
+      (id, token, token_hash, parent_match_id, room_id, creator_session_id, invitee_session_id, status, new_match_id,
        created_at, expires_at, accepted_at)
-      VALUES (@id, @token, @parent_match_id, @room_id, @creator_session_id, @invitee_session_id, @status,
+      VALUES (@id, @token, @token_hash, @parent_match_id, @room_id, @creator_session_id, @invitee_session_id, @status,
        @new_match_id, @created_at, @expires_at, @accepted_at)`).run(row);
     return view(row);
   }).immediate();

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'vitest';
 import { openDatabase } from './db.js';
+import { invitationTokenHash, revealInvitationSecret } from './invitation-secrets.js';
 import { HttpError } from './http.js';
 import { createInitialState } from '../src/shared/rules.js';
 import {
@@ -54,6 +55,10 @@ test('request offer is participant-only, private, idempotent, and expires in 30 
   const now = 1_000_000;
   const match = completedQuickRoom(db, now);
   const offer = requestQuickRematch(db, match.matchId, match.sessionA, now);
+  const stored = db.prepare('SELECT token, token_hash FROM quick_rematch_invitations WHERE id = ?').get(offer.id) as { token: string; token_hash: string };
+  assert.notEqual(stored.token, offer.token);
+  assert.equal(stored.token_hash, invitationTokenHash(offer.token));
+  assert.equal(revealInvitationSecret(stored.token), offer.token);
   assert.equal(Buffer.from(offer.token, 'base64url').length, 32);
   assert.equal(offer.expiresAt, now + quickRematchOfferLifetimeMs());
   assert.ok(offer.inviteUrl.endsWith(`/quick/rematch/${offer.token}`));

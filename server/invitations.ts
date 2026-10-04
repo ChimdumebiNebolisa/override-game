@@ -4,6 +4,7 @@ import type { RankedShell } from './ranked.js';
 import { createRankedShell } from './ranked.js';
 import { HttpError } from './http.js';
 import { publicOrigin } from './config.js';
+import { invitationTokenHash, protectInvitationSecret, revealInvitationSecret } from './invitation-secrets.js';
 
 const CHALLENGE_LIFETIME_MS = 30 * 60 * 1000;
 const REMATCH_LIFETIME_MS = 30 * 1000;
@@ -14,6 +15,9 @@ type InvitationStatus = 'open' | 'accepted' | 'expired' | 'cancelled';
 interface InvitationRow {
   id: string;
   token: string;
+  code: string | null;
+  code_hash: string | null;
+  token_hash: string;
   kind: InvitationKind;
   creator_uid: string;
   invitee_uid: string | null;
@@ -38,6 +42,7 @@ interface ParentMatchRow {
 export interface CreatedRankedInvitation {
   id: string;
   token: string;
+  code: string | null;
   inviteUrl: string;
   kind: InvitationKind;
   expiresAt: number;
@@ -54,19 +59,29 @@ function token(): string {
   return randomBytes(32).toString('base64url');
 }
 
+function challengeCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return [...randomBytes(10)].map((byte) => alphabet[byte & 31]).join('');
+}
+
 function invitationView(row: InvitationRow): CreatedRankedInvitation {
   const path = row.kind === 'challenge' ? 'challenge' : 'rematch';
   return {
     id: row.id,
-    token: row.token,
-    inviteUrl: `${publicOrigin}/ranked/${path}/${row.token}`,
+    token: revealInvitationSecret(row.token),
+    code: row.code ? revealInvitationSecret(row.code) : null,
+    inviteUrl: `${publicOrigin}/ranked/${path}/${revealInvitationSecret(row.token)}`,
     kind: row.kind,
     expiresAt: row.expires_at,
   };
 }
 
 function getInvitationByToken(db: Database.Database, value: string): InvitationRow | undefined {
-  return db.prepare('SELECT * FROM ranked_invitations WHERE token = ?').get(value) as InvitationRow | undefined;
+  return db.prepare('SELECT * FROM ranked_invitations WHERE token_hash = ?').get(invitationTokenHash(value)) as InvitationRow | undefined;
+}
+
+function getInvitationByCode(db: Database.Database, value: string): InvitationRow | undefined {
+  return db.prepare("SELECT * FROM ranked_invitations WHERE code_hash = ? AND kind = 'challenge'").get(invitationTokenHash(value)) as InvitationRow | undefined;
 }
 
 function assertHandle(db: Database.Database, uid: string): void {
@@ -104,16 +119,27 @@ export function createRankedChallenge(db: Database.Database, creatorUid: string,
     assertNoRankedOwnership(db, [creatorUid]);
     const existing = pendingRankedChallenge(db, creatorUid, now);
     if (existing) return existing;
-    const row: InvitationRow = {
-      id: randomUUID(), token: token(), kind: 'challenge', creator_uid: creatorUid, invitee_uid: null,
-      parent_match_id: null, status: 'open', match_id: null, created_at: now,
-      expires_at: now + CHALLENGE_LIFETIME_MS, accepted_at: null,
-    };
-    db.prepare(`INSERT INTO ranked_invitations
-      (id, token, kind, creator_uid, invitee_uid, parent_match_id, status, match_id, created_at, expires_at, accepted_at)
-      VALUES (@id, @token, @kind, @creator_uid, @invitee_uid, @parent_match_id, @status, @match_id, @created_at, @expires_at, @accepted_at)`)
-      .run(row);
-    return invitationView(row);
+    const insert = db.prepare(`INSERT INTO ranked_invitations
+      (id, token, token_hash, code, code_hash, kind, creator_uid, invitee_uid, parent_match_id, status, match_id, created_at, expires_at, accepted_at)
+      VALUES (@id, @token, @token_hash, @code, @code_hash, @kind, @creator_uid, @invitee_uid, @parent_match_id, @status, @match_id, @created_at, @expires_at, @accepted_at)`);
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const rawToken = token();
+      const rawCode = challengeCode();
+      const row: InvitationRow = {
+        id: randomUUID(), token: protectInvitationSecret(rawToken), token_hash: invitationTokenHash(rawToken),
+        code: protectInvitationSecret(rawCode), code_hash: invitationTokenHash(rawCode),
+        kind: 'challenge', creator_uid: creatorUid, invitee_uid: null,
+        parent_match_id: null, status: 'open', match_id: null, created_at: now,
+        expires_at: now + CHALLENGE_LIFETIME_MS, accepted_at: null,
+      };
+      try {
+        insert.run(row);
+        return invitationView(row);
+      } catch (error) {
+        if (!String(error).includes('UNIQUE constraint')) throw error;
+      }
+    }
+    throw new HttpError(503, 'Could not create a Ranked challenge');
   }).immediate();
 }
 
@@ -144,6 +170,48 @@ export function acceptRankedChallenge(
   return db.transaction(() => {
     const invite = getInvitationByToken(db, inviteToken);
     if (!invite || invite.kind !== 'challenge') throw new HttpError(404, 'Ranked challenge not found');
+    return acceptChallengeRow(db, invite, inviteeUid, now);
+  }).immediate();
+}
+
+/** Redeem a short human-readable code through the same one-use challenge transaction as a link. */
+export function acceptRankedChallengeByCode(
+  db: Database.Database,
+  rawCode: string,
+  inviteeUid: string,
+  now = Date.now(),
+): AcceptedRankedInvitation {
+  const code = rawCode.toUpperCase().replace(/[ -]/g, '');
+  if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$/.test(code)) throw new HttpError(400, 'Enter a valid challenge code');
+  const allowed = db.transaction(() => {
+    const attempts = db.prepare('SELECT window_started_at, attempts FROM ranked_code_attempts WHERE uid = ?')
+      .get(inviteeUid) as { window_started_at: number; attempts: number } | undefined;
+    if (attempts && attempts.window_started_at > now - 60_000 && attempts.attempts >= 10) {
+      return false;
+    }
+    if (!attempts || attempts.window_started_at <= now - 60_000) {
+      db.prepare(`INSERT INTO ranked_code_attempts (uid, window_started_at, attempts) VALUES (?, ?, 1)
+        ON CONFLICT(uid) DO UPDATE SET window_started_at = excluded.window_started_at, attempts = 1`)
+        .run(inviteeUid, now);
+    } else {
+      db.prepare('UPDATE ranked_code_attempts SET attempts = attempts + 1 WHERE uid = ?').run(inviteeUid);
+    }
+    return true;
+  }).immediate();
+  if (!allowed) throw new HttpError(429, 'Too many challenge code attempts. Try again in a minute');
+  return db.transaction(() => {
+    const invite = getInvitationByCode(db, code);
+    if (!invite) throw new HttpError(404, 'Ranked challenge not found');
+    return acceptChallengeRow(db, invite, inviteeUid, now);
+  }).immediate();
+}
+
+function acceptChallengeRow(
+  db: Database.Database,
+  invite: InvitationRow,
+  inviteeUid: string,
+  now: number,
+): AcceptedRankedInvitation {
     if (invite.status === 'accepted' && invite.invitee_uid === inviteeUid && invite.match_id) return currentShell(db, invite.match_id);
     if (invite.status !== 'open' || invite.expires_at <= now) throw new HttpError(410, 'Ranked challenge expired or was already used');
     if (invite.creator_uid === inviteeUid) throw new HttpError(400, 'You cannot accept your own challenge');
@@ -156,7 +224,6 @@ export function acceptRankedChallenge(
       .run(inviteeUid, shell.matchId, now, invite.id, now);
     if (changed.changes !== 1) throw new HttpError(409, 'Ranked challenge was already used');
     return shellResult(shell);
-  }).immediate();
 }
 
 /** Expire unused challenge and rematch tokens; accepted shells have their own ready deadline. */
@@ -200,14 +267,16 @@ export function requestRankedRematch(
       if (existing.creator_uid === creatorUid || existing.invitee_uid === creatorUid) return invitationView(existing);
       throw new HttpError(409, 'A rematch invitation is already pending');
     }
+    const rawToken = token();
     const row: InvitationRow = {
-      id: randomUUID(), token: token(), kind: 'rematch', creator_uid: creatorUid, invitee_uid: inviteeUid,
+      id: randomUUID(), token: protectInvitationSecret(rawToken), code: null, kind: 'rematch', creator_uid: creatorUid, invitee_uid: inviteeUid,
+      token_hash: invitationTokenHash(rawToken), code_hash: null,
       parent_match_id: matchId, status: 'open', match_id: null, created_at: now,
       expires_at: now + REMATCH_LIFETIME_MS, accepted_at: null,
     };
     db.prepare(`INSERT INTO ranked_invitations
-      (id, token, kind, creator_uid, invitee_uid, parent_match_id, status, match_id, created_at, expires_at, accepted_at)
-      VALUES (@id, @token, @kind, @creator_uid, @invitee_uid, @parent_match_id, @status, @match_id, @created_at, @expires_at, @accepted_at)`)
+      (id, token, token_hash, code, code_hash, kind, creator_uid, invitee_uid, parent_match_id, status, match_id, created_at, expires_at, accepted_at)
+      VALUES (@id, @token, @token_hash, @code, @code_hash, @kind, @creator_uid, @invitee_uid, @parent_match_id, @status, @match_id, @created_at, @expires_at, @accepted_at)`)
       .run(row);
     return invitationView(row);
   }).immediate();

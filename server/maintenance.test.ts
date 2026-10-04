@@ -51,9 +51,17 @@ test('retention removes old Ranked invitation tokens without deleting match or s
     insert.run('old-challenge', 'old-challenge-token', 'challenge', null, 'expired', null, day);
     insert.run('old-accepted', 'old-accepted-token', 'rematch', 'ranked-audit', 'accepted', 'ranked-audit', day);
     insert.run('recent-challenge', 'recent-token', 'challenge', null, 'expired', null, 90 * day);
+    db.prepare('INSERT INTO ranked_code_attempts (uid, window_started_at, attempts) VALUES (?, ?, ?)')
+      .run('a', 1, 10);
+    db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, 1)')
+      .run('b', 'Bravo', 'bravo');
+    db.prepare('INSERT INTO ranked_code_attempts (uid, window_started_at, attempts) VALUES (?, ?, ?)')
+      .run('b', now - 30_000, 1);
 
     const removed = pruneExpiredGuestData(db, now);
     assert.equal(removed.invitations, 2);
+    assert.equal(removed.challengeAttempts, 1);
+    assert.deepEqual(db.prepare('SELECT uid FROM ranked_code_attempts').all(), [{ uid: 'b' }]);
     assert.deepEqual(db.prepare('SELECT id FROM ranked_invitations').all(), [{ id: 'recent-challenge' }]);
     assert.ok(db.prepare("SELECT 1 FROM matches WHERE id = 'ranked-audit'").get());
     assert.ok(db.prepare("SELECT 1 FROM rating_settlements WHERE match_id = 'ranked-audit'").get());
