@@ -10,6 +10,7 @@ The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.m
 - A synthetic two-account browser check created a Ranked challenge, showed the creator's Ready prompt when the invitee accepted, and opened the same bound game for both players. This bypassed Google only for the local fixture; it does not verify real OAuth.
 - In the production build, the same synthetic two-account flow ended by immediate resignation. Both browsers reached the correct result screens and showed complementary RP changes from one settlement. This check also exercised the race where settlement releases queue ownership before one client polls the active state.
 - Refreshing the challenge creator before invite acceptance restored the same invitation link; acceptance then showed Ready on both browsers and proceeded to a bound match.
+- The human leaderboard and Around You section were opened at 390 px and 320 px. The mobile navigation kept the Leaderboard link visible, and the document width matched the viewport without horizontal overflow.
 - A file-backed restart test leaves a terminal Ranked match unsettled, reopens the database, and verifies one settlement and released ownership. Startup also reconciles lost WebSocket presence before overdue rounds resolve.
 - `npm run report:metrics`, `npm run ops:status`, and `npm run backup:db` run against the local database. The backup command checks SQLite integrity, and a copy was opened successfully at a fresh restore path. Local metrics contain test traffic and are not playtest conclusions.
 

@@ -324,8 +324,12 @@ button:not(:disabled) { cursor: pointer; }
   .site-header { height:62px; padding:0 16px; }
   .site-header nav { gap:6px; }
   .site-header nav button { font-size:11px; }
-  .site-header nav button:nth-child(2) { display:none; }
   .brand { font-size:20px; }
+  .leaderboard-list li { grid-template-columns:42px minmax(0,1fr) 74px; grid-template-rows:auto auto; gap:2px 8px; padding:8px 0; }
+  .leaderboard-list li > b { grid-row:1 / 3; }
+  .leaderboard-list li > strong { grid-column:2; grid-row:1; font-size:14px; overflow-wrap:anywhere; }
+  .leaderboard-list li > span { grid-column:2; grid-row:2; }
+  .leaderboard-list li > em { grid-column:3; grid-row:1 / 3; }
   .home-shell { padding:42px 18px 54px; }
   .hero { gap:45px; }
   .hero h1 { font-size:clamp(54px, 18vw, 78px); }
@@ -382,6 +386,14 @@ button:not(:disabled) { cursor: pointer; }
   .rival-track > span:nth-child(n+5) { border-bottom:1px solid var(--line); }
   .rival-track > span:nth-child(n+7) { border-bottom:0; }
   .action-rules p:nth-child(odd) { border-right:0; }
+}
+
+@media (max-width: 380px) {
+  .site-header { padding:0 10px; }
+  .brand { gap:6px; font-size:16px; }
+  .site-header nav { gap:3px; }
+  .site-header nav button { font-size:9px; padding:7px 2px; }
+  .site-header .profile-button { width:32px; height:32px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
