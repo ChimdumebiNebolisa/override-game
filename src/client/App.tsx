@@ -232,6 +232,16 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
   const [showHint, setShowHint] = useState(true);
   const [deadlineAt, setDeadlineAt] = useState(initialMatch.deadline ? Date.now() + (initialMatch.deadline - initialMatch.serverNow) : null);
   const lockingRef = useRef(false);
+  const leaveButtonRef = useRef<HTMLButtonElement>(null);
+  const roundLabelRef = useRef<HTMLElement>(null);
+  const focusRoundAfterReveal = useRef(false);
+  useEffect(() => { if (reveal) setConfirmResign(false); }, [reveal]);
+  useEffect(() => {
+    if (reveal || !focusRoundAfterReveal.current) return;
+    focusRoundAfterReveal.current = false;
+    const frame = window.requestAnimationFrame(() => roundLabelRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [reveal]);
   const me = initialMatch.player;
   const rival: Player = me === "A" ? "B" : "A";
   const totals = score(match.board);
@@ -347,6 +357,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
       setMatch(snapshot.state);
       setRevision(snapshot.revision);
       setResultType(snapshot.resultType);
+      focusRoundAfterReveal.current = snapshot.status !== "finished";
       setReveal(snapshot.status === "finished" ? snapshot.lastResult : null);
       setLocked(snapshot.locked);
       setActionType("expand");
@@ -378,6 +389,11 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
     catch (reason) { setNetworkError(reason instanceof Error ? reason.message : "The match could not be resigned."); }
   };
 
+  const closeResign = () => {
+    setConfirmResign(false);
+    window.requestAnimationFrame(() => leaveButtonRef.current?.focus());
+  };
+
   const roundLabel = match.phase === "sudden-death"
     ? `Sudden Death ${Math.max(1, match.round - match.config.standardRounds)}`
     : `Round ${match.round} / ${match.config.standardRounds}`;
@@ -385,8 +401,8 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
   return (
     <main className="game-page">
       <header className="match-header">
-        <button className="icon-button" onClick={() => setConfirmResign(true)} aria-label="Leave match">×</button>
-        <div><span>{mode === "practice" ? "Practice" : mode === "ranked" ? "Ranked Duel" : `Quick Duel · ${initialMatch.roomId ? "Friend" : difficulty}`}</span><strong>{roundLabel}</strong></div>
+        <button ref={leaveButtonRef} className="icon-button" onClick={() => setConfirmResign(true)} aria-label="Leave match">×</button>
+        <div><span>{mode === "practice" ? "Practice" : mode === "ranked" ? "Ranked Duel" : `Quick Duel · ${initialMatch.roomId ? "Friend" : difficulty}`}</span><strong ref={roundLabelRef} tabIndex={-1}>{roundLabel}</strong></div>
         <div className={`timer ${timeLeft <= 2 ? "urgent" : ""}`} aria-label={`${timeLeft} seconds remaining`}><b>0{timeLeft}</b><span>SEC</span></div>
       </header>
 
@@ -445,7 +461,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
       </div>
 
       {reveal && <RevealPanel result={reveal} player={me} onContinue={() => void nextRound()} />}
-      {confirmResign && <div className="confirm-bar" role="dialog" aria-modal="true" aria-label="Resign match"><p><strong>Resign match?</strong>{mode === "ranked" ? " This counts as a loss." : " This ends the duel."}</p><div><button className="secondary-cta" onClick={() => setConfirmResign(false)}>Keep playing</button><button className="danger-button" onClick={() => void resign()}>Resign</button></div></div>}
+      {confirmResign && !reveal && <ResignDialog ranked={mode === "ranked"} onCancel={closeResign} onConfirm={() => void resign()} />}
     </main>
   );
 }
@@ -458,22 +474,21 @@ function GameBoard({ board, legal, target, disabled, onTarget }: {
   onTarget: (target: number) => void;
 }) {
   return (
-    <div className="board-grid" role="grid" aria-label="5 by 5 territory grid">
-      <span className="axis corner" />
-      {["A", "B", "C", "D", "E"].map((label) => <span className="axis" key={label}>{label}</span>)}
+    <div className="board-grid" role="group" aria-label="5 by 5 territory grid">
+      <span className="axis corner" aria-hidden="true" />
+      {["A", "B", "C", "D", "E"].map((label) => <span className="axis" aria-hidden="true" key={label}>{label}</span>)}
       {board.map((cell, index) => {
         const row = Math.floor(index / 5);
         const isLegal = legal.includes(index);
         return (
           <span className="cell-slot" key={index}>
-            {index % 5 === 0 && <span className="axis row-axis">{row + 1}</span>}
+            {index % 5 === 0 && <span className="axis row-axis" aria-hidden="true">{row + 1}</span>}
             <button
               className={`board-cell owner-${cell} ${isLegal ? "legal" : ""} ${target === index ? "targeted" : ""}`}
               onClick={() => isLegal && onTarget(index)}
               disabled={disabled || !isLegal}
               aria-label={`${coordinate(index)}, ${cell === "neutral" ? "neutral" : `owned by player ${cell}`}${isLegal ? ", legal target" : ""}`}
               aria-pressed={target === index}
-              role="gridcell"
             >
               {cell === "A" ? <span>●</span> : cell === "B" ? <span>◆</span> : <span className="node-dot" />}
             </button>
@@ -484,11 +499,34 @@ function GameBoard({ board, legal, target, disabled, onTarget }: {
   );
 }
 
+function ResignDialog({ ranked, onCancel, onConfirm }: { ranked: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
+  return (
+    <dialog ref={dialogRef} className="confirm-bar" aria-labelledby="resign-title" onCancel={(event) => { event.preventDefault(); onCancel(); }}>
+      <p><strong id="resign-title">Resign match?</strong>{ranked ? " This counts as a loss." : " This ends the duel."}</p>
+      <div><button className="secondary-cta" onClick={onCancel}>Keep playing</button><button className="danger-button" onClick={onConfirm}>Resign</button></div>
+    </dialog>
+  );
+}
+
 function RevealPanel({ result, player, onContinue }: { result: NonNullable<PublicMatch["lastResult"]>; player: Player; onContinue: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const continueRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    continueRef.current?.focus();
+    return () => dialog?.close();
+  }, []);
   const rival: Player = player === "A" ? "B" : "A";
   const rows = ([player, rival] as const).map((side) => ({ side, outcome: result.outcomes[side] }));
   return (
-    <div className="reveal-scrim" role="dialog" aria-modal="true" aria-labelledby="reveal-title">
+    <dialog ref={dialogRef} className="reveal-scrim" aria-labelledby="reveal-title" onCancel={(event) => event.preventDefault()}>
       <section className="reveal-card">
         <p className="eyebrow">Simultaneous reveal</p>
         <h2 id="reveal-title">Round resolved.</h2>
@@ -502,9 +540,9 @@ function RevealPanel({ result, player, onContinue }: { result: NonNullable<Publi
           ))}
         </div>
         <div className="reveal-score"><span>{result.score[player]}</span><small>territory</small><span>{result.score[rival]}</span></div>
-        <button className="primary-cta full" onClick={onContinue}>Next round <span>→</span></button>
+        <button ref={continueRef} className="primary-cta full" onClick={onContinue}>Next round <span>→</span></button>
       </section>
-    </div>
+    </dialog>
   );
 }
 

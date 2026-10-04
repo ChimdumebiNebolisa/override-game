@@ -23,6 +23,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--paper);
 button, input { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
+.match-header strong:focus { outline: 3px solid var(--amber); outline-offset: 3px; }
 button:not(:disabled) { cursor: pointer; }
 .app-shell { min-height: 100vh; overflow: hidden; background-image: linear-gradient(rgba(17,27,42,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(17,27,42,.035) 1px, transparent 1px); background-size: 32px 32px; }
 
@@ -190,13 +191,15 @@ button:not(:disabled) { cursor: pointer; }
 .privacy-note { color: var(--muted); font-size: 10px; line-height: 1.5; text-align:center; margin: 14px 16px; }
 .afk-warning { margin:10px 0; padding:11px 12px; border-left:4px solid var(--coral); background:#fff0ed; color:#8d291e; font-size:12px; line-height:1.45; }
 .afk-warning b { display:block; font:800 11px var(--mono); text-transform:uppercase; }
-.confirm-bar { position:fixed; inset:auto 0 0; z-index:60; padding:18px clamp(20px,5vw,70px); display:flex; justify-content:space-between; align-items:center; gap:20px; background:var(--white); border-top:4px solid var(--coral); box-shadow:0 -10px 35px rgba(17,27,42,.15); }
+.confirm-bar { position:fixed; inset:auto 0 0; width:100%; max-width:none; margin:0; padding:18px clamp(20px,5vw,70px); display:flex; justify-content:space-between; align-items:center; gap:20px; background:var(--white); border:0; border-top:4px solid var(--coral); box-shadow:0 -10px 35px rgba(17,27,42,.15); }
+dialog:not([open]) { display:none; }
+.confirm-bar::backdrop { background:rgba(7,14,24,.55); }
 .confirm-bar p { margin:0; color:var(--muted); }
 .confirm-bar p strong { color:var(--ink); margin-right:8px; }
 .confirm-bar > div { display:flex; gap:10px; }
 .danger-button { min-height:52px; padding:0 22px; border:1px solid #a42b20; background:var(--coral); color:white; font-weight:800; }
 
-.reveal-scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(7,14,24,.78); backdrop-filter: blur(6px); }
+.reveal-scrim { position: fixed; inset: 0; width:100%; height:100%; max-width:none; max-height:none; margin:0; border:0; display: grid; place-items: center; padding: 20px; background: rgba(7,14,24,.78); backdrop-filter: blur(6px); }
 .reveal-card { width: min(100%, 590px); background: var(--paper); padding: clamp(24px, 5vw, 48px); border-top: 7px solid var(--amber); box-shadow: 14px 14px 0 rgba(39,100,239,.45); }
 .reveal-card h2 { margin: 0 0 26px; font: 800 clamp(38px, 7vw, 56px)/1 var(--display); text-transform: uppercase; }
 .reveal-actions { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--ink); }
