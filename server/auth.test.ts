@@ -129,11 +129,49 @@ test('Google ID token verifies signature, issuer, audience, expiry, and subject 
   const challengeTime = Date.now();
   const nonce = issueGoogleNonce(database, sessionId, challengeTime);
   const sessionToken = await sign('google-uid', 'client-id', 'https://accounts.google.com', now + 300, nonce);
+  await assert.rejects(attachGoogleIdentity(database, sessionId,
+    await sign('google-uid', 'client-id', 'https://accounts.google.com', now + 300, 'wrong-nonce'), challengeTime, {
+      clientId: 'client-id', keySet: localJwks,
+    }), (error) => {
+    assertHttpError(error, 401);
+    return true;
+  });
+  assert.equal((database.prepare('SELECT uid FROM sessions WHERE id = ?').get(sessionId) as { uid: string | null }).uid, null);
+
+  const otherSessionId = 'y'.repeat(64);
+  database.prepare('INSERT INTO sessions (id, uid, created_at, expires_at) VALUES (?, NULL, ?, ?)')
+    .run(otherSessionId, challengeTime, challengeTime + 600_000);
+  issueGoogleNonce(database, otherSessionId, challengeTime);
+  await assert.rejects(attachGoogleIdentity(database, otherSessionId, sessionToken, challengeTime, {
+    clientId: 'client-id', keySet: localJwks,
+  }), (error) => {
+    assertHttpError(error, 401);
+    return true;
+  });
+  assert.equal((database.prepare('SELECT uid FROM sessions WHERE id = ?').get(otherSessionId) as { uid: string | null }).uid, null);
+
+  const expiredSessionId = 'z'.repeat(64);
+  database.prepare('INSERT INTO sessions (id, uid, created_at, expires_at) VALUES (?, NULL, ?, ?)')
+    .run(expiredSessionId, challengeTime, challengeTime + 600_000);
+  issueGoogleNonce(database, expiredSessionId, challengeTime);
+  await assert.rejects(attachGoogleIdentity(database, expiredSessionId, sessionToken, challengeTime + 300_000, {
+    clientId: 'client-id', keySet: localJwks,
+  }), (error) => {
+    assertHttpError(error, 401);
+    return true;
+  });
+
   assert.deepEqual(await attachGoogleIdentity(database, sessionId, sessionToken, challengeTime, {
     clientId: 'client-id', keySet: localJwks,
   }), { uid: 'google-uid' });
   assert.equal((database.prepare('SELECT uid FROM sessions WHERE id = ?').get(sessionId) as { uid: string }).uid, 'google-uid');
   assert.equal(getPublicProfile(database, 'google-uid')?.handle, null);
+  await assert.rejects(attachGoogleIdentity(database, sessionId, sessionToken, challengeTime, {
+    clientId: 'client-id', keySet: localJwks,
+  }), (error) => {
+    assertHttpError(error, 409);
+    return true;
+  });
 
   const invalidSessionId = 'x'.repeat(64);
   await assert.rejects(attachGoogleIdentity(database, invalidSessionId, token, Date.now(), {
