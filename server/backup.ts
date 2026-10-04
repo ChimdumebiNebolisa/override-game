@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { databasePath, openDatabase } from './db';
 
 const source = resolve(databasePath);
-const destination = resolve(process.argv[2] ?? `data/backups/override-${new Date().toISOString().replace(/[:.]/g, '-')}.sqlite`);
+const destination = resolve(process.argv[2] ?? join(dirname(source), 'backups',
+  `override-${new Date().toISOString().replace(/[:.]/g, '-')}.sqlite`));
 if (!existsSync(source)) throw new Error(`Database does not exist: ${source}`);
 if (source === destination || existsSync(destination)) throw new Error('Choose a new backup destination');
 mkdirSync(dirname(destination), { recursive: true });

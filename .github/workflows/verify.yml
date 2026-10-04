@@ -19,3 +19,23 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and smoke-test image
+        run: |
+          docker build -t override-game:verify .
+          docker volume create override-verify-data
+          trap 'docker rm -f override-verify >/dev/null 2>&1 || true; docker volume rm override-verify-data >/dev/null 2>&1 || true' EXIT
+          docker run -d --name override-verify -p 8787:8787 -v override-verify-data:/data -e PUBLIC_ORIGIN=https://game.example override-game:verify
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:8787/api/health >/dev/null; then
+              docker exec override-verify test -f /data/override.sqlite
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs override-verify
+          exit 1
