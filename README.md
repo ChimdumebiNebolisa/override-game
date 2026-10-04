@@ -28,10 +28,9 @@ For Ranked, set `GOOGLE_CLIENT_ID` to an OAuth web client ID authorized for the 
 ```powershell
 npm test
 npm run build
-npm start
 ```
 
-`npm start` serves the built client and API from one process on `PORT`. The default SQLite file is `data/override.sqlite`; use a persistent disk in deployment. The server stores match deadlines, hidden actions, round results, queue ownership, and rating settlements in the database so a process restart can resume due work. Run a single server process against this SQLite file.
+For staging or production, set `PUBLIC_ORIGIN` to the actual HTTPS origin, then run `npm start`. The server rejects a missing or HTTP production origin. `npm start` serves the built client and API from one process on `PORT`. The default SQLite file is `data/override.sqlite`; use a persistent disk in deployment. The server stores match deadlines, hidden actions, round results, queue ownership, and rating settlements in the database so a process restart can resume due work. Run a single server process against this SQLite file.
 
 Room and bot match creation requests include a UUID `creationKey`. The client reuses it after an uncertain response, and the server returns the original room or match.
 

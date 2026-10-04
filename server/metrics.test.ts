@@ -58,6 +58,23 @@ test('report separates bot rematches and voluntary versus timeout passes from re
   }
 });
 
+test('report separates both Ranked players ready from a binding match start', () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare(`INSERT INTO matches (id, mode, player_a_key, player_b_key, player_a_name, player_b_name,
+      state_json, status, ready_a, ready_b)
+      VALUES ('ready-shell', 'ranked', 'a', 'b', 'Alpha', 'Bravo', ?, 'readying', 1, 1)`)
+      .run(JSON.stringify(createInitialState()));
+
+    const report = metricsReport(db, 200);
+    assert.equal(report.funnel.matchShellCreated, 1);
+    assert.equal(report.funnel.bothPlayersReady, 1);
+    assert.equal(report.funnel.bindingMatchStarted, 0);
+  } finally {
+    db.close();
+  }
+});
+
 test('client telemetry rejects arbitrary names and values', () => {
   const db = openDatabase(':memory:');
   try {

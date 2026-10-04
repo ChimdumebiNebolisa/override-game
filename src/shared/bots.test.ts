@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chooseBotAction, type BotDifficulty } from "./bots";
-import { createInitialState, legalActions, validateAction, type Action, type MatchState } from "./rules";
+import { createInitialState, legalActions, resolveRound, validateAction, type Action, type MatchState } from "./rules";
 
 function state(rows: string[], energyA = 0, energyB = 0): MatchState {
   return {
@@ -57,6 +57,36 @@ describe("bot policies", () => {
     expect(chooseBotAction(facing, "A", "hard", history, 71)).toEqual(first);
     expect(facing.board).toEqual(boardBefore);
     expect(history).toEqual([{ type: "expand", target: 13 }]);
+  });
+
+  it("plays seeded complete matches legally at every difficulty", () => {
+    for (const difficulty of difficulties) {
+      const play = () => {
+        let current = createInitialState();
+        const history: Record<"A" | "B", Action[]> = { A: [], B: [] };
+        const trace: Array<{ A: Action; B: Action }> = [];
+        const maxRounds = current.config.standardRounds + current.config.suddenDeathRounds + 1;
+
+        for (let round = 0; current.status === "active" && round < maxRounds; round++) {
+          const actions = {
+            A: chooseBotAction(current, "A", difficulty, history.B.slice(-3), 2026 + round),
+            B: chooseBotAction(current, "B", difficulty, history.A.slice(-3), 2026 + round),
+          };
+          expect(validateAction(current, "A", actions.A)).toEqual({ ok: true });
+          expect(validateAction(current, "B", actions.B)).toEqual({ ok: true });
+
+          trace.push(actions);
+          const result = resolveRound(current, actions);
+          current = result.state;
+          history.A.push(result.outcomes.A.action);
+          history.B.push(result.outcomes.B.action);
+        }
+
+        expect(current.status, `${difficulty} match should terminate`).toBe("finished");
+        return trace;
+      };
+      expect(play()).toEqual(play());
+    }
   });
 
   it("passes when no territory move exists and rejects a finished state", () => {

@@ -27,6 +27,8 @@ type MatchRow = {
   bot_difficulty: 'easy' | 'normal' | 'hard' | null;
   player_b_key: string;
   status: string;
+  ready_a: number;
+  ready_b: number;
   started_at: number | null;
   ended_at: number | null;
   state_json: string;
@@ -44,7 +46,7 @@ const sideCounts = () => ({ aWins: 0, bWins: 0, draws: 0, aWinRate: null as numb
 
 /** Aggregate only persisted, revealed rounds and terminal states; no pending action is read. */
 export function metricsReport(db: Database.Database, now = Date.now()) {
-  const matches = db.prepare(`SELECT id, mode, bot_difficulty, player_b_key, status, started_at, ended_at,
+  const matches = db.prepare(`SELECT id, mode, bot_difficulty, player_b_key, status, ready_a, ready_b, started_at, ended_at,
     state_json, result_type, disconnect_a, disconnect_b FROM matches`).all() as MatchRow[];
   const byId = new Map(matches.map((match) => [match.id, match]));
   const started = matches.filter((match) => match.started_at !== null);
@@ -123,7 +125,7 @@ export function metricsReport(db: Database.Database, now = Date.now()) {
       rankedAuthenticationCompleted: eventTotal('ranked_auth_completed'),
       matchmakingStarted: eventTotal('matchmaking_started'),
       matchShellCreated: matches.filter((match) => match.mode === 'ranked').length,
-      bothPlayersReady: started.filter((match) => match.mode === 'ranked').length,
+      bothPlayersReady: matches.filter((match) => match.mode === 'ranked' && match.ready_a === 1 && match.ready_b === 1).length,
       bindingMatchStarted: started.filter((match) => match.mode === 'ranked').length,
       round3Reached: reachedRound3.size,
       matchCompleted: completed.length,
