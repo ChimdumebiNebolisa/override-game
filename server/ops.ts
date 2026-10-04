@@ -19,6 +19,13 @@ try {
     unsettledRanked: (db.prepare(`SELECT m.id FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
       WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL AND s.match_id IS NULL`)
       .all() as { id: string }[]).map((row) => row.id),
+    settlementRetryFailures: db.prepare(`SELECT f.match_id AS matchId, f.attempts,
+      f.first_failed_at AS firstFailedAt, f.last_failed_at AS lastFailedAt, m.status
+      FROM settlement_failures f JOIN matches m ON m.id = f.match_id
+      ORDER BY f.last_failed_at DESC`).all(),
+    duplicateSettlementAttempts: db.prepare(`SELECT d.match_id AS matchId, d.attempts,
+      d.first_attempt_at AS firstAttemptAt, d.last_attempt_at AS lastAttemptAt
+      FROM settlement_duplicate_attempts d ORDER BY d.last_attempt_at DESC`).all(),
     rankedVoids: (db.prepare("SELECT COUNT(*) AS count FROM matches WHERE mode = 'ranked' AND status = 'voided'")
       .get() as { count: number }).count,
   };

@@ -147,6 +147,12 @@ export function openDatabase(path = databasePath): Database.Database {
       first_failed_at INTEGER NOT NULL,
       last_failed_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS settlement_duplicate_attempts (
+      match_id TEXT PRIMARY KEY REFERENCES matches(id),
+      attempts INTEGER NOT NULL,
+      first_attempt_at INTEGER NOT NULL,
+      last_attempt_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS disconnect_incidents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       uid TEXT NOT NULL,

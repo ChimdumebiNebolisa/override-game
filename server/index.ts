@@ -93,7 +93,24 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       throw new HttpError(403, 'Request origin is not allowed');
     }
 
-    if (path === '/api/health' && method === 'GET') return json(res, 200, { ok: true });
+    if (path === '/api/health' && method === 'GET') {
+      try {
+        const cutoff = Date.now() - 5_000;
+        const stalled = db.prepare(`SELECT
+          EXISTS(SELECT 1 FROM matches WHERE status = 'decision' AND deadline < ?) OR
+          EXISTS(SELECT 1 FROM matches WHERE status = 'transition' AND transition_at < ?) OR
+          EXISTS(SELECT 1 FROM matches WHERE status = 'grace' AND grace_until < ?) OR
+          EXISTS(SELECT 1 FROM matches WHERE status = 'readying' AND ready_deadline < ?) OR
+          EXISTS(SELECT 1 FROM ranked_ownership WHERE state = 'searching' AND lease_expires_at < ?) OR
+          EXISTS(SELECT 1 FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
+            WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL
+              AND m.ended_at < ? AND s.match_id IS NULL) AS stalled`)
+          .get(cutoff, cutoff, cutoff, cutoff, cutoff, cutoff) as { stalled: number };
+        return json(res, stalled.stalled ? 503 : 200, { ok: !stalled.stalled });
+      } catch {
+        return json(res, 503, { ok: false });
+      }
+    }
     if (path === '/api/session' && method === 'GET') {
       const session = requireSession(req, res, db);
       return json(res, 200, { signedIn: Boolean(session.uid), profile: session.uid ? profileView(db, session.uid) : null });

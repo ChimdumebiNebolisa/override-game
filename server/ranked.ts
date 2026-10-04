@@ -355,7 +355,12 @@ export function settleRankedMatch(db: Database.Database, matchId: string, now = 
   return db.transaction(() => {
     const existing = db.prepare('SELECT settlement_json FROM rating_settlements WHERE match_id = ?')
       .get(matchId) as { settlement_json: string } | undefined;
-    if (existing) return JSON.parse(existing.settlement_json) as RatingSettlement;
+    if (existing) {
+      db.prepare(`INSERT INTO settlement_duplicate_attempts (match_id, attempts, first_attempt_at, last_attempt_at)
+        VALUES (?, 1, ?, ?) ON CONFLICT(match_id) DO UPDATE SET
+        attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at`).run(matchId, now, now);
+      return JSON.parse(existing.settlement_json) as RatingSettlement;
+    }
 
     const match = rankedMatch(db, matchId);
     if (!match || match.mode !== 'ranked') throw new HttpError(404, 'Ranked match not found');

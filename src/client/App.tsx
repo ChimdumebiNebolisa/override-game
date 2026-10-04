@@ -30,6 +30,7 @@ type Screen =
 type Difficulty = "Easy" | "Normal" | "Hard";
 type SoloMode = "practice" | "quick";
 type PlayMode = SoloMode | "ranked";
+const CURRENT_MATCH_KEY = "override:current-match";
 
 function rankedInviteFromPath() {
   const match = window.location.pathname.match(/^\/ranked\/(challenge|rematch)\/([^/]+)$/);
@@ -236,7 +237,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
   const [locked, setLocked] = useState(initialMatch.locked);
   const [reveal, setReveal] = useState(initialMatch.status === "decision" ? null : initialMatch.lastResult);
   const acknowledgedRoundRef = useRef(initialMatch.status === "decision" ? initialMatch.state.round : initialMatch.state.round - 1);
-  const [showFinalResult, setShowFinalResult] = useState(false);
+  const [showFinalResult, setShowFinalResult] = useState(initialMatch.status === "finished");
   const [networkError, setNetworkError] = useState("");
   const [connectionError, setConnectionError] = useState("");
   const [revision, setRevision] = useState(initialMatch.revision);
@@ -582,7 +583,13 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const restartKey = useRef<string | null>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const mine = settlement?.[player === "A" ? "playerA" : "playerB"] ?? null;
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => titleRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   useEffect(() => {
     if (!ranked || resultType === "server-error") return;
@@ -663,7 +670,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   return (
     <main className="result-page">
       <p className="eyebrow">{ranked ? "Ranked Duel" : "Unranked match"} · Complete</p>
-      <h1>{title}</h1>
+      <h1 ref={titleRef} tabIndex={-1}>{title}</h1>
       <div className="result-score"><span>{totals[player]}</span><i>—</i><span>{totals[rival]}</span></div>
       <p>{resultType === "server-error" ? "Match voided due to a connection or server error. No rating was changed." :
         resultType === "no-contest" ? "Neither player receives competitive credit for this match." :
@@ -684,7 +691,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
       {friend && quickRequested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your friend.</p></div>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="result-actions">
-        {ranked ? resultType !== "server-error" && !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" disabled={busy} onClick={restart}>Rematch <span>↻</span></button>}
+        {ranked ? resultType !== "server-error" && !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? resultType !== "server-error" && !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" disabled={busy} onClick={restart}>Rematch <span>↻</span></button>}
         {ranked && <button className="secondary-cta" onClick={onOpenRanked}>New opponent</button>}
         {ranked && <button className="secondary-cta" onClick={onOpenLeaderboard}>Leaderboard</button>}
         <button className="secondary-cta" onClick={onExit}>Home</button>
@@ -711,6 +718,7 @@ function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate:
         const response = await api.getRoom(room.id);
         if (!active) return;
         setRoom(response.room);
+        setError("");
         if (response.match) onMatch(response.match as PublicMatch);
       } catch (reason) {
         if (active) setError(reason instanceof Error ? reason.message : "The room could not be refreshed.");
@@ -746,8 +754,10 @@ function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate:
   return (
     <main className="panel-page room-page">
       <button className="back-link" onClick={() => navigate(inviteToken ? "home" : "quick")}>← {inviteToken ? "Home" : "Quick Duel"}</button>
-      <div className="panel-heading"><p className="eyebrow">Quick Duel · Friend</p><h1>{room ? "Room open." : inviteToken ? "You’re invited." : "Meet on the grid."}</h1><p>{room ? "Share the code or link. Your friend can join without an account." : inviteToken ? "Enter a display name to join this private duel. No account needed." : "Create a private room or enter a code from a friend."}</p></div>
-      {room ? (
+      <div className="panel-heading"><p className="eyebrow">Quick Duel · Friend</p><h1>{room?.status === "expired" ? "Room expired." : room ? "Room open." : inviteToken ? "You’re invited." : "Meet on the grid."}</h1><p>{room?.status === "expired" ? "This invite is no longer active." : room ? "Share the code or link. Your friend can join without an account." : inviteToken ? "Enter a display name to join this private duel. No account needed." : "Create a private room or enter a code from a friend."}</p></div>
+      {room?.status === "expired" ? (
+        <section className="room-ticket"><button className="primary-cta full" onClick={() => { if (inviteToken) navigate("quick"); else { setRoom(null); setError(""); setTab("create"); } }}>{inviteToken ? "Choose another duel" : "Create new room"} <span>→</span></button></section>
+      ) : room ? (
         <section className="room-ticket">
           <span>ROOM CODE</span><strong>{room.code}</strong>
           <button className="secondary-cta" onClick={() => navigator.clipboard.writeText(room.inviteUrl)}>Copy invite link</button>
@@ -759,10 +769,10 @@ function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate:
           {!inviteToken && <div className="segmented"><button className={tab === "create" ? "active" : ""} onClick={() => setTab("create")}>Create room</button><button className={tab === "join" ? "active" : ""} onClick={() => setTab("join")}>Join room</button></div>}
           <label>Display name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" maxLength={24} /></label>
           {tab === "join" && !inviteToken && <label>Room code<input value={code} onChange={(event) => setCode(event.target.value)} placeholder="e.g. K7MX9Q" maxLength={12} /></label>}
-          {error && <p className="form-error" role="alert">{error}</p>}
           <button className="primary-cta full" disabled={!name.trim() || (tab === "join" && !inviteToken && !code.trim()) || busy} onClick={submit}>{busy ? "Connecting…" : tab === "create" ? "Create room" : "Join room"}<span>→</span></button>
         </section>
       )}
+      {error && <p className="form-error" role="alert">{error}</p>}
     </main>
   );
 }
@@ -1013,30 +1023,51 @@ export function App() {
   const [resumedRoom, setResumedRoom] = useState<Room | null>(null);
 
   useEffect(() => {
+    if (screen === "game" && botMatch) window.sessionStorage.setItem(CURRENT_MATCH_KEY, botMatch.id);
+  }, [screen, botMatch]);
+
+  useEffect(() => {
     if (inviteIntent || guestInvite || quickRematchToken) return;
     let active = true;
-    api.getResume().then(({ match, room, rankedQueue, rankedChallenge }) => {
-      if (!active) return;
-      if (match) {
-        const difficulty = match.botDifficulty
-          ? `${match.botDifficulty[0].toUpperCase()}${match.botDifficulty.slice(1)}` as Difficulty
-          : "Normal";
-        setSolo({ mode: match.mode, difficulty });
-        setBotMatch(match);
-        setScreen((current) => current === "home" ? "game" : current);
-      } else if (room) {
-        setResumedRoom(room);
-        setScreen((current) => current === "home" ? "room" : current);
-      } else if (rankedQueue || rankedChallenge) {
-        setScreen((current) => current === "home" ? "ranked" : current);
-      } else {
-        void api.trackEvent("homepage_opened").catch(() => undefined);
-      }
-    }).catch(() => undefined);
+    const restore = async () => {
+      try {
+        const { match, room, rankedQueue, rankedChallenge } = await api.getResume();
+        if (!active) return;
+        let previous: PublicMatch | null = null;
+        const previousId = window.sessionStorage.getItem(CURRENT_MATCH_KEY);
+        if (!match && previousId) {
+          try {
+            const response = await api.getMatch<PublicMatch>(previousId);
+            previous = response.match.status === "finished" || response.match.status === "voided" ? response.match : null;
+          } catch {
+            window.sessionStorage.removeItem(CURRENT_MATCH_KEY);
+          }
+        }
+        if (!active) return;
+        const resumedMatch = match ?? previous;
+        if (resumedMatch) {
+          const difficulty = resumedMatch.botDifficulty
+            ? `${resumedMatch.botDifficulty[0].toUpperCase()}${resumedMatch.botDifficulty.slice(1)}` as Difficulty
+            : "Normal";
+          setSolo({ mode: resumedMatch.mode, difficulty });
+          setBotMatch(resumedMatch);
+          setScreen((current) => current === "home" ? "game" : current);
+        } else if (room) {
+          setResumedRoom(room);
+          setScreen((current) => current === "home" ? "room" : current);
+        } else if (rankedQueue || rankedChallenge) {
+          setScreen((current) => current === "home" ? "ranked" : current);
+        } else {
+          void api.trackEvent("homepage_opened").catch(() => undefined);
+        }
+      } catch { /* The home screen remains available while reconnecting. */ }
+    };
+    void restore();
     return () => { active = false; };
   }, []);
 
   const navigate = (next: Screen) => {
+    if (next !== "game") window.sessionStorage.removeItem(CURRENT_MATCH_KEY);
     if ((inviteIntent && next !== "ranked") || (guestInvite && next !== "room") || (quickRematchToken && next !== "quick-rematch")) window.history.replaceState(null, "", "/");
     if (next !== "room") setResumedRoom(null);
     if (next === "home") void api.trackEvent("homepage_opened").catch(() => undefined);
@@ -1060,7 +1091,7 @@ export function App() {
       {screen === "home" && <Home navigate={navigate} />}
       {screen === "practice" && <ModeSelect kind="practice" onStart={start} navigate={navigate} />}
       {screen === "quick" && <ModeSelect kind="quick" onStart={start} navigate={navigate} />}
-      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.id); }} />}
+      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.status === "voided" ? undefined : botMatch.id); }} />}
       {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}

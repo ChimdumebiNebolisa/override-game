@@ -198,6 +198,9 @@ test('settlement atomically updates ratings/stats once and returns saved result 
   assert.equal(row<{ wins: number; rating: number }>(db, 'SELECT wins, rating FROM profiles WHERE uid = ?',
     row<{ player_a_key: string }>(db, 'SELECT player_a_key FROM matches WHERE id = ?', shell.matchId).player_a_key).wins, 1);
   assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM rating_settlements WHERE match_id = ?', shell.matchId).count, 1);
+  assert.deepEqual(row<{ attempts: number; first_attempt_at: number; last_attempt_at: number }>(db,
+    'SELECT attempts, first_attempt_at, last_attempt_at FROM settlement_duplicate_attempts WHERE match_id = ?', shell.matchId),
+  { attempts: 1, first_attempt_at: 600_002, last_attempt_at: 600_002 });
   assert.equal(row<{ count: number }>(db, 'SELECT COUNT(*) AS count FROM ranked_ownership WHERE match_id = ?', shell.matchId).count, 0);
 });
 
