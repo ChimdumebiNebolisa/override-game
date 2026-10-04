@@ -19,6 +19,10 @@ export function openDatabase(path = databasePath): Database.Database {
       google_nonce_hash TEXT,
       google_nonce_expires_at INTEGER
     );
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS profiles (
       uid TEXT PRIMARY KEY,
       handle TEXT,
@@ -197,41 +201,51 @@ export function openDatabase(path = databasePath): Database.Database {
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_quick_rematch
       ON quick_rematch_invitations(parent_match_id) WHERE status = 'open';
   `);
-  const matchColumns = db.prepare('PRAGMA table_info(matches)').all() as { name: string }[];
-  const roomColumns = db.prepare('PRAGMA table_info(rooms)').all() as { name: string }[];
-  const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
-  if (!sessionColumns.some((column) => column.name === 'google_nonce_hash')) {
-    db.exec('ALTER TABLE sessions ADD COLUMN google_nonce_hash TEXT');
+  try {
+    db.transaction(() => {
+      const applied = db.prepare('SELECT 1 FROM schema_migrations WHERE version = 1').get();
+      if (applied) return;
+      const matchColumns = db.prepare('PRAGMA table_info(matches)').all() as { name: string }[];
+      const roomColumns = db.prepare('PRAGMA table_info(rooms)').all() as { name: string }[];
+      const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
+      if (!sessionColumns.some((column) => column.name === 'google_nonce_hash')) {
+        db.exec('ALTER TABLE sessions ADD COLUMN google_nonce_hash TEXT');
+      }
+      if (!sessionColumns.some((column) => column.name === 'google_nonce_expires_at')) {
+        db.exec('ALTER TABLE sessions ADD COLUMN google_nonce_expires_at INTEGER');
+      }
+      if (!roomColumns.some((column) => column.name === 'creation_key')) {
+        db.exec('ALTER TABLE rooms ADD COLUMN creation_key TEXT');
+      }
+      if (!matchColumns.some((column) => column.name === 'creation_key')) {
+        db.exec('ALTER TABLE matches ADD COLUMN creation_key TEXT');
+      }
+      if (!matchColumns.some((column) => column.name === 'decision_duration_ms')) {
+        db.exec('ALTER TABLE matches ADD COLUMN decision_duration_ms INTEGER NOT NULL DEFAULT 5000');
+      }
+      if (!matchColumns.some((column) => column.name === 'parent_match_id')) {
+        db.exec('ALTER TABLE matches ADD COLUMN parent_match_id TEXT REFERENCES matches(id)');
+      }
+      if (!matchColumns.some((column) => column.name === 'restart_match_id')) {
+        db.exec('ALTER TABLE matches ADD COLUMN restart_match_id TEXT REFERENCES matches(id)');
+      }
+      if (!matchColumns.some((column) => column.name === 'ready_connected_a')) {
+        db.exec('ALTER TABLE matches ADD COLUMN ready_connected_a INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!matchColumns.some((column) => column.name === 'ready_connected_b')) {
+        db.exec('ALTER TABLE matches ADD COLUMN ready_connected_b INTEGER NOT NULL DEFAULT 0');
+      }
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS one_room_per_creation_key
+        ON rooms(host_key, creation_key) WHERE creation_key IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS one_bot_match_per_human_creation_key
+        ON matches(CASE WHEN player_a_key LIKE 'bot:%' THEN player_b_key ELSE player_a_key END, creation_key)
+        WHERE creation_key IS NOT NULL AND bot_difficulty IS NOT NULL;
+        DROP INDEX IF EXISTS one_bot_match_per_creation_key;`);
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)').run(Date.now());
+    }).immediate();
+  } catch (error) {
+    db.close();
+    throw error;
   }
-  if (!sessionColumns.some((column) => column.name === 'google_nonce_expires_at')) {
-    db.exec('ALTER TABLE sessions ADD COLUMN google_nonce_expires_at INTEGER');
-  }
-  if (!roomColumns.some((column) => column.name === 'creation_key')) {
-    db.exec('ALTER TABLE rooms ADD COLUMN creation_key TEXT');
-  }
-  if (!matchColumns.some((column) => column.name === 'creation_key')) {
-    db.exec('ALTER TABLE matches ADD COLUMN creation_key TEXT');
-  }
-  if (!matchColumns.some((column) => column.name === 'decision_duration_ms')) {
-    db.exec('ALTER TABLE matches ADD COLUMN decision_duration_ms INTEGER NOT NULL DEFAULT 5000');
-  }
-  if (!matchColumns.some((column) => column.name === 'parent_match_id')) {
-    db.exec('ALTER TABLE matches ADD COLUMN parent_match_id TEXT REFERENCES matches(id)');
-  }
-  if (!matchColumns.some((column) => column.name === 'restart_match_id')) {
-    db.exec('ALTER TABLE matches ADD COLUMN restart_match_id TEXT REFERENCES matches(id)');
-  }
-  if (!matchColumns.some((column) => column.name === 'ready_connected_a')) {
-    db.exec('ALTER TABLE matches ADD COLUMN ready_connected_a INTEGER NOT NULL DEFAULT 0');
-  }
-  if (!matchColumns.some((column) => column.name === 'ready_connected_b')) {
-    db.exec('ALTER TABLE matches ADD COLUMN ready_connected_b INTEGER NOT NULL DEFAULT 0');
-  }
-  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS one_room_per_creation_key
-    ON rooms(host_key, creation_key) WHERE creation_key IS NOT NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS one_bot_match_per_human_creation_key
-    ON matches(CASE WHEN player_a_key LIKE 'bot:%' THEN player_b_key ELSE player_a_key END, creation_key)
-    WHERE creation_key IS NOT NULL AND bot_difficulty IS NOT NULL;
-    DROP INDEX IF EXISTS one_bot_match_per_creation_key;`);
   return db;
 }
