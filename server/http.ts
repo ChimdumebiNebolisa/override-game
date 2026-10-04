@@ -16,13 +16,30 @@ export function assertMutationOrigin(req: Pick<IncomingMessage, 'headers'>): voi
   }
 }
 
+export function applySecurityHeaders(res: Pick<ServerResponse, 'setHeader'>): void {
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'DENY');
+  res.setHeader('referrer-policy', 'no-referrer');
+  res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('content-security-policy', [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "script-src 'self' https://accounts.google.com",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: https://accounts.google.com",
+    "connect-src 'self' https://accounts.google.com",
+    'frame-src https://accounts.google.com',
+  ].join('; '));
+}
+
 export function json(res: ServerResponse, status: number, body: unknown): void {
+  applySecurityHeaders(res);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff',
-    'x-frame-options': 'DENY',
-    'referrer-policy': 'no-referrer',
   });
   res.end(JSON.stringify(body));
 }

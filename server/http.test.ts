@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { publicOrigin } from './config';
-import { assertMutationOrigin } from './http';
+import { applySecurityHeaders, assertMutationOrigin } from './http';
 
 function request(headers: Record<string, string>) {
   return { headers } as unknown as Pick<IncomingMessage, 'headers'>;
@@ -27,4 +27,16 @@ describe('mutation request origin', () => {
       'x-requested-with': 'override-game',
     }))).not.toThrow();
   });
+});
+
+it('sets browser security headers including the Google identity origins', () => {
+  const headers = new Map<string, string>();
+  const response = ({
+    setHeader: (name: string, value: string | number | readonly string[]) => headers.set(name, String(value)),
+  } as unknown) as Pick<ServerResponse, 'setHeader'>;
+  applySecurityHeaders(response);
+  expect(headers.get('content-security-policy')).toContain("object-src 'none'");
+  expect(headers.get('content-security-policy')).toContain('https://accounts.google.com');
+  expect(headers.get('permissions-policy')).toBe('camera=(), microphone=(), geolocation=()');
+  expect(headers.get('x-frame-options')).toBe('DENY');
 });

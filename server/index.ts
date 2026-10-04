@@ -5,7 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { openDatabase } from './db';
 import { port, publicOrigin } from './config';
 import { attachGoogleIdentity, claimHandle, getPublicProfile, issueGoogleNonce, renameHandle } from './auth';
-import { HttpError, assertMutationOrigin, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
+import { HttpError, applySecurityHeaders, assertMutationOrigin, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
 import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, reconcilePresenceOnStartup, resignMatch } from './matches';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
 import { acknowledgeRankedReady, clearRankedReadyPresenceOnStartup, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, markRankedReadyPresence, publicRankedSettlement, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
@@ -77,8 +77,8 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: 
   try {
     const body = await readFile(file);
     const type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : 'text/html';
-    res.writeHead(200, { 'content-type': type, 'x-content-type-options': 'nosniff',
-      'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' });
+    applySecurityHeaders(res);
+    res.writeHead(200, { 'content-type': type });
     res.end(body);
   } catch {
     throw new HttpError(404, 'Build the web client first');
