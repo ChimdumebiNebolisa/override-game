@@ -15,6 +15,7 @@ The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.m
 - Room, Ranked challenge/rematch, and Quick rematch tokens and challenge codes now use keyed SHA-256 lookup digests plus AES-256-GCM ciphertext. A transactional migration preserves active invitations. Production requires `INVITATION_ENCRYPTION_KEY`, and the Render Blueprint generates it; keep that key with database backups.
 - Session cookies are kept out of the database: storage uses keyed session identifiers, and a migration updates room, match, rematch, and telemetry references while preserving valid cookies. Startup authenticates an encrypted key-check record so a wrong restore key fails before the app reports healthy.
 - Ranked sign-in uses Firebase Authentication's web SDK, with Firebase Admin verifying ID tokens and restricting accounts to the Google provider. Production requires Firebase web config and server-side service-account JSON; CI supplies test-only placeholders. Live Firebase sign-in still needs project setup and two-account verification.
+- GitHub Actions on commit `50f6ad1` passed both verification jobs, both container backup/restore jobs, and GitGuardian. The full suite reports 170 passing tests across 21 files.
 - Ranked challenge URL acceptance offers retry after a transient failure and returns to normal Ranked controls after a ready timeout.
 
 ## Verified in development and CI
