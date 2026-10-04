@@ -197,7 +197,7 @@ The implementation audit found gaps between the plan and the current code. The f
 | Mobile scrolling could hide the decision timer; Energy results lacked numeric spend/earn feedback and the rival's total. | Keep the match header sticky, show both totals, and report actual energy changes including capped Ambush gains. | Production build passes; CSS and component regressions cover the new display. Browser scroll and human accessibility checks remain open. |
 | Malformed percent-encoded invitation paths could throw during render; local SQLite scratch data was not ignored. | Fail closed to the normal route on invalid encoding and ignore `.tmp-storage/`. | Build passes; `git check-ignore .tmp-storage/reveal-repro.sqlite` confirms the local database is excluded. |
 
-Local remediation verification on this date: `npm test` passed 151 tests across 19 files, `npm run build` passed, and the focused match/client regression run passed 40 tests across 3 files. Real OAuth, persistent-host staging and backup restoration, the full two-device acceptance run, human playtest, human screen-reader review, and edge rate limiting remain release gates in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+Local remediation verification on this date: `npm test` passed 151 tests across 19 files, `npm run build` passed, and the focused match/client regression run passed 40 tests across 3 files. Commit `9200e36` passed both GitHub verify jobs, both container jobs, and GitGuardian. Real OAuth, persistent-host staging and backup restoration, the full two-device acceptance run, human playtest, human screen-reader review, and edge rate limiting remain release gates in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 
 ## Technical references for the recommended stack
 
