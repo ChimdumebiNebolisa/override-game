@@ -17,7 +17,7 @@ The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.m
 
 ## Release gates still open
 
-1. Run the structured human playtest in plan M1/PRD §40–41 with competent pairs and a first-time player. Record comprehension, action choices, Ambush success, game length, side results, voluntary rematches, and a go/tune/stop decision.
+1. Run the [structured human playtest](PLAYTEST_PROTOCOL.md) in plan M1/PRD §40–41 with competent pairs and a first-time player. Record comprehension, action choices, Ambush success, game length, side results, voluntary rematches, and a go/tune/stop decision.
 2. Configure a Google OAuth Web client ID for the real public origin. Verify two distinct real accounts, sign-in return to a challenge, ready/binding, settlement, rematch, and leaderboard placement on desktop and mobile.
 3. Deploy one server process with HTTPS and persistent SQLite storage to a production-like staging environment. Rehearse backup restoration there, then run the complete PRD §43–45 checks and an unfamiliar-reviewer demo across two devices.
 4. Review traffic limits and the 30-day guest retention policy against the chosen host and expected launch volume. Add an edge rate limit before public access.
