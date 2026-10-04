@@ -41,13 +41,17 @@ describe('guest matches', () => {
     vi.useRealTimers();
   });
 
-  function humanMatch() {
+  function humanMatch(connected = true) {
     const host = session('host');
     const guest = session('guest');
     const room = createQuickRoom(db, host, 'Host');
     const joined = joinQuickRoom(db, guest, { code: room.code }, 'Guest');
     const id = joined.matchId!;
     const row = getMatch(db, id)!;
+    if (connected) {
+      markConnected(db, id, 'A');
+      markConnected(db, id, 'B');
+    }
     return {
       id,
       roomId: room.id,
@@ -77,8 +81,32 @@ describe('guest matches', () => {
     expect(after.status).toBe('grace');
     expect([after.afk_a, after.afk_b]).toEqual([0, 0]);
     expect([after.disconnect_a, after.disconnect_b]).toEqual([0, 0]);
-    expect(db.prepare('SELECT COUNT(*) AS count FROM presence_events WHERE match_id = ? AND offline = 1')
-      .get(match.id)).toMatchObject({ count: 2 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM presence_events WHERE match_id = ? AND offline = 1 AND changed_at = ?')
+      .get(match.id, 105_000)).toMatchObject({ count: 2 });
+  });
+
+  it('gives an absent human player disconnect grace from match start', () => {
+    const match = humanMatch(false);
+    markConnected(db, match.id, 'B', 100_100);
+    const started = getMatch(db, match.id)!;
+    expect(started.disconnected_a_at).toBe(started.started_at);
+    expect(started.disconnected_b_at).toBeNull();
+    expect(resolveMatch(db, match.id, started.deadline!)).toBe(true);
+    const waiting = getMatch(db, match.id)!;
+    expect(waiting.status).toBe('grace');
+    expect(waiting.afk_a).toBe(0);
+    expect(waiting.grace_until).toBe(started.deadline! + 20_000);
+  });
+
+  it('accepts a same-round action after presence changes the revision', () => {
+    const match = humanMatch(false);
+    const snapshot = matchForSession(db, match.id, match.A);
+    markConnected(db, match.id, 'A', 100_100);
+    markConnected(db, match.id, 'B', 100_100);
+    expect(() => serviceLockAction(db, match.id, match.A, pass, snapshot.state!.round, snapshot.revision))
+      .not.toThrow();
+    expect(db.prepare('SELECT action_json FROM pending_actions WHERE match_id = ? AND player = ?')
+      .get(match.id, 'A')).toMatchObject({ action_json: JSON.stringify(pass) });
   });
 
   it('caps concurrent bot matches for one guest session', () => {

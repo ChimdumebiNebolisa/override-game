@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { assessCompetitiveCredit, settleRatedMatch, type RatingProfile, type RatingSettlement } from '../src/shared/rating.js';
 import { createInitialState, type MatchState, type Player } from '../src/shared/rules.js';
 import { HttpError } from './http.js';
+import { initializeHumanPresence } from './matches.js';
 
 const READY_WINDOW_MS = 15_000;
 const QUEUE_LEASE_MS = 60_000;
@@ -324,6 +325,7 @@ export function acknowledgeRankedReady(db: Database.Database, matchId: string, u
       WHERE id = ? AND status = 'readying' AND started_at IS NULL AND ready_a = 1 AND ready_b = 1 AND ready_deadline > ?`)
       .run(now, now + 5_000, a.handle, b.handle, matchId, now);
     if (bound.changes !== 1) throw new HttpError(409, 'Ranked match could not bind');
+    initializeHumanPresence(db, matchId, now);
     db.prepare(`UPDATE ranked_ownership SET state = 'active_match', lease_expires_at = NULL
       WHERE match_id = ? AND state = 'match_shell'`).run(matchId);
     return { state: 'active', matchId, competitiveMultiplier: updated.competitive_multiplier, readyDeadline: null } as RankedQueueResult;

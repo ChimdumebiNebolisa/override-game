@@ -50,6 +50,18 @@ function sideForMatch(matchId: string, key: string): 'A' | 'B' | null {
   return null;
 }
 
+function hasLiveMatchConnection(matchId: string, roomId: string | null, key: string): boolean {
+  return [...sockets].some((item) => item.key === key && item.ws.readyState === WebSocket.OPEN &&
+    (item.matchId === matchId || (roomId !== null && item.roomId === roomId)));
+}
+
+function connectLiveParticipants(matchId: string): void {
+  const match = getMatch(db, matchId);
+  if (!match) return;
+  if (hasLiveMatchConnection(matchId, match.room_id, match.player_a_key)) markConnected(db, matchId, 'A');
+  if (hasLiveMatchConnection(matchId, match.room_id, match.player_b_key)) markConnected(db, matchId, 'B');
+}
+
 async function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
   const root = resolve('dist');
   const target = resolve(root, `.${pathname}`);
@@ -116,7 +128,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const token = typeof body.token === 'string' ? body.token.trim() : undefined;
       if (!code && !token) throw new HttpError(400, 'Enter a room code or use an invite link');
       const room = joinQuickRoom(db, session, { code, token }, displayName(body.displayName));
-      if (room.matchId) logMatchEvent('match_started', room.matchId);
+      if (room.matchId) {
+        connectLiveParticipants(room.matchId);
+        logMatchEvent('match_started', room.matchId);
+      }
       notifyRoom(room.id);
       return json(res, 200, { room });
     }
@@ -202,7 +217,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       const queue = acknowledgeRankedReady(db, rankedReady[1], session.uid);
-      if (queue.state === 'active') logMatchEvent('match_started', rankedReady[1]);
+      if (queue.state === 'active') {
+        connectLiveParticipants(rankedReady[1]);
+        logMatchEvent('match_started', rankedReady[1]);
+      }
       notifyMatch(rankedReady[1]);
       return json(res, 200, { queue });
     }
@@ -268,6 +286,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const body = await readJson(req);
       if (typeof body.token !== 'string') throw new HttpError(400, 'Rematch token required');
       const accepted = acceptQuickRematch(db, body.token, session.id);
+      connectLiveParticipants(accepted.matchId);
       notifyRoom(accepted.roomId);
       notifyMatch(accepted.matchId);
       return json(res, 200, { match: matchForSession(db, accepted.matchId, session) });
@@ -280,6 +299,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const offer = pendingQuickRematch(db, quickRematchAccept[1], session.id);
       if (!offer || offer.token !== body.token) throw new HttpError(404, 'Rematch invitation not found');
       const accepted = acceptQuickRematch(db, body.token, session.id);
+      connectLiveParticipants(accepted.matchId);
       notifyRoom(accepted.roomId);
       notifyMatch(accepted.matchId);
       return json(res, 200, { match: matchForSession(db, accepted.matchId, session) });
@@ -353,9 +373,11 @@ server.on('upgrade', (req, socket, head) => {
       ws.on('close', () => {
         sockets.delete(connection);
         setTimeout(() => {
-          if ([...sockets].some((item) => item.key === key && ((roomId && item.roomId === roomId) || (directMatchId && item.matchId === directMatchId)))) return;
           const latestRoom = roomId ? getRoom(db, roomId) : null;
           const latestMatchId = directMatchId ?? latestRoom?.match_id;
+          if (!latestMatchId) return;
+          const latestMatch = getMatch(db, latestMatchId);
+          if (hasLiveMatchConnection(latestMatchId, latestMatch?.room_id ?? null, key)) return;
           const latestSide = latestMatchId ? sideForMatch(latestMatchId, key) : null;
           if (latestMatchId && latestSide) {
             markDisconnected(db, latestMatchId, latestSide);

@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { createInitialState } from '../src/shared/rules';
 import { HttpError, type Session } from './http';
 import { publicOrigin } from './config';
+import { initializeHumanPresence } from './matches';
 
 const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const ROOM_LIFETIME = 30 * 60_000;
@@ -146,6 +147,7 @@ export function joinQuickRoom(db: Database.Database, session: Session, lookup: {
         hostIsA ? row.host_key : session.id, hostIsA ? session.id : row.host_key,
         hostIsA ? row.host_name : name, hostIsA ? name : row.host_name,
         JSON.stringify(state), now + 5_000, now);
+    initializeHumanPresence(db, matchId, now);
     db.prepare("UPDATE rooms SET match_id = ?, status = 'active' WHERE id = ?").run(matchId, row.id);
     const updated = getRoom(db, row.id);
     if (!updated) throw new Error('Room disappeared during join');

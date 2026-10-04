@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { createInitialState } from '../src/shared/rules.js';
 import { HttpError } from './http.js';
 import { publicOrigin } from './config.js';
+import { initializeHumanPresence } from './matches.js';
 
 const OFFER_LIFETIME_MS = 30_000;
 const DECISION_DURATION_MS = 5_000;
@@ -199,6 +200,7 @@ export function acceptQuickRematch(
       VALUES (?, ?, 'quick', ?, ?, ?, ?, ?, ?, 'decision', ?, ?, 1)`)
       .run(matchId, room.id, parent.player_b_key, parent.player_a_key, parent.player_b_name, parent.player_a_name,
         JSON.stringify(createInitialState()), DECISION_DURATION_MS, now + DECISION_DURATION_MS, now);
+    initializeHumanPresence(db, matchId, now);
 
     const roomChanged = db.prepare(`UPDATE rooms SET match_id = ?, status = 'active'
       WHERE id = ? AND mode = 'quick' AND match_id = ? AND status = 'finished'`)

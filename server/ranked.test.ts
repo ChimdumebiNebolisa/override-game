@@ -5,7 +5,7 @@ import { join, resolve, sep } from 'node:path';
 import { afterEach, test, vi } from 'vitest';
 import { openDatabase } from './db.js';
 import { HttpError } from './http.js';
-import { dueMatches, resignMatch } from './matches.js';
+import { dueMatches, markConnected, resignMatch, resolveMatch } from './matches.js';
 import {
   acknowledgeRankedReady,
   createRankedShell,
@@ -54,6 +54,8 @@ function bindBoth(db: ReturnType<typeof openDatabase>, matchId: string, now: num
     'SELECT player_a_key, player_b_key FROM matches WHERE id = ?', matchId);
   acknowledgeRankedReady(db, matchId, match.player_a_key, now);
   acknowledgeRankedReady(db, matchId, match.player_b_key, now + 1);
+  markConnected(db, matchId, 'A', now + 1);
+  markConnected(db, matchId, 'B', now + 1);
 }
 
 test('queue lease pairs two eligible players atomically and gives second tabs the same shell', () => {
@@ -105,6 +107,22 @@ test('ready handshake binds only when both players confirm and freezes startedAt
   assert.deepEqual([bound.player_a_name, bound.player_b_name].sort(), ['Alpha', 'Bravo']);
   assert.equal(row<{ state: string; lease_expires_at: number | null }>(db,
     'SELECT state, lease_expires_at FROM ranked_ownership WHERE match_id = ? LIMIT 1', shell.matchId).state, 'active_match');
+});
+
+test('a bound Ranked match with no sockets enters disconnect grace', () => {
+  const db = makeDb();
+  const shell = createRankedShell(db, 'a', 'b', 50_000);
+  const match = row<{ player_a_key: string; player_b_key: string }>(db,
+    'SELECT player_a_key, player_b_key FROM matches WHERE id = ?', shell.matchId);
+  acknowledgeRankedReady(db, shell.matchId, match.player_a_key, 50_100);
+  acknowledgeRankedReady(db, shell.matchId, match.player_b_key, 50_101);
+  const start = row<{ deadline: number; disconnected_a_at: number | null; disconnected_b_at: number | null }>(db,
+    'SELECT deadline, disconnected_a_at, disconnected_b_at FROM matches WHERE id = ?', shell.matchId);
+  assert.deepEqual([start.disconnected_a_at, start.disconnected_b_at], [50_101, 50_101]);
+  assert.equal(resolveMatch(db, shell.matchId, start.deadline), true);
+  const waiting = row<{ status: string; afk_a: number; afk_b: number; grace_until: number }>(db,
+    'SELECT status, afk_a, afk_b, grace_until FROM matches WHERE id = ?', shell.matchId);
+  assert.deepEqual(waiting, { status: 'grace', afk_a: 0, afk_b: 0, grace_until: start.deadline + 20_000 });
 });
 
 test('ready timeout cancels shell, releases ownership, and consumes no repeat credit', () => {

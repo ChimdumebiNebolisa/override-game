@@ -172,8 +172,9 @@ export function lockAction(db: Database.Database, id: string, session: Session, 
       throw new HttpError(409, 'This round is no longer accepting moves');
     }
     const state = stateOf(row);
+    // Presence updates can advance the revision without changing this round's legal actions.
     if (!Number.isInteger(expectedRound) || !Number.isInteger(expectedRevision) ||
-        expectedRound !== state.round || expectedRevision !== row.revision) {
+        expectedRound !== state.round || expectedRevision < 1 || expectedRevision > row.revision) {
       throw new HttpError(409, 'Match state changed. Refresh before locking a move');
     }
     const validation = validateAction(state, player, action);
@@ -296,6 +297,19 @@ export function markDisconnected(db: Database.Database, id: string, player: Play
       .run(now, id);
     if (changed.changes === 1) db.prepare('INSERT INTO presence_events (match_id, player, changed_at, offline) VALUES (?, ?, ?, 1)')
       .run(id, player, now);
+  }).immediate();
+}
+
+/** A new human match is offline until each participant opens a live channel. */
+export function initializeHumanPresence(db: Database.Database, id: string, now: number): void {
+  db.transaction(() => {
+    const changed = db.prepare(`UPDATE matches SET disconnected_a_at = ?, disconnected_b_at = ?
+      WHERE id = ? AND status = 'decision' AND started_at = ?
+      AND disconnected_a_at IS NULL AND disconnected_b_at IS NULL`).run(now, now, id, now);
+    if (changed.changes !== 1) throw new Error('Could not initialize match presence');
+    const insert = db.prepare('INSERT INTO presence_events (match_id, player, changed_at, offline) VALUES (?, ?, ?, 1)');
+    insert.run(id, 'A', now);
+    insert.run(id, 'B', now);
   }).immediate();
 }
 
