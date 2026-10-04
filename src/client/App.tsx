@@ -799,8 +799,8 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
         client_id: clientId,
         callback: ({ credential }) => {
           setBusy(true);
-          api.trackEvent("ranked_auth_started", "ranked").catch(() => undefined)
-            .then(() => api.googleSignIn(credential)).then((response) => {
+          void api.trackEvent("ranked_auth_started", "ranked").catch(() => undefined);
+          api.googleSignIn(credential).then((response) => {
             setSignedIn(true);
             setProfile(response.profile);
             setError("");
@@ -816,6 +816,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
     script.src = "https://accounts.google.com/gsi/client";
     script.async = true;
     script.onload = render;
+    script.onerror = () => setError("Google sign-in could not load. Check your connection and reload the page.");
     document.head.appendChild(script);
     return () => script.remove();
   }, [clientId, signedIn]);
