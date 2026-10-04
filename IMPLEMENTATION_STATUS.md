@@ -2,7 +2,7 @@
 
 The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.md` records the approved D1–D10 decisions and the complete acceptance criteria. This status tracks evidence without changing those requirements.
 
-## Verified locally
+## Verified in development and CI
 
 - Pure 5×5 rules, Energy, simultaneous resolution, bots, match persistence, guest room authorization, Ranked queue/ready/settlement, rematches, and leaderboard service behavior have automated coverage. `npm test` passes 127 tests across 15 files, including deadline ordering, a two-connection action-lock race, absent-player grace at match start, valid same-round locks after a presence update, and Easy/Hard bot difficulty in resumed snapshots. The D10 test checks every legal cross-player action pairing involving Override on a representative board and all same-target attempts against the other actions. Fixed-seed Easy, Normal, and Hard bot matches choose legal actions, terminate, and reproduce the same action traces.
 - Room and bot match creation use persisted request IDs so a retried request returns the original resource. A copy of the existing local SQLite database migrated to the new columns and indexes successfully.
@@ -29,6 +29,7 @@ The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.m
 - Retention tests remove old Ranked invitation tokens, including accepted invitations, while preserving Ranked match and settlement audit records.
 - Ranked funnel telemetry now counts both Ready acknowledgements separately from binding; a ready but unbound shell reports one ready event and zero starts. Production startup rejects a missing or HTTP `PUBLIC_ORIGIN`; an explicit HTTPS origin is required before deployment.
 - `npm run report:metrics`, `npm run ops:status`, and `npm run backup:db` run against the local database. The backup command checks SQLite integrity, and a copy was opened successfully at a fresh restore path. The health endpoint now returns 503 for database failure or overdue server work; operations output lists failed settlement retries and attempts to settle an already settled match. Local metrics contain test traffic and are not playtest conclusions.
+- With a custom `DB_PATH`, the backup command created its integrity-checked copy beside the database under `backups/`. GitHub Actions built the Docker image, started its single server with a named `/data` volume, confirmed SQLite was created on that volume, and received a healthy `/api/health` response. This verifies packaging and mount writability, not a persistent host deployment or restore rehearsal.
 
 ## Release gates still open
 
