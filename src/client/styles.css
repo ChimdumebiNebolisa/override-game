@@ -314,6 +314,19 @@ dialog:not([open]) { display:none; }
 .action-rules p:nth-child(odd) { border-right:1px solid var(--line); }
 .action-rules strong { font:750 16px var(--display); text-transform:uppercase; }
 .action-rules span { color:var(--muted); font-size:11px; line-height:1.4; }
+.tutorial-card { display:grid; grid-template-columns:1fr minmax(240px, .9fr); gap:28px; margin:30px 0; padding:22px; border:1px solid var(--line); background:rgba(255,255,255,.62); }
+.tutorial-copy h2 { margin:4px 0 8px; font:750 24px var(--display); text-transform:uppercase; }
+.tutorial-copy > p:not(.eyebrow) { color:var(--muted); font-size:13px; line-height:1.5; }
+.tutorial-copy .eyebrow { margin:0; color:var(--blue); font:9px var(--mono); letter-spacing:.12em; text-transform:uppercase; }
+.tutorial-copy .tutorial-hint { padding:10px 12px; border-left:3px solid var(--amber); background:#fff5d8; color:var(--ink); }
+.tutorial-result { display:flex; flex-direction:column; gap:5px; margin:14px 0; padding:12px; border-left:3px solid var(--blue); background:white; color:var(--muted); font-size:12px; line-height:1.4; }
+.tutorial-result strong { color:var(--ink); font:750 15px var(--display); text-transform:uppercase; }
+.tutorial-board { min-width:0; }
+.tutorial-board .board-grid { gap:4px; }
+.tutorial-board .board-cell { cursor:pointer; }
+.tutorial-energy { display:flex; justify-content:space-between; margin-top:10px; padding:10px 12px; background:var(--ink); color:white; font:10px var(--mono); letter-spacing:.08em; }
+.tutorial-energy strong { color:var(--amber); }
+.tutorial-footnote { margin:0 0 24px; color:var(--muted); font-size:12px; line-height:1.5; }
 
 @media (max-width: 900px) {
   .hero { min-height:0; grid-template-columns:1fr; }
@@ -384,6 +397,7 @@ dialog:not([open]) { display:none; }
   .rematch-offer { align-items:stretch; flex-direction:column; }
   .ranked-facts strong { font-size:18px; }
   .action-rules { grid-template-columns:1fr; }
+  .tutorial-card { grid-template-columns:1fr; gap:12px; padding:16px; }
   .rival-track { grid-template-columns:repeat(2,1fr); }
   .rival-track > span:nth-child(2n) { border-right:0; }
   .rival-track > span:nth-child(n+5) { border-bottom:1px solid var(--line); }

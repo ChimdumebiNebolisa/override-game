@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   legalActions,
   legalTargets,
+  createInitialState,
+  resolveRound,
   score,
   type Action,
   type ActionOutcome,
@@ -1041,17 +1043,54 @@ function RivalsPanel({ rating }: { rating: number }) {
 }
 
 function HowTo({ navigate }: { navigate: (screen: Screen) => void }) {
-  const steps = [
-    ["Own the grid", "Finish with more nodes than your opponent."],
-    ["Move in secret", "Both players choose from the same pre-round board, then reveal together."],
-    ["Build Energy", "A correct Ambush earns 1 Energy. Spend 1 on Surge or 3 on Override."],
-  ];
+  const [expandTarget, setExpandTarget] = useState<number | null>(null);
+  const [surgeTarget, setSurgeTarget] = useState<number | null>(null);
+  const opening = createInitialState();
+  const expandTargets = legalTargets(opening, "A", "expand");
+  const ambushResult = expandTarget === null ? null : resolveRound(opening, {
+    A: { type: "expand", target: expandTarget },
+    B: { type: "ambush", target: expandTarget },
+  });
+  const surgeTargets = ambushResult ? legalTargets(ambushResult.state, "B", "surge") : [];
+  const surgeResult = ambushResult && surgeTarget !== null
+    ? resolveRound(ambushResult.state, { A: { type: "pass" }, B: { type: "surge", target: surgeTarget } })
+    : null;
   return (
     <main className="panel-page how-page">
       <button className="back-link" onClick={() => navigate("home")}>← Home</button>
-      <div className="panel-heading"><p className="eyebrow">How to play</p><h1>Read the board.<br />Then read your rival.</h1></div>
-      <ol className="how-steps">{steps.map(([title, copy], index) => <li key={title}><span>0{index + 1}</span><div><strong>{title}</strong><p>{copy}</p></div></li>)}</ol>
+      <div className="panel-heading"><p className="eyebrow">How to play · Interactive guide</p><h1>Read the board.<br />Then read your rival.</h1><p>Finish with more nodes after 12 rounds. Both players choose from the same board in secret, then reveal together.</p></div>
+      <section className="tutorial-card" aria-labelledby="tutorial-title">
+        <div className="tutorial-copy">
+          <p className="eyebrow">01 · Choose an Expand</p>
+          <h2 id="tutorial-title">Pick a highlighted node.</h2>
+          <p>Expand claims a neutral node beside your territory. Choose one now; the example rival will secretly Ambush the same target.</p>
+          {!expandTarget && <p className="tutorial-hint">Select any highlighted node on the grid to continue.</p>}
+          {ambushResult && <div className="tutorial-result" role="status">
+            <strong>Both moves revealed</strong>
+            <span>Player A {OUTCOME_COPY[ambushResult.outcomes.A.reason]}.</span>
+            <span>Player B {OUTCOME_COPY[ambushResult.outcomes.B.reason]} and now has {ambushResult.state.energy.B} Energy.</span>
+          </div>}
+          {ambushResult && <>
+            <p className="eyebrow">02 · Spend Energy</p>
+            <h2>Choose a Surge target.</h2>
+            <p>Surge costs 1 Energy and reaches up to two spaces from your territory. Override costs 3 Energy and steals an adjacent enemy node.</p>
+            {surgeResult && <div className="tutorial-result" role="status"><strong>Round resolved</strong><span>Player B {OUTCOME_COPY[surgeResult.outcomes.B.reason]} at {coordinate(surgeTarget!)}.</span></div>}
+          </>}
+        </div>
+        <div className="tutorial-board">
+          <div className="board-label"><span>Example territory</span><span>{surgeResult ? "SURGE REVEALED" : ambushResult ? "AMBUSH REVEALED" : "CHOOSE EXPAND"}</span></div>
+          <GameBoard
+            board={surgeResult?.state.board ?? ambushResult?.state.board ?? opening.board}
+            legal={surgeResult ? [] : ambushResult ? surgeTargets : expandTargets}
+            target={surgeResult ? surgeTarget : ambushResult ? surgeTarget : expandTarget}
+            disabled={Boolean(surgeResult)}
+            onTarget={(target) => ambushResult ? setSurgeTarget(target) : setExpandTarget(target)}
+          />
+          <div className="tutorial-energy"><span>PLAYER B ENERGY</span><strong>{surgeResult?.state.energy.B ?? ambushResult?.state.energy.B ?? 0} / 3</strong></div>
+        </div>
+      </section>
       <div className="action-rules">{ACTIONS.map((action) => <p key={action.type}><strong>{action.label}{action.cost ? ` · ${action.cost} Energy` : ""}</strong><span>{action.type === "ambush" ? "Blocks Expand only when you predict its exact target." : action.short + "."}</span></p>)}</div>
+      <p className="tutorial-footnote">The example follows the same legality and resolution rules as a match. Practice adds live legal target cues and explains every revealed outcome.</p>
       <button className="primary-cta full" onClick={() => navigate("practice")}>Try Practice <span>→</span></button>
     </main>
   );
