@@ -8,6 +8,8 @@ The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.m
 - TypeScript and the production Vite build pass with `npm run build`.
 - Two independent browser sessions joined a Quick Duel room. Reloading the host restored the open room with the original code; reloading during a newly joined match returned to the match screen. A solo Practice match and responsive views were exercised earlier in the local browser.
 - A synthetic two-account browser check created a Ranked challenge, showed the creator's Ready prompt when the invitee accepted, and opened the same bound game for both players. This bypassed Google only for the local fixture; it does not verify real OAuth.
+- In the production build, the same synthetic two-account flow ended by immediate resignation. Both browsers reached the correct result screens and showed complementary RP changes from one settlement. This check also exercised the race where settlement releases queue ownership before one client polls the active state.
+- Refreshing the challenge creator before invite acceptance restored the same invitation link; acceptance then showed Ready on both browsers and proceeded to a bound match.
 - A file-backed restart test leaves a terminal Ranked match unsettled, reopens the database, and verifies one settlement and released ownership. Startup also reconciles lost WebSocket presence before overdue rounds resolve.
 - `npm run report:metrics`, `npm run ops:status`, and `npm run backup:db` run against the local database. The backup command checks SQLite integrity, and a copy was opened successfully at a fresh restore path. Local metrics contain test traffic and are not playtest conclusions.
 

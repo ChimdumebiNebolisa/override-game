@@ -8,6 +8,7 @@ import {
   acceptRankedRematch,
   createRankedChallenge,
   expireRankedInvitations,
+  pendingRankedChallenge,
   pendingRankedRematch,
   rankedRematchLifetimeMs,
   requestRankedRematch,
@@ -63,12 +64,16 @@ test('challenge token is high entropy, private, expiring, and redeems once into 
   assert.equal(Buffer.from(invite.token, 'base64url').length, 32);
   assert.equal(invite.expiresAt, now + 30 * 60_000);
   assert.ok(invite.inviteUrl.endsWith(`/ranked/challenge/${invite.token}`));
+  assert.deepEqual(pendingRankedChallenge(db, 'a', now + 1), invite);
+  assert.deepEqual(createRankedChallenge(db, 'a', now + 1), invite);
+  assert.equal(pendingRankedChallenge(db, 'b', now + 1), null);
   assert.throws(() => acceptRankedChallenge(db, invite.token, 'a', now + 1), (error) => {
     assertHttpError(error, 400);
     return true;
   });
 
   const accepted = acceptRankedChallenge(db, invite.token, 'b', now + 2);
+  assert.equal(pendingRankedChallenge(db, 'a', now + 3), null);
   assert.equal(accepted.competitiveMultiplier, 1);
   assert.equal(accepted.readyDeadline, now + 2 + 15_000);
   assert.deepEqual(acceptRankedChallenge(db, invite.token, 'b', now + 3), accepted);

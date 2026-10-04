@@ -235,7 +235,7 @@ export const api = {
   },
 
   getResume() {
-    return request<{ match: PublicMatch | null; room: Room | null; rankedQueue: RankedQueue | null }>("/api/resume");
+    return request<{ match: PublicMatch | null; room: Room | null; rankedQueue: RankedQueue | null; rankedChallenge: RankedInvitation | null }>("/api/resume");
   },
 
   trackEvent(name: "homepage_opened" | "mode_selected" | "opponent_selected" | "ranked_auth_started", mode?: string) {
@@ -281,6 +281,10 @@ export const api = {
 
   createRankedChallenge() {
     return request<{ invitation: RankedInvitation }>("/api/ranked/challenges", { method: "POST", body: "{}" });
+  },
+
+  getCurrentRankedChallenge() {
+    return request<{ invitation: RankedInvitation | null }>("/api/ranked/challenges/current");
   },
 
   getRankedSettlement(matchId: string) {

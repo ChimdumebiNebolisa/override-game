@@ -102,6 +102,8 @@ export function createRankedChallenge(db: Database.Database, creatorUid: string,
   return db.transaction(() => {
     assertHandle(db, creatorUid);
     assertNoRankedOwnership(db, [creatorUid]);
+    const existing = pendingRankedChallenge(db, creatorUid, now);
+    if (existing) return existing;
     const row: InvitationRow = {
       id: randomUUID(), token: token(), kind: 'challenge', creator_uid: creatorUid, invitee_uid: null,
       parent_match_id: null, status: 'open', match_id: null, created_at: now,
@@ -113,6 +115,14 @@ export function createRankedChallenge(db: Database.Database, creatorUid: string,
       .run(row);
     return invitationView(row);
   }).immediate();
+}
+
+/** Recover the creator's still-open challenge link after a page refresh. */
+export function pendingRankedChallenge(db: Database.Database, creatorUid: string, now = Date.now()): CreatedRankedInvitation | null {
+  const row = db.prepare(`SELECT * FROM ranked_invitations WHERE kind = 'challenge'
+    AND creator_uid = ? AND status = 'open' AND expires_at > ?
+    ORDER BY created_at DESC, id DESC LIMIT 1`).get(creatorUid, now) as InvitationRow | undefined;
+  return row ? invitationView(row) : null;
 }
 
 function shellResult(shell: RankedShell): AcceptedRankedInvitation {

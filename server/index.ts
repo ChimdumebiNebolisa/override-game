@@ -10,7 +10,7 @@ import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
 import { acknowledgeRankedReady, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
 import { leaderboard, profileView } from './progression';
-import { acceptRankedChallenge, acceptRankedRematch, createRankedChallenge, expireRankedInvitations, pendingRankedRematch, requestRankedRematch } from './invitations';
+import { acceptRankedChallenge, acceptRankedRematch, createRankedChallenge, expireRankedInvitations, pendingRankedChallenge, pendingRankedRematch, requestRankedRematch } from './invitations';
 import { acceptQuickRematch, expireQuickRematches, pendingQuickRematch, requestQuickRematch } from './quick-rematch';
 import { recordClientTelemetry, recordTelemetryEvent } from './metrics';
 import { pruneExpiredGuestData } from './maintenance';
@@ -100,6 +100,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         match,
         room: match ? null : openRoomForSession(db, session),
         rankedQueue: session.uid && !match ? rankedQueueStatus(db, session.uid) : null,
+        rankedChallenge: session.uid && !match ? pendingRankedChallenge(db, session.uid) : null,
       });
     }
 
@@ -162,6 +163,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       return json(res, 201, { invitation: createRankedChallenge(db, session.uid) });
+    }
+    if (path === '/api/ranked/challenges/current' && method === 'GET') {
+      const session = requireSession(req, res, db);
+      if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
+      return json(res, 200, { invitation: pendingRankedChallenge(db, session.uid) });
     }
     if (path === '/api/ranked/challenges/accept' && method === 'POST') {
       const session = requireSession(req, res, db);

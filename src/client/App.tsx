@@ -739,6 +739,13 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
 
   const refreshQueue = async () => {
     const response = await api.getRankedQueue();
+    if (!response.queue && queue?.state === "readying" && queue.matchId) {
+      const snapshot = (await api.getMatch<PublicMatch>(queue.matchId)).match;
+      if (snapshot.state && snapshot.player) {
+        onMatch(snapshot);
+        return;
+      }
+    }
     if (!response.queue && queue?.state === "readying") setInviteUrl("");
     setQueue((current) => !response.queue && (current?.state === "searching" || current?.state === "readying")
       ? { state: current.state === "searching" ? "timed-out" : "ready-expired", matchId: null, competitiveMultiplier: null, readyDeadline: null }
@@ -753,7 +760,12 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
       setSignedIn(session.signedIn);
       setProfile(session.profile);
       setClientId(config.googleClientId);
-      if (session.signedIn && session.profile?.handle) void refreshQueue();
+      if (session.signedIn && session.profile?.handle) {
+        if (!inviteIntent) void api.getCurrentRankedChallenge()
+          .then(({ invitation }) => active && setInviteUrl(invitation?.inviteUrl ?? ""))
+          .catch(() => undefined);
+        void refreshQueue();
+      }
     }).catch((reason) => active && setError(reason instanceof Error ? reason.message : "Ranked could not be loaded."));
     return () => { active = false; };
   }, []);
@@ -925,7 +937,7 @@ export function App() {
   useEffect(() => {
     if (inviteIntent || guestInvite || quickRematchToken) return;
     let active = true;
-    api.getResume().then(({ match, room, rankedQueue }) => {
+    api.getResume().then(({ match, room, rankedQueue, rankedChallenge }) => {
       if (!active) return;
       if (match) {
         setSolo({ mode: match.mode, difficulty: "Normal" });
@@ -934,7 +946,7 @@ export function App() {
       } else if (room) {
         setResumedRoom(room);
         setScreen((current) => current === "home" ? "room" : current);
-      } else if (rankedQueue) {
+      } else if (rankedQueue || rankedChallenge) {
         setScreen((current) => current === "home" ? "ranked" : current);
       } else {
         void api.trackEvent("homepage_opened").catch(() => undefined);
