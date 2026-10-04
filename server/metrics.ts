@@ -108,7 +108,7 @@ export function metricsReport(db: Database.Database, now = Date.now()) {
   const count = (sql: string) => (db.prepare(sql).get() as { count: number }).count;
   const completedBy = (mode: string, bot: boolean) => completed.filter((match) => match.mode === mode && (botSide(match) !== null) === bot).length;
   const botRematches = (mode: string) => count(`SELECT COUNT(DISTINCT parent_match_id) AS count FROM matches
-    WHERE mode = '${mode}' AND parent_match_id IS NOT NULL`);
+    WHERE mode = '${mode}' AND bot_difficulty IS NOT NULL AND parent_match_id IS NOT NULL`);
   const rematch = {
     practiceBot: { selected: botRematches('practice'), eligible: completedBy('practice', true) },
     quickBot: { selected: botRematches('quick'), eligible: completedBy('quick', true) },

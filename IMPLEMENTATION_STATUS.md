@@ -2,6 +2,12 @@
 
 The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.md` records the approved D1–D10 decisions and the complete acceptance criteria. This status tracks evidence without changing those requirements.
 
+## Latest audit corrections (2026-10-04)
+
+- Equal-revision snapshots now preserve the player's confirmed lock until the round advances. A failed lock request refreshes authoritative state, and an accepted forward-round snapshot clears the old action selection. Focused regressions cover stale unlocked polls and pending lock requests.
+- Quick bot rematch counts now require a non-null bot difficulty, so human rematches do not enter the bot funnel. Ranked authentication starts are recorded from the Google Identity button click callback, while completion remains tied to server-verified sign-in.
+- The audit confirmed that live staging/OAuth, scheduled off-disk backups, edge-wide rate limits, external monitoring, and Ranked incident retention still require host/account configuration and release policy. Local tests do not satisfy these deployment gates.
+
 ## Verified in development and CI
 
 - Pure 5×5 rules, Energy, simultaneous resolution, bots, match persistence, guest room authorization, Ranked queue/ready/settlement, rematches, and leaderboard service behavior have automated coverage. `npm test` passes **159 tests across 21 files**, including deadline ordering and per-match retry isolation, corrupt stored-state voids, bot matches with either initial side and swapped rematches, Practice restart idempotency, Ranked placement privacy, rendered progression views, stale match snapshot rejection, play continuing while a round reveal is visible, unsafe-request origin checks, transactional SQLite migrations, and browser security headers. The D10 test checks every legal cross-player action pairing involving Override on a representative board and all same-target attempts against the other actions. Fixed-seed Easy, Normal, and Hard bot matches choose legal actions, terminate, and reproduce the same action traces.

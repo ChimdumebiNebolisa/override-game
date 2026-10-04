@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { createInitialState, type RoundResult } from '../shared/rules';
-import { RevealPanel, roundActionsDisabled } from './App';
+import { RevealPanel, roundActionsDisabled, snapshotKeepsRoundLocked } from './App';
 
 const result: RoundResult = {
   state: createInitialState(),
@@ -27,5 +27,14 @@ describe('in-match round feedback', () => {
     expect(roundActionsDisabled('decision', false)).toBe(false);
     expect(roundActionsDisabled('decision', true)).toBe(true);
     expect(roundActionsDisabled('transition', false)).toBe(true);
+  });
+
+  it('does not let an equal-revision unlocked poll undo this player’s confirmed lock', () => {
+    expect(snapshotKeepsRoundLocked({ status: 'decision', snapshotLocked: false, locking: false, lockedRound: 7, round: 7 })).toBe(true);
+    expect(snapshotKeepsRoundLocked({ status: 'decision', snapshotLocked: false, locking: false, lockedRound: 7, round: 8 })).toBe(false);
+  });
+
+  it('keeps the action locked while a lock request is still pending', () => {
+    expect(snapshotKeepsRoundLocked({ status: 'decision', snapshotLocked: false, locking: true, lockedRound: null, round: 7 })).toBe(true);
   });
 });

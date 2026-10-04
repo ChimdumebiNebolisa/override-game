@@ -43,6 +43,14 @@ test.each(['A', 'B'] as const)('report separates bot rematches and passes with t
       .run(quick, JSON.stringify(timeoutRound));
     createBotMatch(db, session, 'Player', 'practice', 'easy', practice);
     createBotMatch(db, session, 'Player', 'quick', 'hard', quick);
+    db.prepare(`INSERT INTO matches (id, mode, parent_match_id, player_a_key, player_b_key, player_a_name, player_b_name,
+      state_json, decision_duration_ms, status, started_at, bot_difficulty)
+      VALUES ('human-rematch-parent', 'quick', NULL, 'human-a', 'human-b', 'Alpha', 'Bravo', ?, 5000, 'finished', 1, NULL)`)
+      .run(JSON.stringify(final));
+    db.prepare(`INSERT INTO matches (id, mode, parent_match_id, player_a_key, player_b_key, player_a_name, player_b_name,
+      state_json, decision_duration_ms, status, bot_difficulty)
+      VALUES ('human-rematch-child', 'quick', 'human-rematch-parent', 'human-a', 'human-b', 'Alpha', 'Bravo', ?, 5000, 'decision', NULL)`)
+      .run(JSON.stringify(createInitialState()));
     db.prepare("INSERT INTO pending_actions (match_id, round, player, action_json, locked_at) VALUES (?, 4, 'A', ?, 4)")
       .run(quick, JSON.stringify({ type: 'override', target: 24 }));
     recordClientTelemetry(db, session.id, 'homepage_opened', null, 100);
@@ -54,8 +62,9 @@ test.each(['A', 'B'] as const)('report separates bot rematches and passes with t
     assert.equal(report.gameplay.automaticTimeoutPassRate, 0.5);
     assert.equal(report.gameplay.actionDistribution.human.override, 0);
     assert.equal(report.rematchRates.practiceBot.rate, 1);
+    assert.equal(report.rematchRates.quickBot.selected, 1);
     assert.equal(report.rematchRates.quickBot.rate, 1);
-    assert.equal(report.rematchRates.quickHuman.rate, null);
+    assert.equal(report.rematchRates.quickHuman.rate, 0);
     assert.equal(report.sideBalance.easyBot.aWins, 1);
     assert.equal(report.sideBalance.hardBot.aWins, 1);
     assert.ok(!JSON.stringify(report).includes('"target":24'));

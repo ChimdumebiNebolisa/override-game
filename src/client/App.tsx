@@ -99,6 +99,16 @@ export function roundActionsDisabled(status: PublicMatch["status"], locked: bool
   return status !== "decision" || locked;
 }
 
+export function snapshotKeepsRoundLocked({ status, snapshotLocked, locking, lockedRound, round }: {
+  status: PublicMatch["status"];
+  snapshotLocked: boolean;
+  locking: boolean;
+  lockedRound: number | null;
+  round: number;
+}): boolean {
+  return snapshotLocked || status !== "decision" || locking || lockedRound === round;
+}
+
 function coordinate(index: number) {
   return `${String.fromCharCode(65 + (index % 5))}${Math.floor(index / 5) + 1}`;
 }
@@ -264,6 +274,8 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   const [target, setTarget] = useState<number | null>(null);
   const [timeLeft, setTimeLeft] = useState(() => Math.max(0, Math.ceil(((initialMatch.deadline ?? initialMatch.serverNow) - initialMatch.serverNow) / 1000)));
   const [locked, setLocked] = useState(initialMatch.locked);
+  const currentRoundRef = useRef(initialMatch.state.round);
+  const lockedRoundRef = useRef(initialMatch.locked ? initialMatch.state.round : null);
   const [reveal, setReveal] = useState(initialMatch.status === "decision" ? null : initialMatch.lastResult);
   const acknowledgedRoundRef = useRef(initialMatch.status === "decision" ? initialMatch.state.round : initialMatch.state.round - 1);
   const [showFinalResult, setShowFinalResult] = useState(initialMatch.status === "finished");
@@ -315,7 +327,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       receiveSnapshot(response.match);
     } catch (reason) {
       setNetworkError(reason instanceof Error ? reason.message : "The move could not be locked.");
-      setLocked(false);
+      try {
+        receiveSnapshot((await api.getMatch<PublicMatch>(initialMatch.id)).match);
+      } catch { /* The next poll will reconcile the lock state. */ }
     } finally {
       lockingRef.current = false;
     }
@@ -323,6 +337,13 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
 
   const receiveSnapshot = (snapshot: PublicMatch, acknowledgeRound?: number): boolean => {
     if (!snapshotIsCurrent(snapshot, revisionRef.current)) return false;
+    const advancedRound = snapshot.state.round > currentRoundRef.current;
+    if (advancedRound) {
+      currentRoundRef.current = snapshot.state.round;
+      lockedRoundRef.current = null;
+      setActionType("expand");
+      setTarget(null);
+    }
     if (acknowledgeRound !== undefined) acknowledgedRoundRef.current = acknowledgeRound;
     setMatch(snapshot.state);
     setServerStatus(snapshot.status);
@@ -331,7 +352,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
     setRevision(snapshot.revision);
     revisionRef.current = snapshot.revision;
     setResultType(snapshot.resultType);
-    setLocked(snapshot.locked || snapshot.status !== "decision");
+    if (snapshot.locked) lockedRoundRef.current = snapshot.state.round;
+    setLocked(snapshotKeepsRoundLocked({ status: snapshot.status, snapshotLocked: snapshot.locked,
+      locking: lockingRef.current, lockedRound: lockedRoundRef.current, round: snapshot.state.round }));
     setAfkWarning(Boolean(snapshot.afkWarning));
     const nextDeadline = snapshot.deadline ? Date.now() + (snapshot.deadline - snapshot.serverNow) : null;
     setDeadlineAt((current) => current !== null && nextDeadline !== null && Math.abs(current - nextDeadline) < 250 ? current : nextDeadline);
@@ -970,7 +993,6 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
         nonce,
         callback: ({ credential }) => {
           setBusy(true);
-          void api.trackEvent("ranked_auth_started", "ranked").catch(() => undefined);
           api.googleSignIn(credential).then((response) => {
             setSignedIn(true);
             setProfile(response.profile);
@@ -993,7 +1015,10 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
         },
       });
       googleButton.current.replaceChildren();
-      window.google.accounts.id.renderButton(googleButton.current, { theme: "outline", size: "large", width: 320 });
+      window.google.accounts.id.renderButton(googleButton.current, {
+        theme: "outline", size: "large", width: 320,
+        click_listener: () => { void api.trackEvent("ranked_auth_started", "ranked").catch(() => undefined); },
+      });
     };
     if (window.google) { void render(); return () => { active = false; }; }
     const script = document.createElement("script");
