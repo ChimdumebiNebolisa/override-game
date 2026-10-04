@@ -77,3 +77,16 @@ describe('live subscriptions', () => {
     expect(FakeWebSocket.sockets).toHaveLength(1);
   });
 });
+
+it('marks API requests as same-origin JSON requests', async () => {
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response('{"recorded":true}', {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  }));
+  vi.stubGlobal('fetch', fetchMock);
+  await api.trackEvent('homepage_opened');
+  expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
+    'Content-Type': 'application/json',
+    'X-Requested-With': 'override-game',
+  });
+});

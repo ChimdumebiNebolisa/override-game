@@ -5,7 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { openDatabase } from './db';
 import { port, publicOrigin } from './config';
 import { attachGoogleIdentity, claimHandle, getPublicProfile, issueGoogleNonce, renameHandle } from './auth';
-import { HttpError, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
+import { HttpError, assertMutationOrigin, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
 import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, reconcilePresenceOnStartup, resignMatch } from './matches';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
 import { acknowledgeRankedReady, clearRankedReadyPresenceOnStartup, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, markRankedReadyPresence, publicRankedSettlement, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
@@ -90,9 +90,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
     const method = req.method ?? 'GET';
-    if (method !== 'GET' && method !== 'HEAD' && req.headers.origin && req.headers.origin !== publicOrigin) {
-      throw new HttpError(403, 'Request origin is not allowed');
-    }
+    if (method !== 'GET' && method !== 'HEAD') assertMutationOrigin(req);
 
     if (path === '/api/health' && method === 'GET') {
       try {
