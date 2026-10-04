@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { score, type MatchState, type RoundResult } from '../src/shared/rules';
 import { HttpError } from './http';
+import { botSide } from './matches';
 
 const CLIENT_EVENTS = new Set(['homepage_opened', 'mode_selected', 'opponent_selected', 'ranked_auth_started']);
 const EVENT_MODES = new Set(['practice', 'quick', 'ranked', 'practice-bot', 'quick-bot', 'quick-human', 'ranked-queue', 'ranked-friend']);
@@ -25,6 +26,7 @@ type MatchRow = {
   id: string;
   mode: 'practice' | 'quick' | 'ranked';
   bot_difficulty: 'easy' | 'normal' | 'hard' | null;
+  player_a_key: string;
   player_b_key: string;
   status: string;
   ready_a: number;
@@ -46,7 +48,7 @@ const sideCounts = () => ({ aWins: 0, bWins: 0, draws: 0, aWinRate: null as numb
 
 /** Aggregate only persisted, revealed rounds and terminal states; no pending action is read. */
 export function metricsReport(db: Database.Database, now = Date.now()) {
-  const matches = db.prepare(`SELECT id, mode, bot_difficulty, player_b_key, status, ready_a, ready_b, started_at, ended_at,
+  const matches = db.prepare(`SELECT id, mode, bot_difficulty, player_a_key, player_b_key, status, ready_a, ready_b, started_at, ended_at,
     state_json, result_type, disconnect_a, disconnect_b FROM matches`).all() as MatchRow[];
   const byId = new Map(matches.map((match) => [match.id, match]));
   const started = matches.filter((match) => match.started_at !== null);
@@ -69,7 +71,7 @@ export function metricsReport(db: Database.Database, now = Date.now()) {
     const result = JSON.parse(round.result_json) as RoundResult;
     for (const player of ['A', 'B'] as const) {
       const outcome = result.outcomes[player];
-      const bot = player === 'B' && match.player_b_key.startsWith('bot:');
+      const bot = player === botSide(match);
       const counts = bot ? botActions : humanActions;
       counts[outcome.action.type]++;
       if (bot) continue;
@@ -89,7 +91,7 @@ export function metricsReport(db: Database.Database, now = Date.now()) {
   };
   for (const match of completed) {
     if (match.result_type === 'no-contest') continue;
-    const bot = match.player_b_key.startsWith('bot:');
+    const bot = botSide(match) !== null;
     const key = bot ? match.bot_difficulty === 'easy' ? 'easyBot' : match.bot_difficulty === 'hard' ? 'hardBot' : 'normalBot'
       : match.mode === 'ranked' ? 'rankedHuman' : 'quickHuman';
     const winner = (JSON.parse(match.state_json) as MatchState).winner;
@@ -104,7 +106,7 @@ export function metricsReport(db: Database.Database, now = Date.now()) {
   const events = Object.fromEntries(eventRows.map((row) => [`${row.name}${row.mode ? `:${row.mode}` : ''}`, row.count]));
   const eventTotal = (name: string) => eventRows.filter((row) => row.name === name).reduce((sum, row) => sum + row.count, 0);
   const count = (sql: string) => (db.prepare(sql).get() as { count: number }).count;
-  const completedBy = (mode: string, bot: boolean) => completed.filter((match) => match.mode === mode && match.player_b_key.startsWith('bot:') === bot).length;
+  const completedBy = (mode: string, bot: boolean) => completed.filter((match) => match.mode === mode && (botSide(match) !== null) === bot).length;
   const botRematches = (mode: string) => count(`SELECT COUNT(DISTINCT parent_match_id) AS count FROM matches
     WHERE mode = '${mode}' AND parent_match_id IS NOT NULL`);
   const rematch = {

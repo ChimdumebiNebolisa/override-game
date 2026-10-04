@@ -60,6 +60,7 @@ export function openDatabase(path = databasePath): Database.Database {
       room_id TEXT,
       creation_key TEXT,
       parent_match_id TEXT REFERENCES matches(id),
+      restart_match_id TEXT REFERENCES matches(id),
       mode TEXT NOT NULL CHECK (mode IN ('quick', 'ranked', 'practice')),
       bot_difficulty TEXT,
       player_a_key TEXT NOT NULL,
@@ -217,6 +218,9 @@ export function openDatabase(path = databasePath): Database.Database {
   if (!matchColumns.some((column) => column.name === 'parent_match_id')) {
     db.exec('ALTER TABLE matches ADD COLUMN parent_match_id TEXT REFERENCES matches(id)');
   }
+  if (!matchColumns.some((column) => column.name === 'restart_match_id')) {
+    db.exec('ALTER TABLE matches ADD COLUMN restart_match_id TEXT REFERENCES matches(id)');
+  }
   if (!matchColumns.some((column) => column.name === 'ready_connected_a')) {
     db.exec('ALTER TABLE matches ADD COLUMN ready_connected_a INTEGER NOT NULL DEFAULT 0');
   }
@@ -225,7 +229,9 @@ export function openDatabase(path = databasePath): Database.Database {
   }
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS one_room_per_creation_key
     ON rooms(host_key, creation_key) WHERE creation_key IS NOT NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS one_bot_match_per_creation_key
-    ON matches(player_a_key, creation_key) WHERE creation_key IS NOT NULL AND bot_difficulty IS NOT NULL;`);
+    CREATE UNIQUE INDEX IF NOT EXISTS one_bot_match_per_human_creation_key
+    ON matches(CASE WHEN player_a_key LIKE 'bot:%' THEN player_b_key ELSE player_a_key END, creation_key)
+    WHERE creation_key IS NOT NULL AND bot_difficulty IS NOT NULL;
+    DROP INDEX IF EXISTS one_bot_match_per_creation_key;`);
   return db;
 }

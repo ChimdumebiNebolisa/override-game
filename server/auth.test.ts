@@ -86,6 +86,13 @@ test('public profile omits UID, email, and internal rename metadata', () => {
     handle: 'Player_1', rating: 1234, peakRating: 1300, placementProgress: 5,
     ratedMatchCount: 21, wins: 7, losses: 2, draws: 1, streak: 3,
   });
+
+  database.prepare(`INSERT INTO profiles (uid, handle, normalized_handle, rating, peak_rating, placement_progress,
+    rated_match_count, wins, losses, draws, streak, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run('placing-uid', 'Placing', 'placing', 1188, 1210, 4, 4, 2, 1, 1, 1, 10);
+  assert.deepEqual(getPublicProfile(database, 'placing-uid'), {
+    handle: 'Placing', placementProgress: 4,
+  });
 });
 
 test('Google ID token verifies signature, issuer, audience, expiry, and subject before session attachment', async () => {

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   createInitialState, resolveRound, score, validateAction,
@@ -12,6 +12,7 @@ export interface MatchRow {
   room_id: string | null;
   creation_key: string | null;
   parent_match_id: string | null;
+  restart_match_id: string | null;
   mode: 'quick' | 'ranked' | 'practice';
   bot_difficulty: BotDifficulty | null;
   player_a_key: string;
@@ -41,8 +42,31 @@ export interface MatchRow {
   result_type: string | null;
 }
 
+class UntrustworthyMatchData extends Error {}
+
 function stateOf(row: MatchRow): MatchState {
-  return JSON.parse(row.state_json) as MatchState;
+  let state: MatchState;
+  try { state = JSON.parse(row.state_json) as MatchState; }
+  catch { throw new UntrustworthyMatchData('Invalid saved match state'); }
+  if (!state || !Array.isArray(state.board) || state.board.length !== 25 ||
+      state.board.some((cell) => !['A', 'B', 'neutral'].includes(cell)) ||
+      !state.config || !Number.isSafeInteger(state.config.standardRounds) || state.config.standardRounds < 1 ||
+      !Number.isSafeInteger(state.config.suddenDeathRounds) || state.config.suddenDeathRounds < 0 ||
+      !Number.isSafeInteger(state.config.energyCap) || state.config.energyCap < 1 ||
+      !state.energy || !(['A', 'B'] as const).every((side) => Number.isSafeInteger(state.energy[side]) &&
+        state.energy[side] >= 0 && state.energy[side] <= state.config.energyCap) ||
+      !Number.isSafeInteger(state.round) || state.round < 1 ||
+      !['standard', 'sudden-death'].includes(state.phase) || !['active', 'finished'].includes(state.status) ||
+      ![null, 'A', 'B'].includes(state.winner)) {
+    throw new UntrustworthyMatchData('Invalid saved match state');
+  }
+  return state;
+}
+
+export function botSide(row: Pick<MatchRow, 'player_a_key' | 'player_b_key'>): Player | null {
+  if (row.player_a_key.startsWith('bot:')) return 'A';
+  if (row.player_b_key.startsWith('bot:')) return 'B';
+  return null;
 }
 
 export function getMatch(db: Database.Database, id: string): MatchRow | null {
@@ -117,48 +141,75 @@ export function parseAction(value: unknown): Action {
   throw new HttpError(400, 'Unknown action');
 }
 
-export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy', parentMatchId?: string, creationKey?: string) {
+export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy', parentMatchId?: string, creationKey?: string, restartMatchId?: string) {
   return db.transaction(() => {
     if (creationKey) {
-      const existing = db.prepare(`SELECT * FROM matches WHERE player_a_key = ? AND creation_key = ?
-        AND bot_difficulty IS NOT NULL`).get(session.id, creationKey) as MatchRow | undefined;
+      const existing = db.prepare(`SELECT * FROM matches WHERE (player_a_key = ? OR player_b_key = ?) AND creation_key = ?
+        AND bot_difficulty IS NOT NULL`).get(session.id, session.id, creationKey) as MatchRow | undefined;
       if (existing) {
-        if (existing.mode !== mode || existing.bot_difficulty !== difficulty || existing.player_a_name !== name ||
-            existing.parent_match_id !== (parentMatchId ?? null)) {
+        const existingName = existing.player_a_key === session.id ? existing.player_a_name : existing.player_b_name;
+        if (existing.mode !== mode || existing.bot_difficulty !== difficulty || existingName !== name ||
+            existing.parent_match_id !== (parentMatchId ?? null) || existing.restart_match_id !== (restartMatchId ?? null)) {
           throw new HttpError(409, 'Creation key was used for another bot match');
         }
         return existing.id;
       }
     }
+    if (parentMatchId && restartMatchId) throw new HttpError(400, 'A bot match cannot rematch and restart at once');
+    const restarted = restartMatchId ? getMatch(db, restartMatchId) : null;
+    if (restartMatchId && (!restarted || mode !== 'practice' || parentMatchId || restarted.mode !== 'practice' ||
+        restarted.bot_difficulty !== difficulty || !playerFor(restarted, session) || !botSide(restarted) ||
+        !['decision', 'transition', 'grace'].includes(restarted.status))) {
+      throw new HttpError(404, 'Active Practice match not found');
+    }
+    let humanSide: Player;
     if (parentMatchId) {
       const parent = getMatch(db, parentMatchId);
-      if (!parent || parent.mode !== mode || parent.player_a_key !== session.id ||
-          !parent.player_b_key.startsWith('bot:') || parent.status !== 'finished') {
+      if (!parent || parent.mode !== mode || !playerFor(parent, session) ||
+          !botSide(parent) || parent.status !== 'finished') {
         throw new HttpError(404, 'Completed bot match not found');
       }
-    }
+      humanSide = parent.player_a_key === session.id ? 'B' : 'A';
+    } else humanSide = randomBytes(1)[0] % 2 === 0 ? 'A' : 'B';
     const now = Date.now();
-    const recent = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ?
-      AND player_b_key LIKE 'bot:%' AND started_at > ?`).get(session.id, now - 5 * 60_000) as { count: number };
-    const active = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ?
-      AND player_b_key LIKE 'bot:%' AND status IN ('decision', 'transition', 'grace')`).get(session.id) as { count: number };
+    const recent = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE (player_a_key = ? OR player_b_key = ?)
+      AND bot_difficulty IS NOT NULL AND started_at > ?`).get(session.id, session.id, now - 5 * 60_000) as { count: number };
+    const active = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE (player_a_key = ? OR player_b_key = ?)
+      AND bot_difficulty IS NOT NULL AND status IN ('decision', 'transition', 'grace') AND id <> ?`)
+      .get(session.id, session.id, restartMatchId ?? '') as { count: number };
     if (recent.count >= 10 || active.count >= 3) throw new HttpError(429, 'Finish an existing bot match before starting another');
     const id = randomUUID();
     db.prepare(`INSERT INTO matches
-      (id, room_id, creation_key, parent_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status, deadline, started_at, revision)
-      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, 'Bot', ?, 'decision', ?, ?, 1)`)
-      .run(id, creationKey ?? null, parentMatchId ?? null, mode, difficulty, session.id, `bot:${id}`, name, JSON.stringify(createInitialState()), now + 5_000, now);
+      (id, room_id, creation_key, parent_match_id, restart_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status, deadline, started_at, revision)
+      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'decision', ?, ?, 1)`)
+      .run(id, creationKey ?? null, parentMatchId ?? null, restartMatchId ?? null, mode, difficulty,
+        humanSide === 'A' ? session.id : `bot:${id}`, humanSide === 'B' ? session.id : `bot:${id}`,
+        humanSide === 'A' ? name : 'Bot', humanSide === 'B' ? name : 'Bot',
+        JSON.stringify(createInitialState()), now + 5_000, now);
+    if (restarted) {
+      const finalState: MatchState = { ...stateOf(restarted), status: 'finished', winner: null, endingReason: null };
+      const stopped = db.prepare(`UPDATE matches SET state_json = ?, status = 'voided', deadline = NULL,
+        transition_at = NULL, grace_until = NULL, ended_at = ?, result_type = 'practice-restarted', revision = revision + 1
+        WHERE id = ? AND status IN ('decision', 'transition', 'grace')`).run(JSON.stringify(finalState), now, restarted.id);
+      if (stopped.changes !== 1) throw new Error('Could not stop the restarted Practice match');
+    }
     return id;
   }).immediate();
 }
 
 function chooseCommittedBotAction(db: Database.Database, row: MatchRow, state: MatchState, now: number): Action {
+  const side = botSide(row);
+  if (!side) throw new Error('Bot participant missing');
+  const human = side === 'A' ? 'B' : 'A';
   const revealed = db.prepare('SELECT result_json FROM round_results WHERE match_id = ? ORDER BY round DESC LIMIT 3')
     .all(row.id) as { result_json: string }[];
-  const history = revealed.reverse().map((item) => (JSON.parse(item.result_json) as RoundResult).outcomes.A.action);
-  const bot = chooseBotAction(state, 'B', row.bot_difficulty ?? 'easy', history, state.round);
+  const history = revealed.reverse().map((item) => {
+    try { return parseAction((JSON.parse(item.result_json) as RoundResult).outcomes[human].action); }
+    catch { throw new UntrustworthyMatchData('Invalid saved revealed action'); }
+  });
+  const bot = chooseBotAction(state, side, row.bot_difficulty ?? 'easy', history, state.round);
   db.prepare('INSERT INTO pending_actions (match_id, round, player, action_json, locked_at) VALUES (?, ?, ?, ?, ?)')
-    .run(row.id, state.round, 'B', JSON.stringify(bot), now);
+    .run(row.id, state.round, side, JSON.stringify(bot), now);
   return bot;
 }
 
@@ -187,7 +238,7 @@ export function lockAction(db: Database.Database, id: string, session: Session, 
       if (String(error).includes('UNIQUE constraint')) throw new HttpError(409, 'Move already locked');
       throw error;
     }
-    if (row.player_b_key.startsWith('bot:') && player === 'A') {
+    if (botSide(row) && player !== botSide(row)) {
       chooseCommittedBotAction(db, row, state, now);
       resolveMatch(db, id, now, true);
     }
@@ -197,7 +248,9 @@ export function lockAction(db: Database.Database, id: string, session: Session, 
 function pendingAction(db: Database.Database, id: string, round: number, player: Player): Action | null {
   const found = db.prepare('SELECT action_json FROM pending_actions WHERE match_id = ? AND round = ? AND player = ?')
     .get(id, round, player) as { action_json: string } | undefined;
-  return found ? JSON.parse(found.action_json) as Action : null;
+  if (!found) return null;
+  try { return parseAction(JSON.parse(found.action_json)); }
+  catch { throw new UntrustworthyMatchData('Invalid saved action'); }
 }
 
 function graceDuration(disconnects: number): number {
@@ -225,20 +278,27 @@ export function resolveMatch(db: Database.Database, id: string, now = Date.now()
     if (!row || row.status !== 'decision') return false;
     if (!allowEarlyBot && (row.deadline === null || now < row.deadline)) return false;
     const state = stateOf(row);
-    if (row.player_b_key.startsWith('bot:') && !pendingAction(db, id, state.round, 'B')) {
+    if (state.status !== 'active') throw new UntrustworthyMatchData('Saved active match is terminal');
+    const bot = botSide(row);
+    if (bot && !pendingAction(db, id, state.round, bot)) {
       chooseCommittedBotAction(db, row, state, now);
     }
     const actions = {
       A: pendingAction(db, id, state.round, 'A'),
       B: pendingAction(db, id, state.round, 'B'),
     };
+    for (const player of ['A', 'B'] as const) {
+      if (actions[player] && !validateAction(state, player, actions[player]).ok) {
+        throw new UntrustworthyMatchData('Saved action is illegal for its round');
+      }
+    }
     const offline = {
       A: offlineAtDeadline(db, id, 'A', row.deadline!),
       B: offlineAtDeadline(db, id, 'B', row.deadline!),
     };
     const misses = {
-      A: actions.A || offline.A ? 0 : row.afk_a + 1,
-      B: actions.B || offline.B || row.player_b_key.startsWith('bot:') ? 0 : row.afk_b + 1,
+      A: actions.A || offline.A || bot === 'A' ? 0 : row.afk_a + 1,
+      B: actions.B || offline.B || bot === 'B' ? 0 : row.afk_b + 1,
     };
     const aForfeit = misses.A >= 3 || disconnectsAtDeadline(db, id, 'A', row.disconnect_a, row.deadline!) >= 3;
     const bForfeit = misses.B >= 3 || disconnectsAtDeadline(db, id, 'B', row.disconnect_b, row.deadline!) >= 3;
@@ -280,6 +340,7 @@ export function startNextRound(db: Database.Database, id: string, now = Date.now
   return db.transaction(() => {
     const row = getMatch(db, id);
     if (!row || row.status !== 'transition' || row.transition_at === null || now < row.transition_at) return false;
+    if (stateOf(row).status !== 'active') throw new UntrustworthyMatchData('Saved active match is terminal');
     if (row.disconnected_a_at !== null || row.disconnected_b_at !== null) {
       const shortest = Math.min(
         row.disconnected_a_at !== null ? graceDuration(row.disconnect_a) : Infinity,
@@ -339,12 +400,12 @@ export function markConnected(db: Database.Database, id: string, player: Player,
 /** Treat sockets lost with a server process as offline before replaying overdue deadlines. */
 export function reconcilePresenceOnStartup(db: Database.Database, now = Date.now()): void {
   db.transaction(() => {
-    const matches = db.prepare(`SELECT id, player_b_key, status, deadline, disconnected_a_at, disconnected_b_at
+    const matches = db.prepare(`SELECT id, player_a_key, player_b_key, status, deadline, disconnected_a_at, disconnected_b_at
       FROM matches WHERE status IN ('decision', 'transition', 'grace') AND started_at IS NOT NULL`)
-      .all() as Pick<MatchRow, 'id' | 'player_b_key' | 'status' | 'deadline' | 'disconnected_a_at' | 'disconnected_b_at'>[];
+      .all() as Pick<MatchRow, 'id' | 'player_a_key' | 'player_b_key' | 'status' | 'deadline' | 'disconnected_a_at' | 'disconnected_b_at'>[];
     for (const match of matches) {
       for (const player of (['A', 'B'] as const)) {
-        if (player === 'B' && match.player_b_key.startsWith('bot:')) continue;
+        if (player === botSide(match)) continue;
         if (player === 'A' ? match.disconnected_a_at !== null : match.disconnected_b_at !== null) continue;
         const column = player === 'A' ? 'a' : 'b';
         const offlineAt = match.status === 'decision' && match.deadline !== null
@@ -367,6 +428,7 @@ export function expireGrace(db: Database.Database, id: string, now = Date.now())
     if (!aGone && !bGone) return false;
     const resultType = aGone && bGone ? 'no-contest' : 'forfeit';
     const state = stateOf(row);
+    if (state.status !== 'active') throw new UntrustworthyMatchData('Saved active match is terminal');
     const winner = resultType === 'forfeit' ? (aGone ? 'B' : 'A') : null;
     const finalState = { ...state, status: 'finished', winner, endingReason: resultType === 'forfeit' ? 'forfeit' : null };
     db.prepare(`UPDATE matches SET state_json = ?, status = 'finished', ended_at = ?, deadline = NULL,
@@ -401,6 +463,29 @@ export function resignMatch(db: Database.Database, id: string, session: Session,
   })();
 }
 
+function voidUntrustworthyMatch(db: Database.Database, id: string, now: number): boolean {
+  return db.transaction(() => {
+    const row = getMatch(db, id);
+    if (!row || !['decision', 'transition', 'grace'].includes(row.status)) return false;
+    let state: MatchState;
+    try { state = stateOf(row); }
+    catch (error) {
+      if (!(error instanceof UntrustworthyMatchData)) throw error;
+      // A void has no competitive result; provide a safe board for its error screen.
+      state = createInitialState();
+    }
+    const voidState: MatchState = { ...state, status: 'finished', winner: null, endingReason: null };
+    db.prepare(`UPDATE matches SET state_json = ?, status = 'voided', result_type = 'server-error',
+      deadline = NULL, transition_at = NULL, grace_until = NULL, ended_at = ?, last_result_json = NULL,
+      revision = revision + 1 WHERE id = ?`).run(JSON.stringify(voidState), now, id);
+    if (row.room_id) db.prepare("UPDATE rooms SET status = 'finished' WHERE id = ?").run(row.room_id);
+    db.prepare('DELETE FROM ranked_ownership WHERE match_id = ?').run(id);
+    return true;
+  }).immediate();
+}
+
+const deadlineFailureLogs = new Map<string, number>();
+
 export function dueMatches(db: Database.Database, now = Date.now()): string[] {
   const rows = db.prepare(`SELECT id FROM matches WHERE
     (status = 'decision' AND deadline <= ?) OR
@@ -409,7 +494,24 @@ export function dueMatches(db: Database.Database, now = Date.now()): string[] {
     .all(now, now, now) as { id: string }[];
   const changed: string[] = [];
   for (const row of rows) {
-    if (resolveMatch(db, row.id, now) || startNextRound(db, row.id, now) || expireGrace(db, row.id, now)) changed.push(row.id);
+    try {
+      if (resolveMatch(db, row.id, now) || startNextRound(db, row.id, now) || expireGrace(db, row.id, now)) changed.push(row.id);
+      deadlineFailureLogs.delete(row.id);
+    } catch (error) {
+      try {
+        if (error instanceof UntrustworthyMatchData && voidUntrustworthyMatch(db, row.id, now)) {
+          changed.push(row.id);
+          deadlineFailureLogs.delete(row.id);
+          continue;
+        }
+      } catch { /* Recovery writes can also fail; retain the match for the next attempt. */ }
+      const lastLog = deadlineFailureLogs.get(row.id);
+      if (lastLog === undefined || now - lastLog >= 60_000) {
+        deadlineFailureLogs.set(row.id, now);
+        // Persisted actions and JSON parse details must not enter logs before reveal.
+        console.error(JSON.stringify({ at: new Date(now).toISOString(), event: 'match_deadline_retry', matchId: row.id }));
+      }
+    }
   }
   return changed;
 }

@@ -8,7 +8,7 @@ import { attachGoogleIdentity, claimHandle, getPublicProfile, issueGoogleNonce, 
 import { HttpError, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
 import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, reconcilePresenceOnStartup, resignMatch } from './matches';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
-import { acknowledgeRankedReady, clearRankedReadyPresenceOnStartup, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, markRankedReadyPresence, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
+import { acknowledgeRankedReady, clearRankedReadyPresenceOnStartup, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, markRankedReadyPresence, publicRankedSettlement, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
 import { leaderboard, profileView } from './progression';
 import { acceptRankedChallenge, acceptRankedRematch, createRankedChallenge, expireRankedInvitations, pendingRankedChallenge, pendingRankedRematch, requestRankedRematch } from './invitations';
 import { acceptQuickRematch, expireQuickRematches, pendingQuickRematch, requestQuickRematch } from './quick-rematch';
@@ -177,7 +177,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const mode = body.mode === 'practice' ? 'practice' : 'quick';
       const difficulty = body.difficulty === 'normal' || body.difficulty === 'hard' ? body.difficulty : 'easy';
       const parentMatchId = typeof body.parentMatchId === 'string' ? body.parentMatchId : undefined;
-      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty, parentMatchId, parseCreationKey(body.creationKey));
+      const restartMatchId = typeof body.restartMatchId === 'string' ? body.restartMatchId : undefined;
+      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty, parentMatchId, parseCreationKey(body.creationKey), restartMatchId);
       logMatchEvent('match_started', id);
       return json(res, 201, { match: matchForSession(db, id, session) });
     }
@@ -276,12 +277,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (settlementMatch && method === 'GET') {
       const session = requireSession(req, res, db);
       const match = matchForSession(db, settlementMatch[1], session);
-      if (match.mode !== 'ranked') throw new HttpError(404, 'Settlement not found');
+      if (match.mode !== 'ranked' || !match.player) throw new HttpError(404, 'Settlement not found');
       const settlement = getRankedSettlement(db, settlementMatch[1]);
       if (!settlement) return json(res, 200, { settlement: null });
-      const { id: _idA, ...playerA } = settlement.playerA;
-      const { id: _idB, ...playerB } = settlement.playerB;
-      return json(res, 200, { settlement: { multiplier: settlement.multiplier, playerA, playerB } });
+      return json(res, 200, { settlement: publicRankedSettlement(settlement, match.player) });
     }
     const quickRematch = path.match(/^\/api\/matches\/([a-f0-9-]{36})\/rematch$/);
     if (quickRematch && (method === 'GET' || method === 'POST')) {
@@ -430,13 +429,18 @@ setInterval(() => {
 setInterval(() => {
   try {
     for (const id of dueMatches(db)) {
-      const match = getMatch(db, id);
-      logMatchEvent(match?.status === 'finished' ? 'match_finished' : match?.status === 'decision' ? 'round_opened' : 'round_resolved', id);
-      if (match?.room_id) notifyRoom(match.room_id);
-      notifyMatch(id);
-      if (match?.mode === 'ranked' && match.status === 'finished') {
-        settleRankedMatch(db, id);
-        logMatchEvent('ranked_settled', id);
+      try {
+        const match = getMatch(db, id);
+        logMatchEvent(match?.status === 'voided' ? 'match_voided' : match?.status === 'finished' ? 'match_finished' : match?.status === 'decision' ? 'round_opened' : 'round_resolved', id);
+        if (match?.room_id) notifyRoom(match.room_id);
+        notifyMatch(id);
+        if (match?.mode === 'ranked' && match.status === 'finished') {
+          settleRankedMatch(db, id);
+          logMatchEvent('ranked_settled', id);
+        }
+      } catch {
+        // Terminal settlements have their own retry worker; polling also recovers a missed notification.
+        console.error(JSON.stringify({ event: 'match_deadline_followup_failed', matchId: id }));
       }
     }
     for (const id of expireRankedLeases(db)) notifyMatch(id);

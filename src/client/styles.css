@@ -290,7 +290,8 @@ dialog:not([open]) { display:none; }
 .leaderboard-list li { min-height:58px; display:grid; grid-template-columns:50px 1fr 100px 80px; align-items:center; gap:10px; border-bottom:1px solid var(--line); }
 .leaderboard-list li > b { color:var(--blue); font:700 13px var(--mono); }
 .leaderboard-list li > strong { font:700 18px var(--display); text-transform:uppercase; }
-.leaderboard-list li > span { color:var(--muted); font-size:12px; }
+.leaderboard-list li > span { display:flex; flex-direction:column; gap:2px; color:var(--muted); font-size:12px; }
+.leaderboard-list li > span small { font:9px/1.35 var(--mono); }
 .leaderboard-list li > em { text-align:right; font:700 12px var(--mono); font-style:normal; }
 .rivals-panel { margin:34px 0 24px; padding-top:25px; border-top:4px solid var(--amber); }
 .rivals-panel h2 { margin:0 0 8px; font:750 31px var(--display); text-transform:uppercase; }

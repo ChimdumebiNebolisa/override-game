@@ -181,6 +181,20 @@ Maintain a fake-clock match harness so a 5-second human round, ready timeout, 24
 
 The MVP is complete only when all three PRD §50 journeys work end to end, the §43–45 acceptance tests pass, Ranked settlement cannot duplicate or be client-controlled, pending actions and lock timing remain private, the leaderboard contains only eligible humans, and mobile/accessible play is usable. Record any deliberate balance changes separately from the frozen product invariants. If a required backend capability cannot be demonstrated, stop that milestone and replace the design rather than weakening the PRD silently.
 
+## 15. Implementation audit addendum — 2026-10-04
+
+The implementation audit found gaps between the plan and the current code. The following corrections are recorded as implementation requirements; the approved D1–D10 product decisions in §10 remain the source of truth.
+
+| Audit finding | Remediation | Verification |
+| --- | --- | --- |
+| Solo bot matches always placed the human on side A, and rematches did not consistently swap sides. | Randomize the first human side server-side; swap it on each rematch and support either side across bot turns, deadlines, presence, metrics, and request idempotency. | Test both initial sides, repeated side swaps, bot history, creation-key uniqueness, and metrics. |
+| Restarting an active Practice match could leave the old match active. | Create or reuse the replacement and terminally void the source match in one transaction. | Retry the same request and verify one replacement and no active source match. |
+| One corrupt or transiently failing due match could stop the worker from processing other matches; retry count alone could misclassify a transient failure. | Isolate each due match. Void only explicitly untrustworthy saved state/actions without competitive effects; retry database failures. | Inject corrupt JSON, invalid state/actions, failed writes, and a healthy neighboring match. |
+| Ranked placement responses exposed provisional competitive fields, settlement responses exposed both players, and leaderboard rows omitted required record fields. | Enforce placement privacy in server projections, return only the requesting player's settlement, and include W-L-D and streak in leaderboard entries. | Test pre-placement, fifth-match, post-placement responses and rendered UI; confirm opponent settlement fields are absent. |
+| Profile and leaderboard request failures could look like confirmed empty data. | Show loading and error states separately from empty states. | Verify the production build and rendered Ranked component cases. |
+
+Local remediation verification on this date: `npm test` passed 147 tests across 17 files, `npm run build` passed, and `git diff --check` passed. Real OAuth, persistent-host staging and backup restoration, the full two-device acceptance run, human playtest, human screen-reader review, and edge rate limiting remain release gates in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+
 ## Technical references for the recommended stack
 
 - [PostgreSQL transaction isolation](https://www.postgresql.org/docs/current/sql-set-transaction.html) and [row-locking queries](https://www.postgresql.org/docs/current/sql-select.html) inform the atomic-claim/retry design; exact schema and isolation level must be validated in the M0 spike.

@@ -6,6 +6,7 @@ import { afterEach, test, vi } from 'vitest';
 import { openDatabase } from './db.js';
 import { HttpError } from './http.js';
 import { dueMatches, markConnected, resignMatch, resolveMatch } from './matches.js';
+import { settleRatedMatch } from '../src/shared/rating.js';
 import {
   acknowledgeRankedReady,
   clearRankedReadyPresenceOnStartup,
@@ -14,6 +15,7 @@ import {
   expireRankedReady,
   joinRankedQueue,
   markRankedReadyPresence,
+  publicRankedSettlement,
   rankedQueueStatus,
   settleRankedMatch,
   settlePendingRankedMatches,
@@ -50,6 +52,43 @@ function assertHttpError(error: unknown, status: number): void {
   assert.ok(error instanceof HttpError);
   assert.equal(error.status, status);
 }
+
+test('settlement response exposes only the requester and reveals RP on the fifth placement', () => {
+  const ratingProfile = (placementProgress: number) => ({
+    rating: 1000, peakRating: 1000, placementProgress, ratedMatchCount: placementProgress,
+    wins: 0, losses: 0, draws: 0, streak: 0,
+  });
+  const beforeFifth = settleRatedMatch({
+    playerA: { id: 'private-a', profile: ratingProfile(3) },
+    playerB: { id: 'private-b', profile: ratingProfile(3) },
+    outcomeA: 'win', outcomeB: 'loss', multiplier: 1,
+  });
+  assert.deepEqual(publicRankedSettlement(beforeFifth, 'A'), {
+    multiplier: 1,
+    player: { outcome: 'win', placementProgress: 4 },
+  });
+
+  const fifth = settleRatedMatch({
+    playerA: { id: 'private-a', profile: ratingProfile(4) },
+    playerB: { id: 'private-b', profile: ratingProfile(4) },
+    outcomeA: 'win', outcomeB: 'loss', multiplier: 1,
+  });
+  assert.deepEqual(publicRankedSettlement(fifth, 'A'), {
+    multiplier: 1,
+    player: { outcome: 'win', placementProgress: 5, ratingAfter: 1032 },
+  });
+  const afterPlacement = settleRatedMatch({
+    playerA: { id: 'private-a', profile: ratingProfile(5) },
+    playerB: { id: 'private-b', profile: ratingProfile(5) },
+    outcomeA: 'win', outcomeB: 'loss', multiplier: 1,
+  });
+  assert.deepEqual(publicRankedSettlement(afterPlacement, 'A'), {
+    multiplier: 1,
+    player: { outcome: 'win', placementProgress: 5, delta: 16, ratingBefore: 1000, ratingAfter: 1016 },
+  });
+  assert.equal('playerA' in publicRankedSettlement(fifth, 'B'), false);
+  assert.equal('playerB' in publicRankedSettlement(fifth, 'B'), false);
+});
 
 function bindBoth(db: ReturnType<typeof openDatabase>, matchId: string, now: number): void {
   const match = row<{ player_a_key: string; player_b_key: string }>(db,

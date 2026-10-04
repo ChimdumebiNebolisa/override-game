@@ -15,12 +15,12 @@ describe('Ranked progression', () => {
   it('gives placed humans competition ranks and excludes unfinished placements', () => {
     db = openDatabase(':memory:');
     const insert = db.prepare(`INSERT INTO profiles
-      (uid, handle, normalized_handle, rating, placement_progress, created_at)
-      VALUES (?, ?, ?, ?, ?, 1)`);
-    insert.run('a', 'Alpha', 'alpha', 1400, 5);
-    insert.run('b', 'Bravo', 'bravo', 1400, 5);
-    insert.run('c', 'Charlie', 'charlie', 1380, 5);
-    insert.run('unplaced', 'Newbie', 'newbie', 2000, 4);
+      (uid, handle, normalized_handle, rating, placement_progress, wins, losses, draws, streak, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`);
+    insert.run('a', 'Alpha', 'alpha', 1400, 5, 7, 2, 1, 3);
+    insert.run('b', 'Bravo', 'bravo', 1400, 5, 5, 4, 0, 1);
+    insert.run('c', 'Charlie', 'charlie', 1380, 5, 3, 3, 2, 0);
+    insert.run('unplaced', 'Newbie', 'newbie', 2000, 4, 4, 0, 0, 4);
 
     const board = leaderboard(db, 'c');
     expect(board.top.map((row) => [row.handle, row.rank])).toEqual([
@@ -28,6 +28,11 @@ describe('Ranked progression', () => {
     ]);
     expect(board.selfRank).toBe(3);
     expect(board.around.map((row) => row.handle)).toEqual(['Alpha', 'Bravo', 'Charlie']);
-    expect(profileView(db, 'unplaced').rank).toBeNull();
+    expect(board.top[0]).toEqual({
+      handle: 'Alpha', rating: 1400, rank: 1, tier: 'Platinum', wins: 7, losses: 2, draws: 1, streak: 3,
+    });
+    expect(profileView(db, 'unplaced')).toEqual({
+      handle: 'Newbie', placementProgress: 4,
+    });
   });
 });

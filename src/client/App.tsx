@@ -222,12 +222,13 @@ function ModeSelect({
   );
 }
 
-function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked, onOpenLeaderboard, onQuickRematch }: {
+function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPractice, onOpenRanked, onOpenLeaderboard, onQuickRematch }: {
   mode: PlayMode;
   difficulty: Difficulty;
   initialMatch: PublicMatch;
   onExit: () => void;
   onRestart: (creationKey: string) => Promise<void>;
+  onRestartPractice: (creationKey: string) => Promise<void>;
   onOpenRanked: () => void;
   onOpenLeaderboard: () => void;
   onQuickRematch: (match: PublicMatch) => void;
@@ -251,6 +252,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
   const [showHint, setShowHint] = useState(true);
   const [deadlineAt, setDeadlineAt] = useState(initialMatch.deadline ? Date.now() + (initialMatch.deadline - initialMatch.serverNow) : null);
   const lockingRef = useRef(false);
+  const restartingPracticeRef = useRef(false);
+  const practiceRestartKeyRef = useRef<string | null>(null);
+  const [restartingPractice, setRestartingPractice] = useState(false);
   const leaveButtonRef = useRef<HTMLButtonElement>(null);
   const roundLabelRef = useRef<HTMLElement>(null);
   const focusRoundAfterReveal = useRef(false);
@@ -386,6 +390,23 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
     setTarget(null);
   };
 
+  const restartPractice = async () => {
+    if (restartingPracticeRef.current) return;
+    restartingPracticeRef.current = true;
+    setRestartingPractice(true);
+    setNetworkError("");
+    practiceRestartKeyRef.current ??= crypto.randomUUID();
+    try {
+      await onRestartPractice(practiceRestartKeyRef.current);
+      practiceRestartKeyRef.current = null;
+    } catch (reason) {
+      setNetworkError(reason instanceof Error ? reason.message : "Practice could not restart.");
+    } finally {
+      restartingPracticeRef.current = false;
+      setRestartingPractice(false);
+    }
+  };
+
   const hint = useMemo(() => {
     const first = legalActions(match, me).find((action) => action.type !== "pass");
     return first ? `Try ${actionText(first)}. Legal targets are outlined on the grid.` : "No territory move is available. Pass this round.";
@@ -470,6 +491,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onOpenRanked,
           <button className="lock-button" disabled={!selectedAction || locked || Boolean(reveal)} onClick={() => void commit()}>
             {locked ? "Move locked" : "Lock move"}<span>{locked ? "✓" : "→"}</span>
           </button>
+          {mode === "practice" && <button className="secondary-cta full" disabled={restartingPractice} onClick={() => void restartPractice()}>
+            {restartingPractice ? "Restarting Practice…" : "Restart Practice"}
+          </button>}
           <p className="privacy-note">{mode === "ranked" || initialMatch.roomId ? "Your opponent cannot see your move or lock timing before reveal." : "The bot chooses from the same public pre-round state and cannot see your pending move."}</p>
         </section>
       </div>
@@ -560,6 +584,21 @@ function RevealPanel({ result, player, finalRound, onContinue }: { result: NonNu
   );
 }
 
+export function RankedSettlementDetails({ settlement, profile }: { settlement: RankedSettlement; profile: RankedProfile | null }) {
+  const mine = settlement.player;
+  return <>
+    <section className="settlement-card">
+      {mine.delta !== undefined && <div><span>RP change</span><strong className={mine.delta >= 0 ? "positive" : "negative"}>{mine.delta >= 0 ? "+" : ""}{mine.delta}</strong></div>}
+      {mine.ratingAfter !== undefined && <div><span>Rating</span><strong>{mine.ratingBefore === undefined ? mine.ratingAfter : `${mine.ratingBefore} → ${mine.ratingAfter}`}</strong></div>}
+      <div><span>Credit</span><strong>{Math.round(settlement.multiplier * 100)}%</strong></div>
+      {mine.placementProgress >= 5 && <div><span>Tier</span><strong>{profile?.tier ?? "Updating"}</strong></div>}
+      <div><span>{mine.placementProgress < 5 ? "Placement" : "Global rank"}</span><strong>{mine.placementProgress < 5 ? `${mine.placementProgress}/5` : profile?.rank ? `#${profile.rank}` : "Updating"}</strong></div>
+    </section>
+    <p className="status-note">{creditExplanation(settlement.multiplier)}</p>
+    {profile?.rating !== undefined && <p className="next-rival">{nextRivalText(profile.rating)}</p>}
+  </>;
+}
+
 function ResultScreen({ match, totals, player, ranked, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onOpenLeaderboard, onQuickRematch, onSnapshot }: {
   match: MatchState;
   totals: Readonly<Record<Player, number>>;
@@ -587,7 +626,6 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   const [error, setError] = useState("");
   const restartKey = useRef<string | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
-  const mine = settlement?.[player === "A" ? "playerA" : "playerB"] ?? null;
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => titleRef.current?.focus());
@@ -690,14 +728,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
         resultType === "resignation" ? "The match ended by resignation." :
           resultType === "forfeit" ? "The match ended by forfeit." :
             match.endingReason === "board-exhaustion" ? "No legal territory-changing moves remained." : "Final territory after the last round."}</p>
-      {ranked && mine && <section className="settlement-card">
-        <div><span>RP change</span><strong className={mine.delta >= 0 ? "positive" : "negative"}>{mine.delta >= 0 ? "+" : ""}{mine.delta}</strong></div>
-        <div><span>Rating</span><strong>{mine.profile.rating} → {mine.updatedProfile.rating}</strong></div>
-        <div><span>Credit</span><strong>{Math.round(settlement!.multiplier * 100)}%</strong></div>
-        <div><span>Tier</span><strong>{profile?.tier ?? "Updating"}</strong></div>
-        <div><span>{(profile?.placementProgress ?? mine.updatedProfile.placementProgress) < 5 ? "Placement" : "Global rank"}</span><strong>{(profile?.placementProgress ?? mine.updatedProfile.placementProgress) < 5 ? `${profile?.placementProgress ?? mine.updatedProfile.placementProgress}/5` : profile?.rank ? `#${profile.rank}` : "Updating"}</strong></div>
-      </section>}
-      {ranked && mine && <><p className="status-note">{creditExplanation(settlement!.multiplier)}</p><p className="next-rival">{nextRivalText(profile?.rating ?? mine.updatedProfile.rating)}</p></>}
+      {ranked && settlement && <RankedSettlementDetails settlement={settlement} profile={profile} />}
       {ranked && !settlement && resultType !== "server-error" && <p className="status-note" role="status">Rating update pending. This result will refresh automatically.</p>}
       {ranked && invitation && !requested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Sides will swap and credit is recalculated before ready.</p><button className="primary-cta" disabled={busy} onClick={acceptRematch}>Accept rematch <span>→</span></button></div>}
       {ranked && requested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your opponent.</p>{invitation && <button className="secondary-cta" onClick={() => navigator.clipboard.writeText(invitation.inviteUrl)}>Copy invite link</button>}</div>}
@@ -1000,9 +1031,27 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
   const [leaders, setLeaders] = useState<LeaderboardEntry[]>([]);
   const [around, setAround] = useState<LeaderboardEntry[]>([]);
   const [error, setError] = useState("");
+  const [infoLoading, setInfoLoading] = useState(true);
   useEffect(() => {
-    if (screen === "profile") api.getProfile().then((response) => setProfile(response.profile)).catch(() => setProfile(null));
-    if (screen === "leaderboard") api.getLeaderboard().then((response) => { setLeaders(response.top); setAround(response.around); }).catch((reason) => setError(reason instanceof Error ? reason.message : "Leaderboard unavailable."));
+    let current = true;
+    setError("");
+    setInfoLoading(true);
+    if (screen === "profile") api.getSession()
+      .then((response) => { if (current) setProfile(response.profile); })
+      .catch((reason) => { if (current) setError(reason instanceof Error ? reason.message : "Profile unavailable."); })
+      .finally(() => { if (current) setInfoLoading(false); });
+    if (screen === "leaderboard") {
+      Promise.all([api.getLeaderboard(), api.getSession()])
+        .then(([board, session]) => {
+          if (!current) return;
+          setLeaders(board.top);
+          setAround(board.around);
+          setProfile(session.profile);
+        })
+        .catch((reason) => { if (current) setError(reason instanceof Error ? reason.message : "Leaderboard unavailable."); })
+        .finally(() => { if (current) setInfoLoading(false); });
+    }
+    return () => { current = false; };
   }, [screen]);
   const rename = async () => {
     setRenaming(true); setError("");
@@ -1017,27 +1066,50 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
       <div className="panel-heading">
         <p className="eyebrow">{screen === "profile" ? "Player profile" : "Human Ranked"}</p>
         <h1>{screen === "profile" ? profile?.handle ?? "Playing as guest." : "Leaderboard"}</h1>
-        <p>{screen === "profile" ? profile ? `${profile.tier ?? "Placement"} · ${profile.rating ?? 1000} RP` : "Practice and Quick Duel work without an account." : "Official ranks include eligible human Ranked players only."}</p>
+        <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/5 · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Official ranks include eligible human Ranked players only."}</p>
       </div>
-      {screen === "profile" && profile && <div className="profile-stats"><p><strong>{profile.rating ?? 1000}</strong><span>RP</span></p><p><strong>{profile.peakRating ?? profile.rating ?? 1000}</strong><span>Peak RP</span></p><p><strong>{profile.placementProgress ?? 0}/5</strong><span>Placement</span></p><p><strong>{profile.rank ? `#${profile.rank}` : "Unplaced"}</strong><span>Global rank</span></p><p><strong>{profile.ratedMatchCount ?? 0}</strong><span>Rated matches</span></p><p><strong>{profile.wins ?? 0}-{profile.losses ?? 0}-{profile.draws ?? 0}</strong><span>W-L-D</span></p><p><strong>{profile.streak ?? 0}</strong><span>Win streak</span></p></div>}
+      {infoLoading && <p className="status-note" role="status">Loading {screen === "profile" ? "profile" : "leaderboard"}…</p>}
+      {screen === "profile" && profile && <ProfileStats profile={profile} />}
       {screen === "profile" && profile?.handle && <section className="room-form ranked-setup"><label>Change public handle<input value={newHandle} onChange={(event) => setNewHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><p className="status-note">After your first rename, you can change your handle once every 30 days.</p><button className="secondary-cta full" disabled={renaming || !/^[A-Za-z0-9_]{3,16}$/.test(newHandle.trim()) || newHandle.trim() === profile.handle} onClick={rename}>{renaming ? "Changing handle…" : "Change handle"}</button></section>}
-      {screen === "leaderboard" && leaders.length > 0 && <ol className="leaderboard-list">{leaders.map((entry) => <li key={entry.handle}><b>#{entry.rank}</b><strong>{entry.handle}</strong><span>{entry.tier}</span><em>{entry.rating} RP</em></li>)}</ol>}
-      {screen === "leaderboard" && around.length > 0 && <section aria-labelledby="around-title"><h2 id="around-title">Around you</h2><ol className="leaderboard-list">{around.map((entry) => <li key={entry.handle}><b>#{entry.rank}</b><strong>{entry.handle}</strong><span>{entry.tier}</span><em>{entry.rating} RP</em></li>)}</ol></section>}
-      {((screen === "profile" && !profile) || (screen === "leaderboard" && leaders.length === 0)) && <div className="empty-state"><span aria-hidden="true">{screen === "profile" ? "G" : "#"}</span><strong>{screen === "profile" ? "No persistent profile yet" : "No placed players yet"}</strong><p>{screen === "profile" ? "Guest games do not carry into Ranked statistics." : "Bots and benchmark Rivals never appear in the human rankings."}</p></div>}
-      <RivalsPanel rating={profile?.rating ?? 1000} />
+      {screen === "leaderboard" && leaders.length > 0 && <LeaderboardList entries={leaders} />}
+      {screen === "leaderboard" && around.length > 0 && <section aria-labelledby="around-title"><h2 id="around-title">Around you</h2><LeaderboardList entries={around} /></section>}
+      {!infoLoading && !error && ((screen === "profile" && !profile) || (screen === "leaderboard" && leaders.length === 0)) && <div className="empty-state"><span aria-hidden="true">{screen === "profile" ? "G" : "#"}</span><strong>{screen === "profile" ? "No persistent profile yet" : "No placed players yet"}</strong><p>{screen === "profile" ? "Guest games do not carry into Ranked statistics." : "Bots and benchmark Rivals never appear in the human rankings."}</p></div>}
+      <RivalsPanel rating={profile?.rating} />
       {error && <p className="form-error" role="alert">{error}</p>}
       <button className="secondary-cta full" onClick={() => navigate(screen === "profile" ? "quick" : "ranked")}>{screen === "profile" ? "Play Quick Duel" : "View Ranked"}</button>
     </main>
   );
 }
 
-function RivalsPanel({ rating }: { rating: number }) {
-  const next = RIVAL_MILESTONES.find((target) => target > rating);
+export function ProfileStats({ profile }: { profile: RankedProfile }) {
+  return <div className="profile-stats">
+    {profile.rating !== undefined && <p><strong>{profile.rating}</strong><span>RP</span></p>}
+    {profile.peakRating !== undefined && <p><strong>{profile.peakRating}</strong><span>Peak RP</span></p>}
+    <p><strong>{profile.placementProgress ?? 0}/5</strong><span>Placement</span></p>
+    {profile.rating !== undefined && <>
+      <p><strong>{profile.rank ? `#${profile.rank}` : "Updating"}</strong><span>Global rank</span></p>
+      <p><strong>{profile.ratedMatchCount}</strong><span>Rated matches</span></p>
+      <p><strong>{profile.wins}-{profile.losses}-{profile.draws}</strong><span>W-L-D</span></p>
+      <p><strong>{profile.streak}</strong><span>Win streak</span></p>
+    </>}
+  </div>;
+}
+
+export function LeaderboardList({ entries }: { entries: LeaderboardEntry[] }) {
+  return <ol className="leaderboard-list">{entries.map((entry) => <li key={entry.handle}>
+    <b>#{entry.rank}</b><strong>{entry.handle}</strong>
+    <span>{entry.tier}<small>W-L-D {entry.wins}-{entry.losses}-{entry.draws} · Streak {entry.streak}</small></span>
+    <em>{entry.rating} RP</em>
+  </li>)}</ol>;
+}
+
+export function RivalsPanel({ rating }: { rating?: number }) {
+  const next = rating === undefined ? undefined : RIVAL_MILESTONES.find((target) => target > rating);
   return (
     <section className="rivals-panel" aria-labelledby="rivals-title">
       <div><p className="eyebrow">System benchmarks</p><h2 id="rivals-title">Rivals to beat</h2><small>Rivals are milestones created by OVERRIDE. They are not human accounts and never affect Global Rank.</small></div>
-      <div className="rival-track">{RIVAL_MILESTONES.map((target) => <span key={target} className={target <= rating ? "cleared" : target === next ? "next" : ""}><b>{target === 1250 ? "ROOK" : "RIVAL"}</b><small>{target} RP</small></span>)}</div>
-      <p className="next-rival">{nextRivalText(rating)}</p>
+      <div className="rival-track">{RIVAL_MILESTONES.map((target) => <span key={target} className={rating !== undefined && target <= rating ? "cleared" : target === next ? "next" : ""}><b>{target === 1250 ? "ROOK" : "RIVAL"}</b><small>{target} RP</small></span>)}</div>
+      <p className="next-rival">{rating === undefined ? "Complete placement to unlock personalized Rival progress." : nextRivalText(rating)}</p>
     </section>
   );
 }
@@ -1160,9 +1232,9 @@ export function App() {
     setScreen(next);
     window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   };
-  const start = async (mode: SoloMode, difficulty: Difficulty, creationKey: string, parentMatchId?: string) => {
+  const start = async (mode: SoloMode, difficulty: Difficulty, creationKey: string, parentMatchId?: string, restartMatchId?: string) => {
     if (!parentMatchId) void api.trackEvent("opponent_selected", `${mode}-bot`).catch(() => undefined);
-    const response = await api.createBotMatch(mode, difficulty.toLowerCase() as Lowercase<Difficulty>, creationKey, parentMatchId);
+    const response = await api.createBotMatch(mode, difficulty.toLowerCase() as Lowercase<Difficulty>, creationKey, parentMatchId, restartMatchId);
     setSolo({ mode, difficulty });
     setBotMatch(response.match);
     setGameKey((value) => value + 1);
@@ -1175,7 +1247,7 @@ export function App() {
       {screen === "home" && <Home navigate={navigate} />}
       {screen === "practice" && <ModeSelect kind="practice" onStart={start} navigate={navigate} />}
       {screen === "quick" && <ModeSelect kind="quick" onStart={start} navigate={navigate} />}
-      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.status === "voided" ? undefined : botMatch.id); }} />}
+      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.status === "voided" ? undefined : botMatch.id); }} onRestartPractice={(key) => start("practice", solo.difficulty, key, undefined, botMatch.id)} />}
       {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}

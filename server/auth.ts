@@ -42,14 +42,14 @@ export function issueGoogleNonce(db: Database.Database, sessionId: string, now =
 
 export interface PublicProfile {
   handle: string | null;
-  rating: number;
-  peakRating: number;
+  rating?: number;
+  peakRating?: number;
   placementProgress: number;
-  ratedMatchCount: number;
-  wins: number;
-  losses: number;
-  draws: number;
-  streak: number;
+  ratedMatchCount?: number;
+  wins?: number;
+  losses?: number;
+  draws?: number;
+  streak?: number;
 }
 
 interface ProfileRow {
@@ -212,15 +212,18 @@ export function getPublicProfile(db: Database.Database, uid: string): PublicProf
     FROM profiles WHERE uid = ?
   `).get(uid) as Omit<ProfileRow, 'uid' | 'normalized_handle' | 'renamed_at' | 'created_at'> | undefined;
   if (!row) return null;
-  return {
+  const profile: PublicProfile = {
     handle: row.handle,
-    rating: row.rating,
-    peakRating: row.peak_rating,
     placementProgress: row.placement_progress,
-    ratedMatchCount: row.rated_match_count,
-    wins: row.wins,
-    losses: row.losses,
-    draws: row.draws,
-    streak: row.streak,
   };
+  if (row.placement_progress >= 5) {
+    profile.rating = row.rating;
+    profile.peakRating = row.peak_rating;
+    profile.ratedMatchCount = row.rated_match_count;
+    profile.wins = row.wins;
+    profile.losses = row.losses;
+    profile.draws = row.draws;
+    profile.streak = row.streak;
+  }
+  return profile;
 }

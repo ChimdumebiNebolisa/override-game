@@ -84,32 +84,17 @@ export interface RankedShell {
   readyDeadline: number;
 }
 
-export interface SettlementProfile {
-  rating: number;
-  peakRating: number;
-  placementProgress: number;
-  ratedMatchCount: number;
-  wins: number;
-  losses: number;
-  draws: number;
-  streak: number;
-}
-
 export interface SettlementPlayer {
-  profile: SettlementProfile;
   outcome: "win" | "loss" | "draw";
-  kFactor: 64 | 32 | 24;
-  expectedScore: number;
-  rawDelta: number;
-  adjustedDelta: number;
-  delta: number;
-  updatedProfile: SettlementProfile;
+  placementProgress: number;
+  delta?: number;
+  ratingBefore?: number;
+  ratingAfter?: number;
 }
 
 export interface RankedSettlement {
   multiplier: number;
-  playerA: SettlementPlayer;
-  playerB: SettlementPlayer;
+  player: SettlementPlayer;
 }
 
 export interface LeaderboardEntry {
@@ -117,6 +102,10 @@ export interface LeaderboardEntry {
   rating: number;
   rank: number;
   tier: string;
+  wins: number;
+  losses: number;
+  draws: number;
+  streak: number;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -226,10 +215,10 @@ export const api = {
     return request<{ closed: boolean }>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
   },
 
-  createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", creationKey: string, parentMatchId?: string) {
+  createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", creationKey: string, parentMatchId?: string, restartMatchId?: string) {
     return request<MatchResponse<PublicMatch>>("/api/bot-matches", {
       method: "POST",
-      body: JSON.stringify({ displayName: "Player", mode, difficulty, parentMatchId, creationKey }),
+      body: JSON.stringify({ displayName: "Player", mode, difficulty, parentMatchId, restartMatchId, creationKey }),
     });
   },
 

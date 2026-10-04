@@ -6,12 +6,17 @@ import { metricsReport, recordClientTelemetry } from './metrics';
 import type { Session } from './http';
 import { createInitialState, type RoundResult } from '../src/shared/rules';
 
-test('report separates bot rematches and voluntary versus timeout passes from revealed rounds', () => {
+test.each(['A', 'B'] as const)('report separates bot rematches and passes with the human on side %s', (human) => {
   const db = openDatabase(':memory:');
   try {
     const session: Session = { id: 'guest', uid: null, createdAt: 0, expiresAt: 1_000_000 };
     const practice = createBotMatch(db, session, 'Player', 'practice', 'easy');
     const quick = createBotMatch(db, session, 'Player', 'quick', 'hard');
+    for (const id of [practice, quick]) {
+      db.prepare('UPDATE matches SET player_a_key = ?, player_b_key = ?, player_a_name = ?, player_b_name = ? WHERE id = ?')
+        .run(human === 'A' ? session.id : `bot:${id}`, human === 'B' ? session.id : `bot:${id}`,
+          human === 'A' ? 'Player' : 'Bot', human === 'B' ? 'Player' : 'Bot', id);
+    }
     const final = { ...createInitialState(), status: 'finished' as const, winner: 'A' as const, endingReason: 'standard' as const };
     for (const id of [practice, quick]) {
       db.prepare("UPDATE matches SET status = 'finished', state_json = ?, ended_at = started_at + 60_000, result_type = 'standard' WHERE id = ?")
@@ -24,13 +29,14 @@ test('report separates bot rematches and voluntary versus timeout passes from re
         B: { action: { type: 'expand', target: 17 }, success: true, reason: 'claimed', energySpent: 0, energyEarned: 0 },
       },
     };
+    if (human === 'B') round.outcomes = { A: round.outcomes.B, B: round.outcomes.A };
     db.prepare('INSERT INTO round_results (match_id, round, result_json, resolved_at) VALUES (?, 1, ?, 1)')
       .run(practice, JSON.stringify(round));
     const timeoutRound: RoundResult = {
       ...round,
       outcomes: {
         ...round.outcomes,
-        A: { action: { type: 'pass' }, success: true, reason: 'automatic-pass', energySpent: 0, energyEarned: 0 },
+        [human]: { action: { type: 'pass' }, success: true, reason: 'automatic-pass', energySpent: 0, energyEarned: 0 },
       },
     };
     db.prepare('INSERT INTO round_results (match_id, round, result_json, resolved_at) VALUES (?, 3, ?, 3)')

@@ -11,6 +11,13 @@ import {
 import { createInitialState, validateAction, type Action, type MatchState, type RoundResult } from '../src/shared/rules';
 import type { Session } from './http';
 
+const randomSide = vi.hoisted(() => ({ value: null as number | null }));
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return { ...actual, randomBytes: (size: number) => size === 1 && randomSide.value !== null
+    ? Buffer.from([randomSide.value]) : actual.randomBytes(size) };
+});
+
 const session = (id: string): Session => ({ id, uid: null, createdAt: 0, expiresAt: 1_000_000 });
 const move = (type: 'expand' | 'ambush' | 'surge' | 'override', target: number): Action => ({ type, target });
 const pass: Action = { type: 'pass' };
@@ -37,6 +44,7 @@ describe('guest matches', () => {
     db = openDatabase(':memory:');
   });
   afterEach(() => {
+    randomSide.value = null;
     db.close();
     vi.useRealTimers();
   });
@@ -109,7 +117,8 @@ describe('guest matches', () => {
       .get(match.id, 'A')).toMatchObject({ action_json: JSON.stringify(pass) });
   });
 
-  it('caps concurrent bot matches for one guest session', () => {
+  it.each([0, 1])('caps concurrent bot matches for one guest session on side %s', (random) => {
+    randomSide.value = random;
     const guest = session('guest');
     for (let index = 0; index < 3; index++) createBotMatch(db, guest, 'Guest', 'quick', 'easy');
     expectStatus(() => createBotMatch(db, guest, 'Guest', 'quick', 'easy'), 429);
@@ -132,8 +141,46 @@ describe('guest matches', () => {
     createBotMatch(db, guest, 'Guest', 'quick', 'easy');
     expect(createBotMatch(db, guest, 'Guest', 'quick', 'normal', undefined, key)).toBe(first);
     expectStatus(() => createBotMatch(db, guest, 'Guest', 'practice', 'normal', undefined, key), 409);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM matches WHERE player_a_key = ? AND bot_difficulty IS NOT NULL")
-      .get(guest.id)).toEqual({ count: 3 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM matches WHERE (player_a_key = ? OR player_b_key = ?) AND bot_difficulty IS NOT NULL")
+      .get(guest.id, guest.id)).toEqual({ count: 3 });
+  });
+
+  it.each([0, 1])('assigns the initial bot side from server randomness %s and swaps each rematch', (random) => {
+    randomSide.value = random;
+    const guest = session('guest');
+    let id = createBotMatch(db, guest, 'Guest', 'practice', 'hard', undefined, 'first');
+    let side = matchForSession(db, id, guest).player;
+    expect(side).toBe(random === 0 ? 'A' : 'B');
+    expect(createBotMatch(db, guest, 'Guest', 'practice', 'hard', undefined, 'first')).toBe(id);
+    expectStatus(() => createBotMatch(db, guest, 'Other name', 'practice', 'hard', undefined, 'first'), 409);
+    for (let turn = 0; turn < 2; turn++) {
+      resignMatch(db, id, guest);
+      const parent = id;
+      expectStatus(() => createBotMatch(db, session('stranger'), 'Stranger', 'practice', 'hard', parent), 404);
+      id = createBotMatch(db, guest, 'Guest', 'practice', 'hard', parent, `rematch-${turn}`);
+      expect(matchForSession(db, id, guest).player).toBe(side === 'A' ? 'B' : 'A');
+      side = matchForSession(db, id, guest).player;
+      expect(createBotMatch(db, guest, 'Guest', 'practice', 'hard', parent, `rematch-${turn}`)).toBe(id);
+      expect(matchForSession(db, id, guest).playerNames?.[side!]).toBe('Guest');
+    }
+    reconcilePresenceOnStartup(db, 101_000);
+    const row = getMatch(db, id)!;
+    expect(side === 'A' ? row.disconnected_a_at : row.disconnected_b_at).toBe(101_000);
+    expect(side === 'A' ? row.disconnected_b_at : row.disconnected_a_at).toBeNull();
+  });
+
+  it('reuses an active Practice restart request without duplicating its replacement', () => {
+    const guest = session('guest');
+    const original = createBotMatch(db, guest, 'Guest', 'practice', 'hard');
+    const key = 'a4cb0ec7-0bf3-48ed-8a94-79cb3ef3d1d2';
+    const replacement = createBotMatch(db, guest, 'Guest', 'practice', 'hard', undefined, key, original);
+
+    expect(createBotMatch(db, guest, 'Guest', 'practice', 'hard', undefined, key, original)).toBe(replacement);
+    expect(getMatch(db, original)).toMatchObject({ status: 'voided', result_type: 'practice-restarted' });
+    expect(getMatch(db, replacement)?.restart_match_id).toBe(original);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE (player_a_key = ? OR player_b_key = ?)
+      AND mode = 'practice' AND bot_difficulty = 'hard' AND status IN ('decision', 'transition', 'grace')`)
+      .get(guest.id, guest.id)).toEqual({ count: 1 });
   });
 
   function facingState(energyA = 0, energyB = 0): MatchState {
@@ -143,6 +190,38 @@ describe('guest matches', () => {
       energy: { A: energyA, B: energyB },
     };
   }
+
+  it.each([0, 1])('uses revealed human history for Hard on either side %s', (random) => {
+    randomSide.value = random;
+    const human = session('human');
+    const id = createBotMatch(db, human, 'Human', 'quick', 'hard');
+    const side = matchForSession(db, id, human).player!;
+    const bot = side === 'A' ? 'B' : 'A';
+    const state = { ...facingState(), round: 4 };
+    db.prepare('UPDATE matches SET state_json = ? WHERE id = ?').run(JSON.stringify(state), id);
+    const humanOutcome = { action: move('expand', side === 'A' ? 11 : 13), success: true, reason: 'claimed' as const, energySpent: 0, energyEarned: 0 };
+    const botOutcome = { action: pass, success: false, reason: 'passed' as const, energySpent: 0, energyEarned: 0 };
+    const result: RoundResult = {
+      state, score: { A: 1, B: 1 },
+      outcomes: side === 'A' ? { A: humanOutcome, B: botOutcome } : { A: botOutcome, B: humanOutcome },
+    };
+    for (let round = 1; round <= 3; round++) {
+      db.prepare('INSERT INTO round_results (match_id, round, result_json, resolved_at) VALUES (?, ?, ?, ?)')
+        .run(id, round, JSON.stringify(result), 99_000 + round);
+    }
+    lockAction(db, id, human, pass);
+    expect(matchForSession(db, id, human).lastResult!.outcomes[bot].action).toEqual(move('ambush', 12));
+  });
+
+  it('enforces bot creation-key uniqueness across human side changes in storage', () => {
+    randomSide.value = 0;
+    const human = session('human');
+    createBotMatch(db, human, 'Human', 'quick', 'easy', undefined, 'same-request');
+    expect(() => db.prepare(`INSERT INTO matches
+      (id, creation_key, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status)
+      VALUES ('duplicate', 'same-request', 'quick', 'easy', 'bot:duplicate', 'human', 'Bot', 'Human', ?, 'decision')`)
+      .run(JSON.stringify(createInitialState()))).toThrow('UNIQUE constraint');
+  });
 
   it('keeps pending moves private and resolves at the fixed human deadline once', () => {
     const match = humanMatch();
@@ -265,33 +344,41 @@ describe('guest matches', () => {
     expect(second.state.energy.A).toBe(1);
   });
 
-  it('chooses a legal bot action and resolves immediately after the human lock', () => {
+  it.each([0, 1])('chooses a legal bot action and resolves immediately after human side %s locks', (random) => {
+    randomSide.value = random;
     const human = session('human');
     const id = createBotMatch(db, human, 'Human', 'quick', 'hard');
+    const side = matchForSession(db, id, human).player!;
+    const bot = side === 'A' ? 'B' : 'A';
+    const action = move('expand', side === 'A' ? 2 : 22);
     const opening = JSON.parse(getMatch(db, id)!.state_json) as MatchState;
-    lockAction(db, id, human, move('expand', 2));
+    lockAction(db, id, human, action);
     const row = getMatch(db, id)!;
     expect(row.status).toBe('transition');
     expect(row.last_result_json).toBeTruthy();
     const result = JSON.parse(row.last_result_json!) as RoundResult;
-    expect(validateAction(opening, 'B', result.outcomes.B.action)).toEqual({ ok: true });
-    expect(result.outcomes.A.action).toEqual(move('expand', 2));
+    expect(validateAction(opening, bot, result.outcomes[bot].action)).toEqual({ ok: true });
+    expect(result.outcomes[side].action).toEqual(action);
     expect(resolveMatch(db, id, row.deadline ?? 105_000)).toBe(false);
   });
 
-  it('chooses a bot action at the deadline when the human never locks', () => {
-    const id = createBotMatch(db, session('human'), 'Human', 'quick', 'hard');
+  it.each([0, 1])('chooses a bot action at the deadline when human side %s never locks', (random) => {
+    randomSide.value = random;
+    const human = session('human');
+    const id = createBotMatch(db, human, 'Human', 'quick', 'hard');
+    const side = matchForSession(db, id, human).player!;
+    const bot = side === 'A' ? 'B' : 'A';
     const before = getMatch(db, id)!;
     const opening = JSON.parse(before.state_json) as MatchState;
     expect(resolveMatch(db, id, before.deadline! - 1)).toBe(false);
     expect(resolveMatch(db, id, before.deadline!)).toBe(true);
     const row = getMatch(db, id)!;
     const result = JSON.parse(row.last_result_json!) as RoundResult;
-    expect(result.outcomes.A.reason).toBe('automatic-pass');
-    expect(result.outcomes.B.action.type).not.toBe('pass');
-    expect(validateAction(opening, 'B', result.outcomes.B.action)).toEqual({ ok: true });
-    expect(row.afk_a).toBe(1);
-    expect(row.afk_b).toBe(0);
+    expect(result.outcomes[side].reason).toBe('automatic-pass');
+    expect(result.outcomes[bot].action.type).not.toBe('pass');
+    expect(validateAction(opening, bot, result.outcomes[bot].action)).toEqual({ ok: true });
+    expect(side === 'A' ? row.afk_a : row.afk_b).toBe(1);
+    expect(side === 'A' ? row.afk_b : row.afk_a).toBe(0);
     expect(row.status).toBe('transition');
     expect(resolveMatch(db, id, before.deadline!)).toBe(false);
   });

@@ -67,6 +67,17 @@ export interface RankedShell {
   readyDeadline: number;
 }
 
+export interface PublicRankedSettlement {
+  multiplier: number;
+  player: {
+    outcome: 'win' | 'loss' | 'draw';
+    placementProgress: number;
+    delta?: number;
+    ratingBefore?: number;
+    ratingAfter?: number;
+  };
+}
+
 function profile(db: Database.Database, uid: string): RankedProfileRow {
   const row = db.prepare(`SELECT uid, handle, rating, peak_rating AS peakRating,
       placement_progress AS placementProgress, rated_match_count AS ratedMatchCount,
@@ -498,6 +509,26 @@ export function getRankedSettlement(db: Database.Database, matchId: string): Rat
   const row = db.prepare('SELECT settlement_json FROM rating_settlements WHERE match_id = ?')
     .get(matchId) as { settlement_json: string } | undefined;
   return row ? JSON.parse(row.settlement_json) as RatingSettlement : null;
+}
+
+/** Return only the requesting player's settlement, withholding provisional rating values until placement completes. */
+export function publicRankedSettlement(settlement: RatingSettlement, player: Player): PublicRankedSettlement {
+  const own = player === 'A' ? settlement.playerA : settlement.playerB;
+  const visible: PublicRankedSettlement = {
+    multiplier: settlement.multiplier,
+    player: {
+      outcome: own.outcome,
+      placementProgress: own.updatedProfile.placementProgress,
+    },
+  };
+  if (own.updatedProfile.placementProgress >= 5) {
+    visible.player.ratingAfter = own.updatedProfile.rating;
+    if (own.profile.placementProgress >= 5) {
+      visible.player.delta = own.delta;
+      visible.player.ratingBefore = own.profile.rating;
+    }
+  }
+  return visible;
 }
 
 export function rankedReadyDeadlineMs(): number {
