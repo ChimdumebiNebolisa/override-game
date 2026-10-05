@@ -35,6 +35,9 @@ it('routes Worker API requests through durable SQLite sessions and room creation
     ...store.storage.sql,
     exec(statement: string, ...bindings: unknown[]) {
       if (/^\s*PRAGMA\s+page_count\b/i.test(statement)) throw new Error('not authorized: SQLITE_AUTH');
+      if ((statement.match(/\bUNION\s+ALL\b/gi) ?? []).length >= 10) {
+        throw new Error('too many terms in compound SELECT: SQLITE_ERROR');
+      }
       return store.storage.sql.exec(statement, ...bindings);
     },
   };

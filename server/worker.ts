@@ -383,13 +383,12 @@ export class GameDurableObject {
       UNION ALL SELECT expires_at FROM quick_rematch_invitations WHERE status = 'open'
       UNION ALL SELECT expires_at FROM rooms WHERE status = 'open'
       UNION ALL SELECT due_at FROM worker_socket_closures
-      UNION ALL SELECT ?
-      UNION ALL SELECT ? WHERE EXISTS (
+      UNION ALL SELECT CASE WHEN EXISTS (
         SELECT 1 FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
         WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL
           AND m.ended_at < ? AND s.match_id IS NULL
-      )
-    )`).get(now + 60 * 60_000, now + 1_000, now) as { due_at: number | null };
+      ) THEN ? ELSE ? END
+    )`).get(now, now + 1_000, now + 60 * 60_000) as { due_at: number | null };
     const alarm = Math.max(now + 50, next.due_at ?? now + 60 * 60_000);
     const current = await this.ctx.storage.getAlarm();
     if (current === null || alarm < current) await this.ctx.storage.setAlarm(alarm);
