@@ -620,6 +620,7 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
 }) {
   const rival: Player = player === "A" ? "B" : "A";
   const rows = ([player, rival] as const).map((side) => ({ side, outcome: result.outcomes[side] }));
+  const winnerText = result.state.winner === player ? "You win" : result.state.winner === rival ? "Rival wins" : "The match is tied";
   return (
     <section className="round-review" role="region" aria-labelledby="reveal-title" aria-live="polite">
       <div className="round-review-heading">
@@ -636,7 +637,10 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
             </div>
           ))}
         </div>
-        <div className="reveal-score"><span>{result.score[player]}</span><small>territory</small><span>{result.score[rival]}</span></div>
+        {finalRound && <p className={`reveal-winner ${result.state.winner === player ? "you-win" : result.state.winner === rival ? "rival-wins" : "tied"}`} role="status">{winnerText}</p>}
+        <div className="reveal-score" aria-label={`Territory score: you ${result.score[player]}, rival ${result.score[rival]}`}>
+          <div><small>You</small><strong>{result.score[player]}</strong></div><i aria-hidden="true">—</i><div><small>Rival</small><strong>{result.score[rival]}</strong></div>
+        </div>
         <button className="secondary-cta full" onClick={onContinue}>
           {finalRound ? "See result" : activeRoundOpen ? "Hide result" : "Next round"} <span>→</span>
         </button>
@@ -781,8 +785,8 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   return (
     <main className="result-page">
       <p className="eyebrow">{ranked ? "Ranked Duel" : "Unranked match"} · Complete</p>
-      <h1 ref={titleRef} tabIndex={-1}>{title}</h1>
-      <div className="result-score"><span>{totals[player]}</span><i>—</i><span>{totals[rival]}</span></div>
+      <h1 className={title === "Victory" ? "victory" : title === "Defeat" ? "defeat" : title === "Draw" ? "draw" : ""} ref={titleRef} tabIndex={-1}>{title}</h1>
+      <div className="result-score" aria-label={`Final score: you ${totals[player]}, rival ${totals[rival]}`}><span><small>You</small>{totals[player]}</span><i>—</i><span><small>Rival</small>{totals[rival]}</span></div>
       <p>{resultType === "server-error" ? "Match voided due to a connection or server error. No rating was changed." :
         resultType === "no-contest" ? "Neither player receives competitive credit for this match." :
         resultType === "resignation" ? "The match ended by resignation." :
@@ -1139,7 +1143,12 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
       setProfile(response.profile);
       setSignedIn(true);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Google sign-in failed.");
+      const authError = reason as { code?: string; customData?: { originalError?: unknown } };
+      const original = authError.customData?.originalError;
+      const detail = original instanceof Error ? original.message : typeof original === "string" ? original : "";
+      setError(authError.code === "auth/internal-error"
+        ? detail ? `Google sign-in failed: ${detail}` : "Google sign-in could not finish in this browser. Open the game in Chrome or Edge and allow the Google sign-in window."
+        : reason instanceof Error ? reason.message : "Google sign-in failed.");
     } finally { setSignInBusy(false); }
   };
   if (screen === "how-to") return <HowTo navigate={navigate} />;

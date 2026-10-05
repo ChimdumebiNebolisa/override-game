@@ -213,14 +213,24 @@ dialog:not([open]) { display:none; }
 .reveal-actions small { display: block; margin-top: 7px; color: var(--ink); font: 9px/1.4 var(--mono); }
 .reveal-actions .you strong { color: var(--blue); }
 .reveal-actions .bot strong { color: var(--coral); }
-.reveal-score { display:flex; align-items:baseline; justify-content:center; gap:18px; margin: 12px 0; }
-.reveal-score span { font: 800 32px var(--display); }
-.reveal-score small { color: var(--muted); font: 9px var(--mono); text-transform:uppercase; }
+.reveal-winner { margin:14px 0 4px; padding:10px 14px; background:var(--paper); font:800 22px var(--display); text-align:center; text-transform:uppercase; }
+.reveal-winner.you-win { color:var(--green); border-left:5px solid var(--green); }
+.reveal-winner.rival-wins { color:var(--coral); border-left:5px solid var(--coral); }
+.reveal-winner.tied { color:var(--ink); border-left:5px solid var(--amber); }
+.reveal-score { display:flex; align-items:center; justify-content:center; gap:18px; margin:12px 0; text-align:center; }
+.reveal-score > div { min-width:72px; display:grid; gap:2px; }
+.reveal-score strong { font:800 32px var(--display); }
+.reveal-score small { color:var(--muted); font:9px var(--mono); text-transform:uppercase; }
+.reveal-score i { color:var(--muted); font-style:normal; }
 
 .result-page { width: min(100% - 40px, 640px); min-height: 100vh; margin: 0 auto; display: flex; flex-direction: column; align-items:center; justify-content:center; text-align:center; }
 .result-page h1 { color: var(--blue); font-size: clamp(78px, 17vw, 130px); }
+.result-page h1.victory { color:var(--green); }
+.result-page h1.defeat { color:var(--coral); }
+.result-page h1.draw { color:var(--ink); }
 .result-score { margin: 28px 0 12px; display:flex; gap:22px; align-items:center; }
 .result-score span { font: 800 48px var(--display); }
+.result-score span small { display:block; color:var(--muted); font:10px var(--mono); letter-spacing:.12em; text-transform:uppercase; }
 .result-score i { color: var(--muted); font-style:normal; }
 .result-page > p:not(.eyebrow) { color: var(--muted); }
 .result-actions { display:flex; flex-wrap:wrap; justify-content:center; gap:14px; margin: 30px 0; }

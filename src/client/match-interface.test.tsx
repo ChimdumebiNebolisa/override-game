@@ -23,6 +23,20 @@ describe('in-match round feedback', () => {
     expect(html).toContain('Spent 1 Energy');
   });
 
+  it('shows who won and labels both scores in the last-round reveal', () => {
+    const completed: RoundResult = {
+      ...result,
+      state: { ...result.state, status: 'finished', winner: 'B' },
+      score: { A: 11, B: 13 },
+    };
+    const html = renderToStaticMarkup(<RevealPanel result={completed} player="A" finalRound
+      activeRoundOpen={false} onContinue={() => undefined} />);
+    expect(html).toContain('Rival wins');
+    expect(html).toContain('Territory score: you 11, rival 13');
+    expect(html).toContain('<small>You</small>');
+    expect(html).toContain('<small>Rival</small>');
+  });
+
   it('keeps board actions available as soon as the authoritative next decision opens', () => {
     expect(roundActionsDisabled('decision', false)).toBe(false);
     expect(roundActionsDisabled('decision', true)).toBe(true);
