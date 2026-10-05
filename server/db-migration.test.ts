@@ -135,6 +135,24 @@ describe('database schema migration', () => {
     }
   });
 
+  it('rekeys an initialized but empty database when the production key is added later', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'override-empty-migration-'));
+    directories.push(directory);
+    const path = join(directory, 'empty.sqlite');
+    const priorKey = process.env.INVITATION_ENCRYPTION_KEY;
+    try {
+      process.env.INVITATION_ENCRYPTION_KEY = 'initial-local-fallback-key';
+      openDatabase(path).close();
+      process.env.INVITATION_ENCRYPTION_KEY = 'production-encryption-key';
+      const db = openDatabase(path);
+      expect(db.prepare('SELECT value FROM secret_key_verification WHERE id = 1').get()).toBeDefined();
+      db.close();
+    } finally {
+      if (priorKey === undefined) delete process.env.INVITATION_ENCRYPTION_KEY;
+      else process.env.INVITATION_ENCRYPTION_KEY = priorKey;
+    }
+  });
+
   it('rejects a wrong key before migrating sessions in an older encrypted database', () => {
     const path = oldDatabasePath();
     const priorKey = process.env.INVITATION_ENCRYPTION_KEY;

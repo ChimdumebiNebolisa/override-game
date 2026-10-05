@@ -188,14 +188,31 @@ export function initializeDatabase(db: Database.Database): Database.Database {
     db.close();
     throw error;
   }
-  const keyCheck = db.prepare('SELECT value FROM secret_key_verification WHERE id = 1').get() as { value: string } | undefined;
+  let keyCheck = db.prepare('SELECT value FROM secret_key_verification WHERE id = 1').get() as { value: string } | undefined;
   try {
     if (!keyCheck || revealInvitationSecret(keyCheck.value) !== 'override invitation key verification v1') {
       throw new Error('INVITATION_ENCRYPTION_KEY does not match this database');
     }
   } catch (error) {
+    const applicationTables = [
+      'sessions', 'new_session_limits', 'profiles', 'rooms', 'join_attempts', 'matches', 'pending_actions',
+      'round_results', 'presence_events', 'telemetry_events', 'ranked_ownership', 'ranked_queue',
+      'rating_settlements', 'settlement_failures', 'settlement_duplicate_attempts', 'disconnect_incidents',
+      'ranked_invitations', 'ranked_code_attempts', 'quick_rematch_invitations',
+    ];
+    const hasApplicationData = applicationTables.some((table) =>
+      Boolean(db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()));
+    if (hasApplicationData) {
+      db.close();
+      if (error instanceof Error && error.message.includes('INVITATION_ENCRYPTION_KEY')) throw error;
+      throw new Error('INVITATION_ENCRYPTION_KEY does not match this database');
+    }
+    const replacement = protectInvitationSecret('override invitation key verification v1');
+    db.prepare('UPDATE secret_key_verification SET value = ? WHERE id = 1').run(replacement);
+    keyCheck = { value: replacement };
+  }
+  if (!keyCheck || revealInvitationSecret(keyCheck.value) !== 'override invitation key verification v1') {
     db.close();
-    if (error instanceof Error && error.message.includes('INVITATION_ENCRYPTION_KEY')) throw error;
     throw new Error('INVITATION_ENCRYPTION_KEY does not match this database');
   }
   return db;
