@@ -1089,6 +1089,9 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
 
 function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | "how-to"; navigate: (screen: Screen) => void }) {
   const [profile, setProfile] = useState<RankedProfile | null>(null);
+  const [signedIn, setSignedIn] = useState(false);
+  const [firebaseConfig, setFirebaseConfig] = useState<{ apiKey: string; authDomain: string; projectId: string; appId: string } | null>(null);
+  const [signInBusy, setSignInBusy] = useState(false);
   const [newHandle, setNewHandle] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [leaders, setLeaders] = useState<LeaderboardEntry[]>([]);
@@ -1099,8 +1102,13 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
     let current = true;
     setError("");
     setInfoLoading(true);
-    if (screen === "profile") api.getSession()
-      .then((response) => { if (current) setProfile(response.profile); })
+    if (screen === "profile") Promise.all([api.getSession(), api.getConfig()])
+      .then(([session, config]) => {
+        if (!current) return;
+        setProfile(session.profile);
+        setSignedIn(session.signedIn);
+        setFirebaseConfig(config.firebaseConfig);
+      })
       .catch((reason) => { if (current) setError(reason instanceof Error ? reason.message : "Profile unavailable."); })
       .finally(() => { if (current) setInfoLoading(false); });
     if (screen === "leaderboard") {
@@ -1122,16 +1130,30 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
     catch (reason) { setError(reason instanceof Error ? reason.message : "The handle could not be changed."); }
     finally { setRenaming(false); }
   };
+  const signInWithGoogle = async () => {
+    if (!firebaseConfig || signInBusy) return;
+    setSignInBusy(true); setError("");
+    try {
+      const idToken = await googleFirebaseIdToken(firebaseConfig);
+      const response = await api.googleSignIn(idToken);
+      setProfile(response.profile);
+      setSignedIn(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Google sign-in failed.");
+    } finally { setSignInBusy(false); }
+  };
   if (screen === "how-to") return <HowTo navigate={navigate} />;
   return (
     <main className="panel-page info-page">
       <button className="back-link" onClick={() => navigate("home")}>← Home</button>
       <div className="panel-heading">
         <p className="eyebrow">{screen === "profile" ? "Player profile" : "Human Ranked"}</p>
-        <h1>{screen === "profile" ? profile?.handle ?? "Playing as guest." : "Leaderboard"}</h1>
+        <h1>{screen === "profile" ? profile?.handle ?? (signedIn ? "Signed in." : "Playing as guest.") : "Leaderboard"}</h1>
         <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/5 · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Official ranks include eligible human Ranked players only."}</p>
       </div>
       {infoLoading && <p className="status-note" role="status">Loading {screen === "profile" ? "profile" : "leaderboard"}…</p>}
+      {screen === "profile" && !infoLoading && !signedIn && <button className="google-button" disabled={!firebaseConfig || signInBusy} onClick={() => void signInWithGoogle()}><span>G</span> {signInBusy ? "Signing in…" : firebaseConfig ? "Sign in with Google for Ranked" : "Google sign-in is not configured"}</button>}
+      {screen === "profile" && signedIn && !profile?.handle && <button className="primary-cta full" onClick={() => navigate("ranked")}>Set up Ranked profile <span>→</span></button>}
       {screen === "profile" && profile && <ProfileStats profile={profile} />}
       {screen === "profile" && profile?.handle && <section className="room-form ranked-setup"><label>Change public handle<input value={newHandle} onChange={(event) => setNewHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><p className="status-note">After your first rename, you can change your handle once every 30 days.</p><button className="secondary-cta full" disabled={renaming || !/^[A-Za-z0-9_]{3,16}$/.test(newHandle.trim()) || newHandle.trim() === profile.handle} onClick={rename}>{renaming ? "Changing handle…" : "Change handle"}</button></section>}
       {screen === "leaderboard" && leaders.length > 0 && <LeaderboardList entries={leaders} />}

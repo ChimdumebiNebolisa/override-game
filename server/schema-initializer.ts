@@ -21,11 +21,13 @@ export function initializeDatabase(db: Database.Database, options: { workerBasel
   db.pragma('busy_timeout = 5000');
   db.exec(initialSchema);
   if (options.workerBaseline) {
-    if (hasApplicationData(db)) {
+    const workerBaselineApplied = [1, 2, 3, 4, 5].every((version) =>
+      Boolean(db.prepare('SELECT 1 FROM schema_migrations WHERE version = ?').get(version)));
+    if (!workerBaselineApplied && hasApplicationData(db)) {
       db.close();
       throw new Error('Cannot apply the current Worker schema baseline to a database with application data');
     }
-    db.exec(`CREATE TABLE IF NOT EXISTS ranked_code_attempts (
+    if (!workerBaselineApplied) db.exec(`CREATE TABLE IF NOT EXISTS ranked_code_attempts (
       uid TEXT PRIMARY KEY REFERENCES profiles(uid),
       window_started_at INTEGER NOT NULL,
       attempts INTEGER NOT NULL
@@ -42,8 +44,10 @@ export function initializeDatabase(db: Database.Database, options: { workerBasel
     CREATE UNIQUE INDEX IF NOT EXISTS ranked_challenge_code_hash
       ON ranked_invitations(code_hash) WHERE code_hash IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS quick_rematch_token_hash ON quick_rematch_invitations(token_hash);`);
-    for (const version of [1, 2, 3, 4]) {
-      db.prepare('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(version, Date.now());
+    if (!workerBaselineApplied) {
+      for (const version of [1, 2, 3, 4]) {
+        db.prepare('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(version, Date.now());
+      }
     }
   } else {
   try {

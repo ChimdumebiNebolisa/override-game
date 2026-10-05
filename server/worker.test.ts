@@ -78,3 +78,25 @@ it('routes Worker API requests through durable SQLite sessions and room creation
   expect(await staticResponse.text()).toBe('app');
   expect(await store.sqlite.prepare('SELECT COUNT(*) AS count FROM worker_usage').get()).toEqual({ count: 1 });
 });
+
+it('reopens an initialized Worker database after guest session data has been written', async () => {
+  process.env.NODE_ENV = 'test';
+  const origin = 'http://localhost:5173';
+  const env = {
+    PUBLIC_ORIGIN: origin,
+    FIREBASE_WEB_CONFIG: JSON.stringify({ apiKey: 'test', authDomain: 'override-game.firebaseapp.com', projectId: 'override-game', appId: 'test' }),
+    INVITATION_ENCRYPTION_KEY: 'worker-integration-test-key',
+    GAME: { idFromName(name: string) { return name; }, get() { throw new Error('Not used by this test'); } },
+    ASSETS: { async fetch() { return new Response('app'); } },
+  };
+  const store = createWorkerTestStorage();
+  stores.push(store);
+  const ctx = { storage: store.storage, acceptWebSocket() {}, getWebSockets() { return []; } };
+  const request = new Request(`${origin}/api/session`);
+
+  const firstInstance = new GameDurableObject(ctx, env);
+  expect((await firstInstance.fetch(request)).status).toBe(200);
+
+  const restartedInstance = new GameDurableObject(ctx, env);
+  expect((await restartedInstance.fetch(request)).status).toBe(200);
+});
