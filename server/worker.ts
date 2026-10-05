@@ -125,7 +125,7 @@ export class GameDurableObject {
     setProcessEnvironment(env);
     this.database = new WorkerSqliteDatabase(ctx.storage.sql as SqlStorage, ctx.storage);
     this.db = asDomainDatabase(this.database);
-    initializeDatabase(this.db);
+    initializeDatabase(this.db, { workerBaseline: true });
     this.database.exec(`CREATE TABLE IF NOT EXISTS worker_socket_closures (
       id TEXT PRIMARY KEY, attachment_json TEXT NOT NULL, due_at INTEGER NOT NULL
     );`);

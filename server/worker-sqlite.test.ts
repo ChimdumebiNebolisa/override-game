@@ -45,3 +45,23 @@ it('initializes the app schema and applies atomic domain transactions through th
   })()).toThrow('rollback');
   expect(adapter.prepare('SELECT 1 AS present FROM sessions WHERE id = ?').get('rollback-me')).toBeUndefined();
 });
+
+it('initializes the current Worker schema without unsupported table_info pragmas', () => {
+  process.env.NODE_ENV = 'test';
+  process.env.INVITATION_ENCRYPTION_KEY = 'worker-adapter-test-key';
+  const store = createWorkerTestStorage();
+  stores.push(store);
+  const sql = {
+    ...store.storage.sql,
+    exec(statement: string, ...bindings: unknown[]) {
+      if (/^\s*PRAGMA\s+table_info\b/i.test(statement)) throw new Error('not authorized: SQLITE_AUTH');
+      return store.storage.sql.exec(statement, ...bindings);
+    },
+  };
+  const adapter = new WorkerSqliteDatabase(sql, store.storage);
+  const db = asDomainDatabase(adapter);
+
+  expect(() => initializeDatabase(db, { workerBaseline: true })).not.toThrow();
+  expect(adapter.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
+    .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
+});

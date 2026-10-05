@@ -3,11 +3,49 @@ import { randomBytes } from 'node:crypto';
 import { invitationTokenHash, protectInvitationSecret, revealInvitationSecret, sessionTokenId } from './invitation-secrets.js';
 import { initialSchema } from './schema.js';
 
-export function initializeDatabase(db: Database.Database): Database.Database {
+const APPLICATION_TABLES = [
+  'sessions', 'new_session_limits', 'profiles', 'rooms', 'join_attempts', 'matches', 'pending_actions',
+  'round_results', 'presence_events', 'telemetry_events', 'ranked_ownership', 'ranked_queue',
+  'rating_settlements', 'settlement_failures', 'settlement_duplicate_attempts', 'disconnect_incidents',
+  'ranked_invitations', 'ranked_code_attempts', 'quick_rematch_invitations',
+];
+
+function hasApplicationData(db: Database.Database): boolean {
+  return APPLICATION_TABLES.filter((table) => table !== 'ranked_code_attempts')
+    .some((table) => Boolean(db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()));
+}
+
+export function initializeDatabase(db: Database.Database, options: { workerBaseline?: boolean } = {}): Database.Database {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   db.exec(initialSchema);
+  if (options.workerBaseline) {
+    if (hasApplicationData(db)) {
+      db.close();
+      throw new Error('Cannot apply the current Worker schema baseline to a database with application data');
+    }
+    db.exec(`CREATE TABLE IF NOT EXISTS ranked_code_attempts (
+      uid TEXT PRIMARY KEY REFERENCES profiles(uid),
+      window_started_at INTEGER NOT NULL,
+      attempts INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS one_room_per_creation_key
+      ON rooms(host_key, creation_key) WHERE creation_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS one_bot_match_per_human_creation_key
+      ON matches(CASE WHEN player_a_key LIKE 'bot:%' THEN player_b_key ELSE player_a_key END, creation_key)
+      WHERE creation_key IS NOT NULL AND bot_difficulty IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS ranked_challenge_code
+      ON ranked_invitations(code) WHERE code IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS rooms_invite_token_hash ON rooms(invite_token_hash);
+    CREATE UNIQUE INDEX IF NOT EXISTS ranked_invite_token_hash ON ranked_invitations(token_hash);
+    CREATE UNIQUE INDEX IF NOT EXISTS ranked_challenge_code_hash
+      ON ranked_invitations(code_hash) WHERE code_hash IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS quick_rematch_token_hash ON quick_rematch_invitations(token_hash);`);
+    for (const version of [1, 2, 3, 4]) {
+      db.prepare('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(version, Date.now());
+    }
+  } else {
   try {
     db.transaction(() => {
       const applied = db.prepare('SELECT 1 FROM schema_migrations WHERE version = 1').get();
@@ -172,6 +210,7 @@ export function initializeDatabase(db: Database.Database): Database.Database {
     db.close();
     throw error;
   }
+  }
   try {
     db.transaction(() => {
       const applied = db.prepare('SELECT 1 FROM schema_migrations WHERE version = 5').get();
@@ -194,15 +233,7 @@ export function initializeDatabase(db: Database.Database): Database.Database {
       throw new Error('INVITATION_ENCRYPTION_KEY does not match this database');
     }
   } catch (error) {
-    const applicationTables = [
-      'sessions', 'new_session_limits', 'profiles', 'rooms', 'join_attempts', 'matches', 'pending_actions',
-      'round_results', 'presence_events', 'telemetry_events', 'ranked_ownership', 'ranked_queue',
-      'rating_settlements', 'settlement_failures', 'settlement_duplicate_attempts', 'disconnect_incidents',
-      'ranked_invitations', 'ranked_code_attempts', 'quick_rematch_invitations',
-    ];
-    const hasApplicationData = applicationTables.some((table) =>
-      Boolean(db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()));
-    if (hasApplicationData) {
+    if (hasApplicationData(db)) {
       db.close();
       if (error instanceof Error && error.message.includes('INVITATION_ENCRYPTION_KEY')) throw error;
       throw new Error('INVITATION_ENCRYPTION_KEY does not match this database');
