@@ -373,23 +373,21 @@ export class GameDurableObject {
 
   private async scheduleAlarm(): Promise<void> {
     const now = Date.now();
-    const next = this.database.prepare(`SELECT MIN(due_at) AS due_at FROM (
-      SELECT deadline AS due_at FROM matches WHERE status = 'decision' AND deadline IS NOT NULL
-      UNION ALL SELECT transition_at FROM matches WHERE status = 'transition' AND transition_at IS NOT NULL
-      UNION ALL SELECT grace_until FROM matches WHERE status = 'grace' AND grace_until IS NOT NULL
-      UNION ALL SELECT ready_deadline FROM matches WHERE status = 'readying' AND ready_deadline IS NOT NULL
-      UNION ALL SELECT lease_expires_at FROM ranked_ownership WHERE state = 'searching' AND lease_expires_at IS NOT NULL
-      UNION ALL SELECT MIN(expires_at) FROM (
-        SELECT expires_at FROM ranked_invitations WHERE status = 'open'
-        UNION ALL SELECT expires_at FROM quick_rematch_invitations WHERE status = 'open'
-        UNION ALL SELECT expires_at FROM rooms WHERE status = 'open'
-      )
-      UNION ALL SELECT due_at FROM worker_socket_closures
-      UNION ALL SELECT CASE WHEN EXISTS (
+    const next = this.database.prepare(`SELECT MIN(column1) AS due_at FROM (VALUES
+      ((SELECT MIN(deadline) FROM matches WHERE status = 'decision' AND deadline IS NOT NULL)),
+      ((SELECT MIN(transition_at) FROM matches WHERE status = 'transition' AND transition_at IS NOT NULL)),
+      ((SELECT MIN(grace_until) FROM matches WHERE status = 'grace' AND grace_until IS NOT NULL)),
+      ((SELECT MIN(ready_deadline) FROM matches WHERE status = 'readying' AND ready_deadline IS NOT NULL)),
+      ((SELECT MIN(lease_expires_at) FROM ranked_ownership WHERE state = 'searching' AND lease_expires_at IS NOT NULL)),
+      ((SELECT MIN(expires_at) FROM ranked_invitations WHERE status = 'open')),
+      ((SELECT MIN(expires_at) FROM quick_rematch_invitations WHERE status = 'open')),
+      ((SELECT MIN(expires_at) FROM rooms WHERE status = 'open')),
+      ((SELECT MIN(due_at) FROM worker_socket_closures)),
+      (CASE WHEN EXISTS (
         SELECT 1 FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
         WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL
           AND m.ended_at < ? AND s.match_id IS NULL
-      ) THEN ? ELSE ? END
+      ) THEN ? ELSE ? END)
     )`).get(now, now + 1_000, now + 60 * 60_000) as { due_at: number | null };
     const alarm = Math.max(now + 50, next.due_at ?? now + 60 * 60_000);
     const current = await this.ctx.storage.getAlarm();

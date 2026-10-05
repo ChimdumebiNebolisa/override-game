@@ -35,8 +35,7 @@ it('routes Worker API requests through durable SQLite sessions and room creation
     ...store.storage.sql,
     exec(statement: string, ...bindings: unknown[]) {
       if (/^\s*PRAGMA\s+page_count\b/i.test(statement)) throw new Error('not authorized: SQLITE_AUTH');
-      const outerSelect = statement.trim().match(/^SELECT MIN\(due_at\) AS due_at FROM \(([\s\S]*)\)$/i);
-      if (outerSelect && topLevelUnionCount(outerSelect[1]) > 8) {
+      if (/^SELECT MIN\(column1\) AS due_at FROM \(VALUES/i.test(statement) && /\bUNION\b/i.test(statement)) {
         throw new Error('too many terms in compound SELECT: SQLITE_ERROR');
       }
       return store.storage.sql.exec(statement, ...bindings);
@@ -79,19 +78,3 @@ it('routes Worker API requests through durable SQLite sessions and room creation
   expect(await staticResponse.text()).toBe('app');
   expect(await store.sqlite.prepare('SELECT COUNT(*) AS count FROM worker_usage').get()).toEqual({ count: 1 });
 });
-
-function topLevelUnionCount(statement: string): number {
-  let depth = 0;
-  let inString = false;
-  let unions = 0;
-  for (let index = 0; index < statement.length; index++) {
-    const character = statement[index];
-    if (character === "'") {
-      if (inString && statement[index + 1] === "'") index++;
-      else inString = !inString;
-    } else if (!inString && character === '(') depth++;
-    else if (!inString && character === ')') depth--;
-    else if (!inString && depth === 0 && /^UNION\s+ALL\b/i.test(statement.slice(index))) unions++;
-  }
-  return unions;
-}
