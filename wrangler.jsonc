@@ -6,6 +6,9 @@
   "compatibility_date": "2026-10-05",
   "compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
   "workers_dev": true,
+  "vars": {
+    "FIREBASE_WEB_CONFIG": "{\"apiKey\":\"AIzaSyDizuv0BrCmJ2Ci_elWdIGLgYbtXLP-pVQ\",\"authDomain\":\"override-game.firebaseapp.com\",\"projectId\":\"override-game\",\"appId\":\"1:505857880522:web:0d0856445f5b645626df33\"}"
+  },
   "limits": { "cpu_ms": 100 },
   "assets": {
     "directory": "./dist",
