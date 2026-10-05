@@ -31,9 +31,17 @@ it('routes Worker API requests through durable SQLite sessions and room creation
   };
   const store = createWorkerTestStorage();
   stores.push(store);
+  const sql = {
+    ...store.storage.sql,
+    exec(statement: string, ...bindings: unknown[]) {
+      if (/^\s*PRAGMA\s+page_count\b/i.test(statement)) throw new Error('not authorized: SQLITE_AUTH');
+      return store.storage.sql.exec(statement, ...bindings);
+    },
+  };
+  const storage = { ...store.storage, sql };
   const sockets: WorkerWebSocket[] = [];
   const ctx = {
-    storage: store.storage,
+    storage,
     acceptWebSocket(socket: WorkerWebSocket) { sockets.push(socket); },
     getWebSockets() { return sockets; },
   };

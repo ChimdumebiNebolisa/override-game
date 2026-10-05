@@ -45,7 +45,6 @@ const REQUEST_BUDGET = 200_000;
 const DURATION_BUDGET_GB_SECONDS = 200_000;
 const READ_ROW_BUDGET = 18_000_000_000;
 const WRITE_ROW_BUDGET = 35_000_000;
-const STORAGE_BUDGET_BYTES = 4 * 1024 * 1024 * 1024;
 const ACTIVE_MEMORY_GB = 0.128;
 const MONTHLY_UNITS = REQUEST_BUDGET * 20;
 const MAX_SOCKET_MESSAGE_BYTES = 1_024;
@@ -355,14 +354,9 @@ export class GameDurableObject {
     const month = monthKey();
     const row = this.database.prepare('SELECT request_units, active_ms, rows_read, rows_written FROM worker_usage WHERE month = ?')
       .get(month) as { request_units: number; active_ms: number; rows_read: number; rows_written: number } | undefined;
-    const size = this.database.pragma('page_count') as Array<{ page_count: number }>;
-    const pages = size[0]?.page_count ?? 0;
-    const pageSize = this.database.pragma('page_size') as Array<{ page_size: number }>;
-    const bytes = pages * (pageSize[0]?.page_size ?? 4_096);
     return (!row || row.request_units + units <= MONTHLY_UNITS) &&
       (!row || row.active_ms * ACTIVE_MEMORY_GB / 1_000 <= DURATION_BUDGET_GB_SECONDS) &&
-      (!row || row.rows_read <= READ_ROW_BUDGET) && (!row || row.rows_written <= WRITE_ROW_BUDGET) &&
-      bytes < STORAGE_BUDGET_BYTES;
+      (!row || row.rows_read <= READ_ROW_BUDGET) && (!row || row.rows_written <= WRITE_ROW_BUDGET);
   }
 
   private recordUsage(units: number, activeMs: number): void {
