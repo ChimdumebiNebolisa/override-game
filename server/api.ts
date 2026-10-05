@@ -33,6 +33,7 @@ export interface ApiContext {
   db: Database.Database;
   publicOrigin?: string;
   firebaseWebConfig?: unknown;
+  allowNewGame?: () => boolean;
   logMatchEvent(event: string, matchId: string): void;
   notifyRoom(roomId: string): void;
   notifyMatch(matchId: string): void;
@@ -43,6 +44,11 @@ export function createApiHandler(context: ApiContext) {
   const { db, logMatchEvent, notifyRoom, notifyMatch, connectLiveParticipants } = context;
   const publicOrigin = context.publicOrigin ?? configuredPublicOrigin;
   const firebaseWebConfig = context.firebaseWebConfig ?? configuredFirebaseWebConfig;
+  const requireNewGameAdmission = () => {
+    if (context.allowNewGame && !context.allowNewGame()) {
+      throw new HttpError(503, 'New games are paused to preserve capacity for matches already in progress');
+    }
+  };
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -91,11 +97,13 @@ export function createApiHandler(context: ApiContext) {
     }
 
     if (path === '/api/rooms' && method === 'POST') {
+      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       const body = await readJson(req);
       return json(res, 201, { room: createQuickRoom(db, session, displayName(body.displayName), parseCreationKey(body.creationKey)) });
     }
     if (path === '/api/rooms/join' && method === 'POST') {
+      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       const body = await readJson(req);
       const code = typeof body.code === 'string' ? body.code.trim() : undefined;
@@ -128,6 +136,7 @@ export function createApiHandler(context: ApiContext) {
       return json(res, 200, { room, match: room.matchId ? matchForSession(db, room.matchId, session) : null });
     }
     if (path === '/api/bot-matches' && method === 'POST') {
+      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       const body = await readJson(req);
       const mode = body.mode === 'practice' ? 'practice' : 'quick';
@@ -143,6 +152,7 @@ export function createApiHandler(context: ApiContext) {
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       if (method === 'GET') return json(res, 200, { queue: rankedQueueStatus(db, session.uid) });
       if (method === 'POST') {
+        requireNewGameAdmission();
         const queue = joinRankedQueue(db, session.uid);
         recordTelemetryEvent(db, session.id, 'matchmaking_started', 'ranked-queue');
         return json(res, 200, { queue });
@@ -150,6 +160,7 @@ export function createApiHandler(context: ApiContext) {
       if (method === 'DELETE') return json(res, 200, { left: leaveRankedQueue(db, session.uid) });
     }
     if (path === '/api/ranked/challenges' && method === 'POST') {
+      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       return json(res, 201, { invitation: createRankedChallenge(db, session.uid) });
@@ -160,6 +171,7 @@ export function createApiHandler(context: ApiContext) {
       return json(res, 200, { invitation: pendingRankedChallenge(db, session.uid) });
     }
     if (path === '/api/ranked/challenges/accept' && method === 'POST') {
+      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       const body = await readJson(req);
@@ -167,6 +179,7 @@ export function createApiHandler(context: ApiContext) {
       return json(res, 200, { shell: acceptRankedChallenge(db, body.token, session.uid) });
     }
     if (path === '/api/ranked/challenges/accept-code' && method === 'POST') {
+      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       const body = await readJson(req);
@@ -174,6 +187,7 @@ export function createApiHandler(context: ApiContext) {
       return json(res, 200, { shell: acceptRankedChallengeByCode(db, body.code, session.uid) });
     }
     if (path === '/api/ranked/rematches/accept' && method === 'POST') {
+      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       const body = await readJson(req);
@@ -273,6 +287,7 @@ export function createApiHandler(context: ApiContext) {
     }
     const quickRematchAccept = path.match(/^\/api\/matches\/([a-f0-9-]{36})\/rematch\/accept$/);
     if (quickRematchAccept && method === 'POST') {
+      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       const body = await readJson(req);
       if (typeof body.token !== 'string') throw new HttpError(400, 'Rematch token required');

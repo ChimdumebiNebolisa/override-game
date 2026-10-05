@@ -11,7 +11,12 @@ import {
   type Player,
 } from "../shared/rules";
 import { api, snapshotIsCurrent, type LeaderboardEntry, type PublicMatch, type QuickRematchInvitation, type RankedInvitation, type RankedProfile, type RankedQueue, type RankedSettlement, type Room } from "./api";
-import { googleFirebaseIdToken } from "./firebase-auth";
+import {
+  beginGoogleFirebaseSignIn,
+  clearGoogleAuthReturnFromLocation,
+  completeGoogleFirebaseRedirect,
+  googleAuthReturnScreenFromLocation,
+} from "./firebase-auth";
 
 type Screen =
   | "home"
@@ -28,6 +33,24 @@ type Difficulty = "Easy" | "Normal" | "Hard";
 type SoloMode = "practice" | "quick";
 type PlayMode = SoloMode | "ranked";
 const CURRENT_MATCH_KEY = "override:current-match";
+let googleAuthStartup: Promise<void> | null = null;
+
+function finishGoogleAuthRedirect(): Promise<void> {
+  if (!googleAuthStartup) {
+    googleAuthStartup = (async () => {
+      try {
+        if (!googleAuthReturnScreenFromLocation()) return;
+        const { firebaseConfig } = await api.getConfig();
+        if (!firebaseConfig) throw new Error("Google sign-in is not configured.");
+        const idToken = await completeGoogleFirebaseRedirect(firebaseConfig);
+        if (idToken) await api.googleSignIn(idToken);
+      } finally {
+        clearGoogleAuthReturnFromLocation();
+      }
+    })();
+  }
+  return googleAuthStartup;
+}
 
 function decodePathComponent(value: string): string | null {
   try { return decodeURIComponent(value); }
@@ -907,7 +930,7 @@ function QuickRematchLanding({ token, navigate, onMatch }: { token: string; navi
   </main>;
 }
 
-function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: Screen) => void; onMatch: (match: PublicMatch) => void; inviteIntent: { kind: "challenge" | "rematch"; token: string } | null }) {
+function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { navigate: (screen: Screen) => void; onMatch: (match: PublicMatch) => void; inviteIntent: { kind: "challenge" | "rematch"; token: string } | null; authRedirectError: string }) {
   const [profile, setProfile] = useState<RankedProfile | null>(null);
   const [signedIn, setSignedIn] = useState(false);
   const [firebaseConfig, setFirebaseConfig] = useState<{ apiKey: string; authDomain: string; projectId: string; appId: string } | null>(null);
@@ -967,6 +990,8 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
     return () => { active = false; };
   }, []);
 
+  useEffect(() => { if (authRedirectError) setError(authRedirectError); }, [authRedirectError]);
+
   useEffect(() => {
     if ((!queue && !inviteUrl) || queue?.state === "active" || queue?.state === "timed-out" || queue?.state === "ready-expired") return;
     const timer = window.setInterval(() => void refreshQueue().catch(() => undefined), 900);
@@ -988,10 +1013,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
     setError("");
     void api.trackEvent("ranked_auth_started", "ranked").catch(() => undefined);
     try {
-      const idToken = await googleFirebaseIdToken(firebaseConfig);
-      const response = await api.googleSignIn(idToken);
-      setSignedIn(true);
-      setProfile(response.profile);
+      await beginGoogleFirebaseSignIn(firebaseConfig, "ranked");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Google sign-in failed.");
     } finally {
@@ -1091,7 +1113,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent }: { navigate: (screen: 
   );
 }
 
-function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | "how-to"; navigate: (screen: Screen) => void }) {
+function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderboard" | "profile" | "how-to"; navigate: (screen: Screen) => void; authRedirectError: string }) {
   const [profile, setProfile] = useState<RankedProfile | null>(null);
   const [signedIn, setSignedIn] = useState(false);
   const [firebaseConfig, setFirebaseConfig] = useState<{ apiKey: string; authDomain: string; projectId: string; appId: string } | null>(null);
@@ -1128,6 +1150,7 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
     }
     return () => { current = false; };
   }, [screen]);
+  useEffect(() => { if (authRedirectError) setError(authRedirectError); }, [authRedirectError]);
   const rename = async () => {
     setRenaming(true); setError("");
     try { setProfile((await api.renameHandle(newHandle.trim())).profile); setNewHandle(""); }
@@ -1138,10 +1161,7 @@ function InfoScreen({ screen, navigate }: { screen: "leaderboard" | "profile" | 
     if (!firebaseConfig || signInBusy) return;
     setSignInBusy(true); setError("");
     try {
-      const idToken = await googleFirebaseIdToken(firebaseConfig);
-      const response = await api.googleSignIn(idToken);
-      setProfile(response.profile);
-      setSignedIn(true);
+      await beginGoogleFirebaseSignIn(firebaseConfig, "profile");
     } catch (reason) {
       const authError = reason as { code?: string; customData?: { originalError?: unknown } };
       const original = authError.customData?.originalError;
@@ -1266,17 +1286,28 @@ export function App() {
   const inviteIntent = rankedInviteFromPath();
   const guestInvite = guestInviteFromPath();
   const quickRematchToken = quickRematchFromPath();
-  const [screen, setScreen] = useState<Screen>(() => inviteIntent ? "ranked" : guestInvite ? "room" : quickRematchToken ? "quick-rematch" : "home");
+  const [screen, setScreen] = useState<Screen>(() => googleAuthReturnScreenFromLocation() ?? (inviteIntent ? "ranked" : guestInvite ? "room" : quickRematchToken ? "quick-rematch" : "home"));
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authRedirectError, setAuthRedirectError] = useState("");
   const [gameKey, setGameKey] = useState(0);
   const [solo, setSolo] = useState<{ mode: PlayMode; difficulty: Difficulty }>({ mode: "practice", difficulty: "Normal" });
   const [botMatch, setBotMatch] = useState<PublicMatch | null>(null);
   const [resumedRoom, setResumedRoom] = useState<Room | null>(null);
 
   useEffect(() => {
+    let active = true;
+    void finishGoogleAuthRedirect()
+      .catch((reason) => { if (active) setAuthRedirectError(reason instanceof Error ? reason.message : "Google sign-in could not finish."); })
+      .finally(() => { if (active) setAuthLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (screen === "game" && botMatch) window.sessionStorage.setItem(CURRENT_MATCH_KEY, botMatch.id);
   }, [screen, botMatch]);
 
   useEffect(() => {
+    if (authLoading) return;
     if (inviteIntent || guestInvite || quickRematchToken) return;
     let active = true;
     const restore = async () => {
@@ -1314,7 +1345,7 @@ export function App() {
     };
     void restore();
     return () => { active = false; };
-  }, []);
+  }, [authLoading]);
 
   const navigate = (next: Screen) => {
     if (next !== "game") window.sessionStorage.removeItem(CURRENT_MATCH_KEY);
@@ -1335,6 +1366,8 @@ export function App() {
     navigate("game");
   };
 
+  if (authLoading) return <div className="app-shell"><main className="panel-page"><p className="status-note" role="status">Checking sign-in…</p></main></div>;
+
   return (
     <div className="app-shell">
       {screen !== "game" && <AppHeader navigate={navigate} />}
@@ -1344,8 +1377,8 @@ export function App() {
       {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.status === "voided" ? undefined : botMatch.id); }} onRestartPractice={(key) => start("practice", solo.difficulty, key, undefined, botMatch.id)} />}
       {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
-      {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
-      {(screen === "leaderboard" || screen === "profile" || screen === "how-to") && <InfoScreen screen={screen} navigate={navigate} />}
+      {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} authRedirectError={authRedirectError} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
+      {(screen === "leaderboard" || screen === "profile" || screen === "how-to") && <InfoScreen screen={screen} authRedirectError={authRedirectError} navigate={navigate} />}
     </div>
   );
 }

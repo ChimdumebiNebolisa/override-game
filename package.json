@@ -9,6 +9,7 @@
     "dev:server": "tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
+    "test:worker-runtime": "node scripts/worker-runtime-smoke.mjs",
     "report:metrics": "tsx server/report.ts",
     "backup:db": "tsx server/backup.ts",
     "backup:fixture": "tsx server/backup-fixture.ts",

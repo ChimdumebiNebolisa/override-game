@@ -10,11 +10,15 @@ interface Storage {
   transactionSync<T>(callback: () => T): T;
   getAlarm(): Promise<number | null>;
   setAlarm(timestamp: number): Promise<void>;
+  getCurrentBookmark?(): Promise<string>;
+  getBookmarkForTime?(timestamp: number): Promise<string>;
+  onNextSessionRestoreBookmark?(bookmark: string): Promise<string>;
 }
 interface SocketState {
   storage: Storage;
   acceptWebSocket(socket: WorkerWebSocket, tags?: string[]): void;
   getWebSockets(tag?: string): WorkerWebSocket[];
+  abort?(): void;
 }
 interface Namespace {
   idFromName(name: string): unknown;
@@ -26,6 +30,7 @@ interface Environment {
   PUBLIC_ORIGIN?: string;
   FIREBASE_WEB_CONFIG: string;
   INVITATION_ENCRYPTION_KEY: string;
+  RECOVERY_CONTROL_TOKEN?: string;
 }
 interface SocketAttachment {
   roomId: string | null;
@@ -48,6 +53,16 @@ const WRITE_ROW_BUDGET = 35_000_000;
 const ACTIVE_MEMORY_GB = 0.128;
 const MONTHLY_UNITS = REQUEST_BUDGET * 20;
 const MAX_SOCKET_MESSAGE_BYTES = 1_024;
+const MAX_JSON_BODY_BYTES = 16_384;
+const MATCH_RESERVE_UNITS = 20_000;
+const SAFE_USAGE_FRACTION = 0.8;
+const DAILY_REQUEST_UNITS = 100_000 * 20;
+const DAILY_DURATION_GB_SECONDS = 13_000;
+const DAILY_READ_ROW_BUDGET = 5_000_000;
+const DAILY_WRITE_ROW_BUDGET = 100_000;
+const MATCH_RESERVE_DURATION_GB_SECONDS = 25;
+const MATCH_RESERVE_READ_ROWS = 25_000;
+const MATCH_RESERVE_WRITE_ROWS = 1_000;
 
 function setProcessEnvironment(env: Environment, requestOrigin?: string): void {
   process.env.PUBLIC_ORIGIN = env.PUBLIC_ORIGIN ?? requestOrigin ?? '';
@@ -71,8 +86,27 @@ function requestLike(request: Request): NodeRequestLike {
     socket: { remoteAddress: request.headers.get('CF-Connecting-IP') ?? 'unknown' },
     async *[Symbol.asyncIterator]() {
       if (!request.body) return;
-      const bytes = new Uint8Array(await request.arrayBuffer());
-      if (bytes.length) yield bytes;
+      const contentLength = headers['content-length'];
+      if (contentLength && /^\d+$/.test(contentLength) && Number(contentLength) > MAX_JSON_BODY_BYTES) {
+        throw new HttpError(413, 'Request is too large');
+      }
+      const reader = request.body.getReader();
+      let size = 0;
+      let complete = false;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) { complete = true; break; }
+          size += value.byteLength;
+          if (size > MAX_JSON_BODY_BYTES) throw new HttpError(413, 'Request is too large');
+          yield value;
+        }
+      } finally {
+        if (!complete) {
+          try { await reader.cancel(); } catch { /* The client may already have closed the stream. */ }
+        }
+        reader.releaseLock();
+      }
     },
   };
 }
@@ -104,11 +138,27 @@ class ResponseCollector {
 
 export default {
   async fetch(request: Request, env: Environment): Promise<Response> {
-    if (!new URL(request.url).pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    const path = new URL(request.url).pathname;
+    if (path.startsWith('/__/auth/')) return proxyFirebaseAuth(request, env);
+    if (!path.startsWith('/api/') && !path.startsWith('/__ops/recovery/')) return env.ASSETS.fetch(request);
     const id = env.GAME.idFromName('override-game-global');
     return env.GAME.get(id).fetch(request);
   },
 };
+
+async function proxyFirebaseAuth(request: Request, env: Environment): Promise<Response> {
+  let projectId: unknown;
+  try { projectId = (JSON.parse(env.FIREBASE_WEB_CONFIG) as Record<string, unknown>).projectId; }
+  catch { return new Response('Firebase auth is not configured', { status: 503 }); }
+  if (typeof projectId !== 'string' || !/^[a-z0-9-]{1,128}$/.test(projectId)) {
+    return new Response('Firebase auth is not configured', { status: 503 });
+  }
+  const upstreamUrl = new URL(request.url);
+  upstreamUrl.protocol = 'https:';
+  upstreamUrl.hostname = `${projectId}.firebaseapp.com`;
+  upstreamUrl.port = '';
+  return fetch(new Request(upstreamUrl, request), { redirect: 'manual' });
+}
 
 export class GameDurableObject {
   private readonly database: WorkerSqliteDatabase;
@@ -133,18 +183,37 @@ export class GameDurableObject {
       active_ms INTEGER NOT NULL DEFAULT 0, rows_read INTEGER NOT NULL DEFAULT 0,
       rows_written INTEGER NOT NULL DEFAULT 0
     );`);
+    this.database.exec(`CREATE TABLE IF NOT EXISTS worker_daily_usage (
+      day TEXT PRIMARY KEY, request_units INTEGER NOT NULL DEFAULT 0,
+      active_ms INTEGER NOT NULL DEFAULT 0, rows_read INTEGER NOT NULL DEFAULT 0,
+      rows_written INTEGER NOT NULL DEFAULT 0
+    );`);
     this.database.exec(`CREATE TABLE IF NOT EXISTS worker_maintenance (
       id INTEGER PRIMARY KEY CHECK(id = 1), last_pruned_at INTEGER NOT NULL
     );`);
+    this.database.exec(`CREATE TABLE IF NOT EXISTS worker_recovery_control (
+      id INTEGER PRIMARY KEY CHECK(id = 1), requested_at INTEGER NOT NULL,
+      target_bookmark TEXT NOT NULL, undo_bookmark TEXT NOT NULL
+    );`);
   }
 
-  private async api() {
+  private async api(requestOrigin?: string) {
     if (!this.apiHandler) {
       const api = await import('./api.js');
       this.services = api.workerServices;
+      let firebaseWebConfig: unknown = null;
+      try {
+        const config = JSON.parse(this.env.FIREBASE_WEB_CONFIG) as Record<string, unknown>;
+        const authDomain = new URL(this.env.PUBLIC_ORIGIN ?? requestOrigin ?? 'https://invalid.example').host;
+        if (typeof config.apiKey === 'string' && typeof config.projectId === 'string' && typeof config.appId === 'string') {
+          firebaseWebConfig = { ...config, authDomain };
+        }
+      } catch { /* The API returns no browser auth config when the setting is invalid. */ }
       this.apiHandler = api.createApiHandler({
         db: this.db,
         publicOrigin: this.env.PUBLIC_ORIGIN,
+        firebaseWebConfig,
+        allowNewGame: () => this.allowNewGame(),
         logMatchEvent: (event, matchId) => this.logMatchEvent(event, matchId),
         notifyRoom: (roomId) => this.notify('room', roomId),
         notifyMatch: (matchId) => this.notify('match', matchId),
@@ -160,16 +229,27 @@ export class GameDurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
-    setProcessEnvironment(this.env, new URL(request.url).origin);
-    const start = performance.now();
-    const event = this.consumeBudget(20);
-    if (!event) {
-      this.recordUsage(20, performance.now() - start);
-      return this.pausedResponse();
+    const url = new URL(request.url);
+    setProcessEnvironment(this.env, url.origin);
+    if (url.pathname.startsWith('/__ops/recovery/')) {
+      const recoveryStart = performance.now();
+      try {
+        try { return await this.recoveryControl(request, url); }
+        catch (error) {
+          if (error instanceof HttpError) return Response.json({ error: error.message }, { status: error.status, headers: { 'cache-control': 'no-store' } });
+          console.error('Recovery control request failed');
+          return Response.json({ error: 'Recovery control request failed' }, { status: 500, headers: { 'cache-control': 'no-store' } });
+        }
+      } finally {
+        try { this.recordUsage(20, performance.now() - recoveryStart); } catch { /* Recovery must not fail because its usage counter failed. */ }
+      }
     }
+    if (url.pathname.startsWith('/api/') && this.recoveryPending()) {
+      return Response.json({ error: 'Recovery is in progress' }, { status: 503, headers: { 'retry-after': '5', 'cache-control': 'no-store' } });
+    }
+    const start = performance.now();
     try {
-      await this.api();
-      const url = new URL(request.url);
+      await this.api(url.origin);
       if (url.pathname === '/api/live' && request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
         return await this.connectSocket(request, url);
       }
@@ -188,7 +268,7 @@ export class GameDurableObject {
 
   async webSocketMessage(socket: WorkerWebSocket, message: string | ArrayBuffer): Promise<void> {
     const size = typeof message === 'string' ? new TextEncoder().encode(message).byteLength : message.byteLength;
-    if (size > MAX_SOCKET_MESSAGE_BYTES || !this.consumeBudget(1)) {
+    if (size > MAX_SOCKET_MESSAGE_BYTES) {
       socket.close(1009, 'Message limit exceeded');
       this.recordUsage(1, 0);
       return;
@@ -212,9 +292,8 @@ export class GameDurableObject {
 
   async alarm(): Promise<void> {
     const start = performance.now();
-    const event = this.consumeBudget(20);
-    if (!event) {
-      await this.ctx.storage.setAlarm(this.nextMonthStart());
+    if (this.recoveryPending()) {
+      this.ctx.abort?.();
       return;
     }
     try {
@@ -350,25 +429,58 @@ export class GameDurableObject {
     if (match) console.info(JSON.stringify({ at: new Date().toISOString(), event, matchId, status: match.status, revision: match.revision }));
   }
 
-  private consumeBudget(units: number): boolean {
+  private allowNewGame(): boolean {
     const month = monthKey();
     const row = this.database.prepare('SELECT request_units, active_ms, rows_read, rows_written FROM worker_usage WHERE month = ?')
       .get(month) as { request_units: number; active_ms: number; rows_read: number; rows_written: number } | undefined;
-    return (!row || row.request_units + units <= MONTHLY_UNITS) &&
-      (!row || row.active_ms * ACTIVE_MEMORY_GB / 1_000 <= DURATION_BUDGET_GB_SECONDS) &&
-      (!row || row.rows_read <= READ_ROW_BUDGET) && (!row || row.rows_written <= WRITE_ROW_BUDGET);
+    const day = new Date().toISOString().slice(0, 10);
+    const daily = this.database.prepare('SELECT request_units, active_ms, rows_read, rows_written FROM worker_daily_usage WHERE day = ?')
+      .get(day) as { request_units: number; active_ms: number; rows_read: number; rows_written: number } | undefined;
+    const live = this.database.prepare(`SELECT
+      (SELECT COUNT(*) FROM matches WHERE status IN ('readying', 'decision', 'transition', 'grace')) +
+      (SELECT COUNT(*) FROM rooms WHERE status = 'open') +
+      (SELECT COUNT(*) FROM ranked_ownership WHERE state = 'searching') +
+      (SELECT COUNT(*) FROM ranked_invitations WHERE status = 'open') +
+      (SELECT COUNT(*) FROM quick_rematch_invitations WHERE status = 'open') +
+      (SELECT COUNT(*) FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
+        WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL AND s.match_id IS NULL) AS count`).get() as { count: number };
+    const requestUnits = row?.request_units ?? 0;
+    const activeSeconds = (row?.active_ms ?? 0) * ACTIVE_MEMORY_GB / 1_000;
+    const reads = row?.rows_read ?? 0;
+    const writes = row?.rows_written ?? 0;
+    const dailyUnits = daily?.request_units ?? 0;
+    const dailyActiveSeconds = (daily?.active_ms ?? 0) * ACTIVE_MEMORY_GB / 1_000;
+    const dailyReads = daily?.rows_read ?? 0;
+    const dailyWrites = daily?.rows_written ?? 0;
+    return requestUnits + (live.count + 1) * MATCH_RESERVE_UNITS <= MONTHLY_UNITS * SAFE_USAGE_FRACTION &&
+      activeSeconds <= DURATION_BUDGET_GB_SECONDS * SAFE_USAGE_FRACTION &&
+      reads <= READ_ROW_BUDGET * SAFE_USAGE_FRACTION && writes <= WRITE_ROW_BUDGET * SAFE_USAGE_FRACTION &&
+      dailyUnits + (live.count + 1) * MATCH_RESERVE_UNITS <= DAILY_REQUEST_UNITS * SAFE_USAGE_FRACTION &&
+      dailyActiveSeconds + (live.count + 1) * MATCH_RESERVE_DURATION_GB_SECONDS <= DAILY_DURATION_GB_SECONDS * SAFE_USAGE_FRACTION &&
+      dailyReads + (live.count + 1) * MATCH_RESERVE_READ_ROWS <= DAILY_READ_ROW_BUDGET * SAFE_USAGE_FRACTION &&
+      dailyWrites + (live.count + 1) * MATCH_RESERVE_WRITE_ROWS <= DAILY_WRITE_ROW_BUDGET * SAFE_USAGE_FRACTION;
   }
 
   private recordUsage(units: number, activeMs: number): void {
     const sqlUsage = this.database.takeUsage();
     const month = monthKey();
+    const day = new Date().toISOString().slice(0, 10);
+    const measuredReads = sqlUsage.rowsRead + 1;
+    const measuredWrites = sqlUsage.rowsWritten * 2 + 2;
     this.database.prepare(`INSERT INTO worker_usage (month, request_units, active_ms, rows_read, rows_written)
       VALUES (?, ?, ?, ?, ?) ON CONFLICT(month) DO UPDATE SET
         request_units = request_units + excluded.request_units,
         active_ms = active_ms + excluded.active_ms,
         rows_read = rows_read + excluded.rows_read,
         rows_written = rows_written + excluded.rows_written`)
-      .run(month, units, Math.ceil(activeMs + 5), sqlUsage.rowsRead + 1, sqlUsage.rowsWritten * 2 + 2);
+      .run(month, units, Math.ceil(activeMs + 5), measuredReads, measuredWrites);
+    this.database.prepare(`INSERT INTO worker_daily_usage (day, request_units, active_ms, rows_read, rows_written)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(day) DO UPDATE SET
+        request_units = request_units + excluded.request_units,
+        active_ms = active_ms + excluded.active_ms,
+        rows_read = rows_read + excluded.rows_read,
+        rows_written = rows_written + excluded.rows_written`)
+      .run(day, units, Math.ceil(activeMs + 5), measuredReads, measuredWrites);
   }
 
   private async scheduleAlarm(): Promise<void> {
@@ -394,15 +506,84 @@ export class GameDurableObject {
     if (current === null || alarm < current) await this.ctx.storage.setAlarm(alarm);
   }
 
-  private nextMonthStart(): number {
-    const now = new Date();
-    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 5);
+  private recoveryPending(): boolean {
+    return Boolean(this.database.prepare('SELECT 1 FROM worker_recovery_control WHERE id = 1').get());
   }
 
-  private pausedResponse(): Response {
-    return Response.json({ error: 'Service paused to stay within the monthly usage budget' }, {
-      status: 503,
-      headers: { 'retry-after': String(Math.max(1, Math.ceil((this.nextMonthStart() - Date.now()) / 1_000))) },
-    });
+  private async recoveryControl(request: Request, url: URL): Promise<Response> {
+    const noStore = { 'cache-control': 'no-store' };
+    const token = this.env.RECOVERY_CONTROL_TOKEN;
+    if (!token || token.length < 32) return Response.json({ error: 'Not found' }, { status: 404, headers: noStore });
+    const supplied = request.headers.get('authorization')?.match(/^Bearer (.+)$/)?.[1] ?? '';
+    if (!constantTimeEqual(supplied, token)) return Response.json({ error: 'Unauthorized' }, { status: 401, headers: noStore });
+    if (request.method !== 'POST') return Response.json({ error: 'Method not allowed' }, { status: 405, headers: noStore });
+    if (url.pathname === '/__ops/recovery/bookmark') {
+      if (!this.ctx.storage.getCurrentBookmark) return Response.json({ error: 'PITR is unavailable in this runtime' }, { status: 501, headers: noStore });
+      return Response.json({ bookmark: await this.ctx.storage.getCurrentBookmark() }, { headers: noStore });
+    }
+    if (url.pathname !== '/__ops/recovery/restore') return Response.json({ error: 'Not found' }, { status: 404, headers: noStore });
+    if (this.recoveryPending()) return Response.json({ error: 'A recovery is already in progress' }, { status: 409, headers: noStore });
+    if (!this.ctx.storage.getBookmarkForTime || !this.ctx.storage.onNextSessionRestoreBookmark || !this.ctx.abort) {
+      return Response.json({ error: 'PITR restore is unavailable in this runtime' }, { status: 501, headers: noStore });
+    }
+    const body = await limitedJson(request, 1_024);
+    let targetBookmark: string;
+    if (typeof body.bookmark === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(body.bookmark)) {
+      targetBookmark = body.bookmark;
+    } else if (typeof body.timestamp === 'number' && Number.isFinite(body.timestamp) &&
+      body.timestamp <= Date.now() && body.timestamp >= Date.now() - 30 * 24 * 60 * 60_000) {
+      try { targetBookmark = await this.ctx.storage.getBookmarkForTime(body.timestamp); }
+      catch { return Response.json({ error: 'The requested time is outside the available recovery window' }, { status: 400, headers: noStore }); }
+    } else {
+      return Response.json({ error: 'Provide a bookmark or a timestamp within the last 30 days' }, { status: 400, headers: noStore });
+    }
+    let undoBookmark: string;
+    try { undoBookmark = await this.ctx.storage.onNextSessionRestoreBookmark(targetBookmark); }
+    catch { return Response.json({ error: 'Cloudflare could not schedule this restore' }, { status: 400, headers: noStore }); }
+    this.database.prepare(`INSERT INTO worker_recovery_control (id, requested_at, target_bookmark, undo_bookmark)
+      VALUES (1, ?, ?, ?)`).run(Date.now(), targetBookmark, undoBookmark);
+    await this.ctx.storage.setAlarm(Date.now() + 250);
+    return Response.json({ status: 'restore-scheduled', targetBookmark, undoBookmark, restartAfterMs: 250 }, { status: 202, headers: noStore });
   }
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let i = 0; i < left.length; i += 1) difference |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  return difference === 0;
+}
+
+async function limitedJson(request: Request, maxBytes: number): Promise<Record<string, unknown>> {
+  const contentLength = request.headers.get('content-length');
+  if (contentLength && /^\d+$/.test(contentLength) && Number(contentLength) > maxBytes) {
+    throw new HttpError(413, 'Request is too large');
+  }
+  if (!request.body) throw new HttpError(400, 'Expected a JSON object');
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let complete = false;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) { complete = true; break; }
+      size += value.byteLength;
+      if (size > maxBytes) throw new HttpError(413, 'Request is too large');
+      chunks.push(value);
+    }
+  } finally {
+    if (!complete) {
+      try { await reader.cancel(); } catch { /* The client may already have closed the stream. */ }
+    }
+    reader.releaseLock();
+  }
+  try {
+    const body = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+    const value: unknown = JSON.parse(new TextDecoder().decode(body));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
+    return value as Record<string, unknown>;
+  } catch { throw new HttpError(400, 'Expected a JSON object'); }
 }

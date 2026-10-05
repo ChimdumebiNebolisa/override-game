@@ -1,0 +1,5 @@
+PUBLIC_ORIGIN=http://127.0.0.1:8787
+FIREBASE_WEB_CONFIG={"apiKey":"local-test","authDomain":"override-game.firebaseapp.com","projectId":"override-game","appId":"local-test"}
+INVITATION_ENCRYPTION_KEY=local-only-replace-before-use
+# Optional local/staging-only bearer secret for Durable Object PITR operations.
+RECOVERY_CONTROL_TOKEN=local-recovery-token-replace-with-a-random-32-byte-value
