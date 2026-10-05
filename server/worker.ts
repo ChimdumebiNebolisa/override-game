@@ -379,9 +379,11 @@ export class GameDurableObject {
       UNION ALL SELECT grace_until FROM matches WHERE status = 'grace' AND grace_until IS NOT NULL
       UNION ALL SELECT ready_deadline FROM matches WHERE status = 'readying' AND ready_deadline IS NOT NULL
       UNION ALL SELECT lease_expires_at FROM ranked_ownership WHERE state = 'searching' AND lease_expires_at IS NOT NULL
-      UNION ALL SELECT expires_at FROM ranked_invitations WHERE status = 'open'
-      UNION ALL SELECT expires_at FROM quick_rematch_invitations WHERE status = 'open'
-      UNION ALL SELECT expires_at FROM rooms WHERE status = 'open'
+      UNION ALL SELECT MIN(expires_at) FROM (
+        SELECT expires_at FROM ranked_invitations WHERE status = 'open'
+        UNION ALL SELECT expires_at FROM quick_rematch_invitations WHERE status = 'open'
+        UNION ALL SELECT expires_at FROM rooms WHERE status = 'open'
+      )
       UNION ALL SELECT due_at FROM worker_socket_closures
       UNION ALL SELECT CASE WHEN EXISTS (
         SELECT 1 FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
