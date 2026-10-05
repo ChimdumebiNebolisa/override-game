@@ -71,7 +71,7 @@ The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.m
 ## Release gates still open
 
 1. Run the [structured human playtest](PLAYTEST_PROTOCOL.md) in plan M1/PRD §40–41 with competent pairs and a first-time player. Record comprehension, action choices, Ambush success, game length, side results, voluntary rematches, and a go/tune/stop decision.
-2. Configure Cloudflare Workers Builds with build command `npm run build` and deploy command `npx wrangler deploy`; set `FIREBASE_WEB_CONFIG` and the `INVITATION_ENCRYPTION_KEY` secret. Confirm the student entitlement and billing controls before public deployment. App guardrails are not an account-level spending cap. No Render, add-ons, custom domain, or other paid hosting is allowed by D12.
+2. Workers Builds can leave its build command blank because Wrangler runs `npm run build` from `wrangler.jsonc` before `npx wrangler deploy`. Set `FIREBASE_WEB_CONFIG` and the `INVITATION_ENCRYPTION_KEY` secret in the Worker environment. Confirm the student entitlement and billing controls before public deployment. App guardrails are not an account-level spending cap. No Render, add-ons, custom domain, or other paid hosting is allowed by D12.
 3. Authorize the deployed `workers.dev` origin in Firebase, then verify two distinct real accounts through challenge return, ready/binding, settlement, rematch, and leaderboard placement on desktop and mobile. Implement and rehearse an export/restore flow that stays within covered usage.
 4. Review usage ceilings and the 30-day guest retention policy; exercise Worker rate limits and quota guardrails. Establish how billing is prevented if traffic exceeds the included allowances before public launch.
 
