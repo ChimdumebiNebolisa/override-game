@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'vitest';
+import { afterEach, expect, test } from 'vitest';
+import { generateKeyPair, SignJWT } from 'jose';
 import { openDatabase } from './db.js';
 import { HttpError } from './http.js';
 import {
@@ -9,6 +10,7 @@ import {
   renameHandle,
   validateHandle,
   verifyFirebaseIdToken,
+  verifyFirebaseJwt,
 } from './auth.js';
 
 const dbs: ReturnType<typeof openDatabase>[] = [];
@@ -116,4 +118,20 @@ test('Firebase ID tokens require Google provider and bind verified UID to game s
     assertHttpError(error, 409);
     return true;
   });
+});
+
+test('Firebase JWT verification pins signing algorithm, project audience, issuer, auth time, and Google provider', async () => {
+  const { privateKey, publicKey } = await generateKeyPair('RS256', { modulusLength: 2048 });
+  const now = Math.floor(Date.now() / 1_000);
+  const sign = (projectId: string, provider = 'google.com', authTime = now) => new SignJWT({
+    firebase: { sign_in_provider: provider }, auth_time: authTime,
+  }).setProtectedHeader({ alg: 'RS256' }).setSubject('firebase-user')
+    .setIssuer(`https://securetoken.google.com/${projectId}`).setAudience(projectId)
+    .setIssuedAt(now).setExpirationTime(now + 3_600).sign(privateKey);
+
+  const token = await sign('override-game');
+  await expect(verifyFirebaseJwt(token, 'override-game', publicKey)).resolves.toMatchObject({ uid: 'firebase-user' });
+  await expect(verifyFirebaseJwt(token, 'other-project', publicKey)).rejects.toThrow();
+  await expect(verifyFirebaseJwt(await sign('override-game', 'password'), 'override-game', publicKey)).rejects.toThrow('not from Google');
+  await expect(verifyFirebaseJwt(await sign('override-game', 'google.com', now + 300), 'override-game', publicKey)).rejects.toThrow('identity claims');
 });

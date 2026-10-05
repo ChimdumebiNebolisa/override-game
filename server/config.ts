@@ -35,18 +35,3 @@ if (process.env.NODE_ENV === 'production' && !process.env.FIREBASE_WEB_CONFIG) {
 if (process.env.NODE_ENV === 'production' && !firebaseWebConfig) {
   throw new Error('FIREBASE_WEB_CONFIG must contain apiKey, authDomain, projectId, and appId');
 }
-if (process.env.NODE_ENV === 'production' && !process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-  throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is required in production');
-}
-if (process.env.NODE_ENV === 'production') {
-  try {
-    const credentials: unknown = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON!);
-    if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials) ||
-      ['project_id', 'client_email', 'private_key'].some((key) => typeof (credentials as Record<string, unknown>)[key] !== 'string' ||
-        !(credentials as Record<string, string>)[key].length)) {
-      throw new Error();
-    }
-  } catch {
-    throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON must contain valid service-account credentials');
-  }
-}

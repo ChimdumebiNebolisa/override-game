@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:worker": "npm run build && wrangler dev",
     "dev:server": "tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
@@ -13,26 +14,28 @@
     "backup:fixture": "tsx server/backup-fixture.ts",
     "backup:verify": "tsx server/verify-backup.ts",
     "ops:status": "tsx server/ops.ts",
-    "start": "tsx server/start.ts"
+    "start": "tsx server/start.ts",
+    "deploy:worker": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
-    "firebase-admin": "^14.5.0",
+    "jose": "^6.2.12",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tsx": "^4.0.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {
-    "firebase": "^12.19.0",
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/ws": "^8.18.0",
+    "firebase": "^12.19.0",
     "typescript": "^5.0.0",
     "vite": "^8.3.2",
-    "vitest": "^4.0.0"
+    "vitest": "^4.0.0",
+    "wrangler": "^4.147.0"
   },
   "overrides": {
     "@grpc/grpc-js": "^1.13.6",

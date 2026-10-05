@@ -1,11 +1,31 @@
-import { getApps, initializeApp, cert } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import type Database from 'better-sqlite3';
+import { firebaseWebConfig } from './config.js';
 import { HttpError } from './http.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HANDLE_COOLDOWN_MS = 30 * DAY_MS;
 const PROFANITY = ['fuck', 'shit', 'bitch', 'cunt'];
+const firebaseSigningKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'));
+type FirebaseJwtKey = Parameters<typeof jwtVerify>[1];
+
+export async function verifyFirebaseJwt(token: string, projectId: string, key: FirebaseJwtKey = firebaseSigningKeys) {
+  const { payload } = await jwtVerify(token, key, {
+    algorithms: ['RS256'],
+    audience: projectId,
+    issuer: `https://securetoken.google.com/${projectId}`,
+  });
+  if (typeof payload.sub !== 'string' || !payload.sub || typeof payload.auth_time !== 'number' ||
+    !Number.isInteger(payload.auth_time) || payload.auth_time > Date.now() / 1_000 + 30) {
+    throw new Error('Invalid Firebase identity claims');
+  }
+  const firebase = payload.firebase as { sign_in_provider?: string } | undefined;
+  if (firebase?.sign_in_provider !== 'google.com') throw new Error('Firebase token is not from Google');
+  return {
+    uid: payload.sub,
+    firebase,
+  };
+}
 
 export interface VerifiedFirebaseIdentity {
   uid: string;
@@ -44,11 +64,14 @@ export async function verifyFirebaseIdToken(idToken: unknown, verify?: (token: s
     throw new HttpError(400, 'A Firebase ID token is required');
   }
   try {
-    const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-    if (!verify && !serviceAccount) throw new HttpError(503, 'Firebase Authentication is not configured');
-    const decoded = verify
-      ? await verify(idToken)
-      : await getAuth(getApps()[0] ?? initializeApp({ credential: cert(JSON.parse(serviceAccount!)) })).verifyIdToken(idToken);
+    let decoded: { uid: string; firebase?: { sign_in_provider?: string } };
+    if (verify) {
+      decoded = await verify(idToken);
+    } else {
+      const projectId = firebaseWebConfig?.projectId;
+      if (!projectId) throw new HttpError(503, 'Firebase Authentication is not configured');
+      decoded = await verifyFirebaseJwt(idToken, projectId);
+    }
     if (typeof decoded.uid !== 'string' || !decoded.uid || decoded.firebase?.sign_in_provider !== 'google.com') {
       throw new HttpError(401, 'Sign in with Google to continue');
     }

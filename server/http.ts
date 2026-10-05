@@ -4,12 +4,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type Database from 'better-sqlite3';
 import { publicOrigin } from './config.js';
 import { sessionTokenId } from './invitation-secrets.js';
-
-export class HttpError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
-}
+import { HttpError } from './errors.js';
+export { HttpError } from './errors.js';
 
 export function assertMutationOrigin(req: Pick<IncomingMessage, 'headers'>): void {
   if (req.headers.origin !== publicOrigin || req.headers['x-requested-with'] !== 'override-game') {
@@ -71,22 +67,19 @@ export interface Session {
   expiresAt: number;
 }
 
-const newSessionsByAddress = new Map<string, { startedAt: number; count: number }>();
-
-function limitNewSession(req: IncomingMessage, now: number): void {
+function limitNewSession(req: IncomingMessage, now: number, db: Database.Database): void {
   const address = rateLimitAddress(req);
-  const current = newSessionsByAddress.get(address);
-  if (!current || current.startedAt <= now - 5 * 60_000) {
-    newSessionsByAddress.set(address, { startedAt: now, count: 1 });
+  const current = db.prepare('SELECT window_started_at, count FROM new_session_limits WHERE address = ?')
+    .get(address) as { window_started_at: number; count: number } | undefined;
+  if (!current || current.window_started_at <= now - 5 * 60_000) {
+    db.prepare(`INSERT INTO new_session_limits (address, window_started_at, count) VALUES (?, ?, 1)
+      ON CONFLICT(address) DO UPDATE SET window_started_at = excluded.window_started_at, count = 1`)
+      .run(address, now);
   } else {
     if (current.count >= 60) throw new HttpError(429, 'Too many new sessions. Try again later');
-    current.count++;
+    db.prepare('UPDATE new_session_limits SET count = count + 1 WHERE address = ?').run(address);
   }
-  if (newSessionsByAddress.size > 10_000) {
-    for (const [key, value] of newSessionsByAddress) {
-      if (value.startedAt <= now - 5 * 60_000) newSessionsByAddress.delete(key);
-    }
-  }
+  db.prepare('DELETE FROM new_session_limits WHERE window_started_at <= ?').run(now - 10 * 60_000);
 }
 
 function rateLimitAddress(req: IncomingMessage): string {
@@ -116,7 +109,7 @@ export function requireSession(req: IncomingMessage, res: ServerResponse, db: Da
   const found = existingSession(req, db);
   if (found) return found;
   const now = Date.now();
-  limitNewSession(req, now);
+  limitNewSession(req, now, db);
   const token = randomBytes(32).toString('hex');
   const session: Session = { id: sessionTokenId(token), uid: null, createdAt: now, expiresAt: now + 30 * 24 * 60 * 60_000 };
   db.prepare('INSERT INTO sessions (id, uid, created_at, expires_at) VALUES (?, NULL, ?, ?)')
