@@ -269,7 +269,7 @@ dialog:not([open]) { display:none; }
 .reveal-score i { color:var(--muted); font-style:normal; }
 
 /* Keep the active board and its controls visible together on desktop. */
-@media (min-width: 901px) and (min-height: 760px) {
+@media (min-width: 901px) and (min-height: 640px) {
   .game-page {
     block-size: 100dvh;
     min-block-size: 0;
