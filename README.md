@@ -1,27 +1,21 @@
 # OVERRIDE
 
-A 5×5 simultaneous-turn territory game with Practice, Quick Duel, friend rooms, and human Ranked matches.
+A 5×5 simultaneous-turn territory game with Practice, Quick Duel, friend rooms, and human Ranked matches. Product requirements live in [OVERRIDE_PRD_v0.3.docx](OVERRIDE_PRD_v0.3.docx); delivery decisions and acceptance gates are in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
-The product requirements are in [OVERRIDE_PRD_v0.3.docx](OVERRIDE_PRD_v0.3.docx). The [implementation plan](IMPLEMENTATION_PLAN.md) records approved product decisions and delivery gates. The production target is Cloudflare Workers with one SQLite Durable Object; the Node server remains available for local development and tests. The owner selected the existing Workers Paid account for isolated staging; usage beyond included allowances may incur charges, and this staging choice does not establish no-out-of-pocket hosting.
+The production architecture uses Cloudflare Workers and a SQLite-backed Durable Object. The Node server remains available for local development and tests. Staging uses a separate Worker and Durable Object namespace on the existing Workers Paid account; usage beyond included allowances may incur charges, and this setup does not guarantee zero spend.
 
-## Run locally
+## Local development
 
-Use Node.js 24 or newer.
+Use Node.js 24 or newer:
 
 ```powershell
 npm ci
 npm run dev:server
 ```
 
-In another terminal:
+In another terminal, run `npm run dev` and open <http://localhost:5173>. Vite proxies API and WebSocket traffic to the server on port 8787. Practice, bot games, and guest friend rooms work without credentials.
 
-```powershell
-npm run dev
-```
-
-Open <http://localhost:5173>. The Vite dev server proxies `/api` and WebSocket traffic to the authoritative service at port 8787. Practice, Quick Duel vs Bot, and guest friend rooms work without credentials.
-
-For Ranked, enable Google in Firebase Authentication, add the deployed origin to Firebase Authentication's authorized domains, and add `https://<workers-host>/__/auth/handler` to the Google OAuth client's authorized redirect URIs. The Worker proxies Firebase's `/__/auth/*` helper paths on the game origin. Both Google buttons use redirect sign-in, preserve the Ranked/Profile destination, and pass the resulting ID token through the same account-binding endpoint. The server verifies the token's signature and claims and permits only the Google provider. The Worker verifies tokens against Firebase's public signing certificates and does not require a private Admin key. Deployed sign-in requires HTTPS.
+For local Worker development, copy `.dev.vars.example` to `.dev.vars`, replace the local-only values, then run `npm run dev:worker`. The Node server uses the separate configuration in `.env.example`.
 
 ## Verify and build
 
@@ -30,17 +24,26 @@ npm test
 npm run build
 ```
 
-For local Worker development, copy the tracked `.dev.vars.example` to `.dev.vars`, replace the local-only keys, then run `npm run dev:worker`. `FIREBASE_WEB_CONFIG` is stored in `wrangler.jsonc` so Git deployments keep the public web config in sync. Use `npm run dev:server` for the Node development server; it uses the separate Node configuration documented in `.env.example`.
+CI also runs the production and full dependency audits, Linux Worker runtime smoke, and container backup/restore check. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for current evidence and open checks.
 
-The `staging` environment deploys `override-game-staging` with separate Durable Object storage and secrets while reusing the Firebase project. Follow [STAGING_VERIFICATION.md](STAGING_VERIFICATION.md) for account prerequisites, deployment, sign-in, restore/undo, and release evidence. Staging uses the existing Workers Paid account and Firebase Spark.
+## Google sign-in
 
-Cloudflare Workers Builds can keep its build command blank: `wrangler.jsonc` configures Wrangler to run `npm run build` before `npx wrangler deploy`. Wrangler serves SPA assets from `dist` and routes API and WebSocket requests to a SQLite-backed Durable Object. The Firebase web config is in `wrangler.jsonc`; set `INVITATION_ENCRYPTION_KEY` as a Worker secret before sending API traffic. Set the exact `workers.dev` hostname as an authorized Firebase Authentication domain and configure the OAuth callback above before testing Google sign-in. Do not deploy the Node server to a paid host.
+Enable Google in Firebase Authentication. Add each deployed host to Firebase Authorized domains and add its same-origin callback (`https://<workers-host>/__/auth/handler`) to the Google OAuth client's authorized redirect URIs. Preserve existing production entries when adding staging. Both Google buttons use Firebase redirect sign-in; Node and Worker verify Firebase ID tokens against public signing certificates and permit only the Google provider. No Firebase Admin service-account key is required. Real account sign-in still needs verification on supported desktop and mobile browsers.
 
-Staging uses the existing Workers Paid account, which has a payment method and informational billable-usage notifications that do not cap charges. Paid usage beyond included allowances can be billed, so the no-out-of-pocket requirement is not established for this staging tier. The Worker refuses new games at 80% of estimated daily/monthly capacity and reserves headroom for live matches, but those estimates are not an account-level cap. Keep Firebase on Spark. See [Cloudflare Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Object pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), [Cloudflare billing alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/), and [Firebase billing plans](https://firebase.google.com/docs/projects/billing/firebase-pricing-plans). Use a `workers.dev` origin so a custom domain is unnecessary.
+## Cloudflare deployment
 
-Room and bot match creation requests include a UUID `creationKey`. The client reuses it after an uncertain response, and the server returns the original room or match.
+`wrangler.jsonc` builds the client, serves the SPA assets, and routes API and WebSocket requests to the Durable Object. The `staging` environment deploys as `override-game-staging`, uses its own `GAME` namespace, and reuses the Firebase project. The current staging URL, version, and smoke results are recorded in [STAGING_VERIFICATION.md](STAGING_VERIFICATION.md).
 
-## Metrics and operations
+Deploy staging with `npx wrangler deploy --env staging`. Use separate secrets for each environment; staging uses `INVITATION_ENCRYPTION_KEY` and `RECOVERY_CONTROL_TOKEN`. For example:
+
+```powershell
+npx wrangler secret put INVITATION_ENCRYPTION_KEY --env staging
+npx wrangler secret put RECOVERY_CONTROL_TOKEN --env staging
+```
+
+Keep Firebase on Spark. Workers Paid may bill usage beyond included allowances; budget alerts only notify, and the app's 80% request, compute, and SQL admission thresholds are estimates rather than account-level spending limits. Review [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), and [Cloudflare billing alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/) before broad play. Do not deploy the Node server to a paid host or add paid services/domains.
+
+## Metrics, backups, and recovery
 
 ```powershell
 npm run report:metrics
@@ -48,21 +51,19 @@ npm run ops:status
 npm run backup:db
 ```
 
-`report:metrics` prints aggregate funnel, gameplay, rematch, and side results as JSON. It reads revealed rounds and finished matches; it never reads pending actions. Guest matches, telemetry, and expired invitation tokens are removed after 30 days, while Ranked matches and settlement records remain for rating integrity. Transient Ranked settlement failures remain pending for retry; invalid settlement data voids the result after repeated failures without changing ratings. `ops:status` lists overdue deadlines, stuck ready shells, expired searches, unsettled Ranked matches, failed settlement retries, and duplicate settlement attempts. `/api/health` returns 503 if the database check fails or server work is overdue. Match transitions and settlements also produce JSON log lines keyed by match ID, without hidden moves or provider tokens.
+Metrics summarize revealed rounds and finished matches; pending actions are never read. Guest matches, telemetry, and expired invitation tokens are removed after 30 days. Ranked matches and settlement records are retained for rating integrity. `ops:status` reports overdue deadlines, stuck ready shells, expired searches, unsettled matches, failed settlement retries, and duplicate settlement attempts. `/api/health` returns 503 when database checks fail or server work is overdue.
 
-`backup:db` creates a timestamped, integrity-checked SQLite backup in a `backups/` folder beside `DB_PATH` (by default, ignored `data/backups/`). Invitation tokens and codes are encrypted in the database; restore with the same `INVITATION_ENCRYPTION_KEY` used by the source database. To rehearse a restore, stop the server, copy a backup to a **new** database path, set `DB_PATH` to that path, run `npm run ops:status` and `npm run report:metrics`, then start the server against it. Use the same procedure for a real restore after preserving the old database and its WAL files. Back up the persistent database regularly; an ephemeral filesystem will lose sessions, matches, and Ranked ratings.
+`backup:db` creates an integrity-checked SQLite backup beside `DB_PATH`. Restore to a new database path and use the same `INVITATION_ENCRYPTION_KEY` as the source. Preserve the source database and WAL files before a recovery. Back up persistent databases regularly; ephemeral storage loses sessions, matches, and ratings.
 
-The Worker persists new-session rate limits and usage counters in SQLite. At 80% of its estimated free/paid request, compute, or SQL budgets, it refuses new rooms, matches, queue entries, and invitation acceptances, while player actions and alarms continue for already accepted matches. This reservation is an estimate, not an account-wide spend cap. The Workers Paid plan can bill overages; budget alerts only notify. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for checks and remaining release gates.
+The Worker records SQL cursor reads/writes, including maintenance and `SELECT changes()`. Multi-statement `exec` exposes only its final cursor, and external dashboard or account traffic is outside the ledger. Safety multipliers remain, so usage accounting supports admission estimates rather than billing reconciliation. Existing matches, accepted invitations, queue leases, retries, and alarms continue when new allocations are paused.
 
-SQL accounting consumes cursors before reading their final read/write counts, including writes that scan rows, maintenance, and `SELECT changes()`. A multi-statement `exec` exposes only its last statement's cursor; external dashboard queries and other account traffic are outside the app ledger. Existing safety multipliers remain, so the ledger is an admission estimate rather than a billing reconciliation. Idempotent creation and acceptance retries, existing queue leases, active matches, and alarms continue when new allocations are paused.
-
-For Durable Object recovery, configure a unique `RECOVERY_CONTROL_TOKEN` Worker secret using `npx wrangler secret put RECOVERY_CONTROL_TOKEN`. The operator-only endpoints are `POST /__ops/recovery/bookmark` and `POST /__ops/recovery/restore`; send `Authorization: Bearer <token>`. Restore accepts a Unix-millisecond `timestamp` within the preceding 30 days or a previously saved `bookmark`, returns a bookmark for undo, gates player API requests, and restarts the object through its alarm. Rehearse this only against a separately deployed disposable staging object. SQLite PITR is unavailable in Wrangler local development; never test restore on production data.
+Durable Object recovery uses the operator-only `POST /__ops/recovery/bookmark` and `POST /__ops/recovery/restore` endpoints with a unique `RECOVERY_CONTROL_TOKEN`. Restore accepts a bookmark or a timestamp from the preceding 30 days, returns an undo bookmark, temporarily gates player APIs, and restarts through an alarm. Rehearse only in the isolated staging namespace; SQLite point-in-time recovery is unavailable in Wrangler local development.
 
 ## Product boundaries
 
-- Guest games and bot games never affect Ranked ratings.
-- Ranked requires two distinct Google accounts signed in through Firebase Authentication and a public handle.
-- Pending moves stay private until the fixed server deadline; the server alone resolves rounds and settles ratings.
-- The human leaderboard includes only players who completed five qualifying placement matches. Static Rivals are benchmark labels, not human ranks.
+- Guest and bot games never affect Ranked ratings.
+- Ranked requires two distinct Google accounts and public handles.
+- Pending moves remain private until the fixed server deadline; the server resolves rounds and ratings.
+- The human leaderboard includes players after five qualifying placement matches. Static Rivals are benchmark labels, not human ranks.
 
-The current implementation still needs the structured human playtest and production staging gates described in the implementation plan before a public launch.
+Before public launch, complete the staging checks, structured human playtest, device interruption checks, and mobile screen-reader review in the implementation plan.
