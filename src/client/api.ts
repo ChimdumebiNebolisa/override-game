@@ -1,6 +1,6 @@
 import type { Action, MatchState, Player, RoundResult } from "../shared/rules";
 
-export type RoomStatus = "open" | "full" | "readying" | "active" | "finished" | "expired";
+type RoomStatus = "open" | "full" | "readying" | "active" | "finished" | "expired";
 
 export interface Room {
   id: string;
@@ -89,7 +89,7 @@ export interface RankedShell {
   readyDeadline: number;
 }
 
-export interface SettlementPlayer {
+interface SettlementPlayer {
   outcome: "win" | "loss" | "draw";
   placementProgress: number;
   delta?: number;

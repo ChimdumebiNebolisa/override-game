@@ -531,11 +531,3 @@ export function publicRankedSettlement(settlement: RatingSettlement, player: Pla
   }
   return visible;
 }
-
-export function rankedReadyDeadlineMs(): number {
-  return READY_WINDOW_MS;
-}
-
-export function rankedHistoryWindowMs(): number {
-  return DAY_MS;
-}

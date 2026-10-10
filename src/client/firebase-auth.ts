@@ -1,11 +1,9 @@
-import { getApp, getApps, initializeApp } from 'firebase/app';
-import { getAuth, getRedirectResult, GoogleAuthProvider, signInWithRedirect } from 'firebase/auth';
-
 export type GoogleAuthReturnScreen = 'profile' | 'ranked';
 const AUTH_RETURN_PARAM = 'overrideAuthReturn';
 let redirectResult: Promise<string | null> | null = null;
 
-function firebaseApp(config: { apiKey: string; authDomain: string; projectId: string; appId: string }) {
+async function firebaseApp(config: { apiKey: string; authDomain: string; projectId: string; appId: string }) {
+  const { getApp, getApps, initializeApp } = await import('firebase/app');
   return getApps().length ? getApp() : initializeApp(config);
 }
 
@@ -18,7 +16,11 @@ export async function beginGoogleFirebaseSignIn(
   returnUrl.searchParams.set(AUTH_RETURN_PARAM, returnScreen);
   window.history.replaceState(null, '', `${returnUrl.pathname}${returnUrl.search}${returnUrl.hash}`);
   try {
-    await signInWithRedirect(getAuth(firebaseApp(config)), new GoogleAuthProvider());
+    const [{ getAuth, GoogleAuthProvider, signInWithRedirect }, app] = await Promise.all([
+      import('firebase/auth'),
+      firebaseApp(config),
+    ]);
+    await signInWithRedirect(getAuth(app), new GoogleAuthProvider());
   } catch (error) {
     window.history.replaceState(null, '', `${originalUrl.pathname}${originalUrl.search}${originalUrl.hash}`);
     throw error;
@@ -29,8 +31,10 @@ export function completeGoogleFirebaseRedirect(
   config: { apiKey: string; authDomain: string; projectId: string; appId: string },
 ): Promise<string | null> {
   if (!redirectResult) {
-    redirectResult = getRedirectResult(getAuth(firebaseApp(config)))
-      .then((credential) => credential ? credential.user.getIdToken() : null);
+    redirectResult = Promise.all([import('firebase/auth'), firebaseApp(config)]).then(async ([auth, app]) => {
+      const credential = await auth.getRedirectResult(auth.getAuth(app));
+      return credential ? credential.user.getIdToken() : null;
+    });
   }
   return redirectResult;
 }

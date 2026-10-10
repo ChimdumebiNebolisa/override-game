@@ -4,16 +4,13 @@ import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { openDatabase } from './db';
-import { firebaseWebConfig, port, publicOrigin } from './config';
-import { attachFirebaseIdentity, claimHandle, getPublicProfile, renameHandle } from './auth';
-import { HttpError, applySecurityHeaders, assertMutationOrigin, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http';
-import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, reconcilePresenceOnStartup, resignMatch } from './matches';
-import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms';
-import { acknowledgeRankedReady, clearRankedReadyPresenceOnStartup, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, markRankedReadyPresence, publicRankedSettlement, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked';
-import { leaderboard, profileView } from './progression';
-import { acceptRankedChallenge, acceptRankedChallengeByCode, acceptRankedRematch, createRankedChallenge, expireRankedInvitations, pendingRankedChallenge, pendingRankedRematch, requestRankedRematch } from './invitations';
-import { acceptQuickRematch, expireQuickRematches, pendingQuickRematch, requestQuickRematch } from './quick-rematch';
-import { recordClientTelemetry, recordTelemetryEvent } from './metrics';
+import { port, publicOrigin } from './config';
+import { HttpError, applySecurityHeaders, existingSession, json } from './http';
+import { dueMatches, getMatch, markConnected, markDisconnected, matchForSession, reconcilePresenceOnStartup } from './matches';
+import { getRoom, roomForSession } from './rooms';
+import { clearRankedReadyPresenceOnStartup, expireRankedLeases, markRankedReadyPresence, settlePendingRankedMatches, settleRankedMatch } from './ranked';
+import { expireRankedInvitations } from './invitations';
+import { expireQuickRematches } from './quick-rematch';
 import { pruneExpiredGuestData } from './maintenance';
 
 const db = openDatabase();
@@ -64,7 +61,7 @@ function connectLiveParticipants(matchId: string): void {
   if (hasLiveMatchConnection(matchId, match.room_id, match.player_b_key)) markConnected(db, matchId, 'B');
 }
 
-async function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
+async function serveStatic(res: ServerResponse, pathname: string): Promise<void> {
   const root = resolve('dist');
   const target = resolve(root, `.${pathname}`);
   const relativePath = relative(root, target);
@@ -92,7 +89,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
   if (url.pathname.startsWith('/api')) return apiHandle(req, res);
   if (req.method !== 'GET') return json(res, 405, { error: 'Method not allowed' });
-  try { await serveStatic(req, res, url.pathname); }
+  try { await serveStatic(res, url.pathname); }
   catch (error) {
     if (error instanceof HttpError) return json(res, error.status, { error: error.message });
     console.error(error);

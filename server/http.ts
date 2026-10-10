@@ -2,12 +2,12 @@ import { randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type Database from 'better-sqlite3';
-import { publicOrigin } from './config.js';
+import { publicOrigin as configuredPublicOrigin } from './config.js';
 import { sessionTokenId } from './invitation-secrets.js';
 import { HttpError } from './errors.js';
 export { HttpError } from './errors.js';
 
-export function assertMutationOrigin(req: Pick<IncomingMessage, 'headers'>): void {
+export function assertMutationOrigin(req: Pick<IncomingMessage, 'headers'>, publicOrigin = configuredPublicOrigin): void {
   if (req.headers.origin !== publicOrigin || req.headers['x-requested-with'] !== 'override-game') {
     throw new HttpError(403, 'Request origin is not allowed');
   }

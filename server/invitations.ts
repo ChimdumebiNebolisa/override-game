@@ -335,10 +335,6 @@ export function acceptRankedRematch(
   }).immediate();
 }
 
-export function rankedChallengeLifetimeMs(): number {
-  return CHALLENGE_LIFETIME_MS;
-}
-
 export function rankedRematchLifetimeMs(): number {
   return REMATCH_LIFETIME_MS;
 }

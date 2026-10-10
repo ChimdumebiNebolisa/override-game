@@ -1,9 +1,9 @@
 export type Player = "A" | "B";
-export type Cell = Player | "neutral";
+type Cell = Player | "neutral";
 export type Board = readonly Cell[];
 export type TargetedActionType = "expand" | "ambush" | "surge" | "override";
 export type Action = { type: TargetedActionType; target: number } | { type: "pass" };
-export type EndingReason = "standard" | "sudden-death" | "board-exhaustion" | "forfeit" | "resignation";
+type EndingReason = "standard" | "sudden-death" | "board-exhaustion" | "forfeit" | "resignation";
 
 export interface GameConfig {
   standardRounds: number;
@@ -22,7 +22,7 @@ export interface MatchState {
   config: Readonly<GameConfig>;
 }
 
-export type ActionReason =
+type ActionReason =
   | "claimed"
   | "stolen"
   | "ambush-hit"
@@ -46,7 +46,7 @@ export interface RoundResult {
   score: Readonly<Record<Player, number>>;
 }
 
-export type ValidationReason =
+type ValidationReason =
   | "match-finished"
   | "invalid-action"
   | "invalid-target"
@@ -58,7 +58,7 @@ export type ValidationReason =
 export type Validation = { ok: true } | { ok: false; reason: ValidationReason };
 
 export const BOARD_SIZE = 5;
-export const DEFAULT_CONFIG: Readonly<GameConfig> = Object.freeze({
+const DEFAULT_CONFIG: Readonly<GameConfig> = Object.freeze({
   standardRounds: 12,
   suddenDeathRounds: 3,
   energyCap: 3,

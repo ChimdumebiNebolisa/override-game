@@ -10,3 +10,4 @@ data/
 !.dev.vars.example
 coverage/
 .playwright-cli/
+.wrangler-dry-run*/

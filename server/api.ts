@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type Database from 'better-sqlite3';
 import { firebaseWebConfig as configuredFirebaseWebConfig, publicOrigin as configuredPublicOrigin } from './config.js';
-import { attachFirebaseIdentity, claimHandle, getPublicProfile, renameHandle } from './auth.js';
+import { attachFirebaseIdentity, claimHandle, renameHandle } from './auth.js';
 import { HttpError, assertMutationOrigin, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http.js';
 import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, resignMatch } from './matches.js';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms.js';
@@ -54,7 +54,7 @@ export function createApiHandler(context: ApiContext) {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
     const method = req.method ?? 'GET';
-    if (method !== 'GET' && method !== 'HEAD') assertMutationOrigin(req);
+    if (method !== 'GET' && method !== 'HEAD') assertMutationOrigin(req, publicOrigin);
 
     if (path === '/api/health' && method === 'GET') {
       try {

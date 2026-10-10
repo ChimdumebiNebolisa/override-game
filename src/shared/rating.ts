@@ -1,7 +1,7 @@
-export const PLACEMENT_MATCHES = 5;
+const PLACEMENT_MATCHES = 5;
 
-export type MatchOutcome = "win" | "loss" | "draw";
-export type SettlementKind = "result" | "resignation" | "forfeit" | "no-contest";
+type MatchOutcome = "win" | "loss" | "draw";
+type SettlementKind = "result" | "resignation" | "forfeit" | "no-contest";
 
 export interface RatingProfile {
   rating: number;
@@ -96,7 +96,7 @@ function actualScore(outcome: MatchOutcome): number {
   return 0;
 }
 
-export interface SettlementPlayerResult {
+interface SettlementPlayerResult {
   id: string;
   profile: RatingProfile;
   outcome: MatchOutcome;

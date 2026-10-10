@@ -111,7 +111,7 @@ function offerForToken(db: Database.Database, token: string): OfferRow | undefin
   return db.prepare('SELECT * FROM quick_rematch_invitations WHERE token_hash = ?').get(invitationTokenHash(token)) as OfferRow | undefined;
 }
 
-function acceptedMatch(db: Database.Database, offer: OfferRow): AcceptedQuickRematch {
+function acceptedMatch(offer: OfferRow): AcceptedQuickRematch {
   if (!offer.new_match_id) throw new HttpError(409, 'Rematch result is unavailable');
   return { matchId: offer.new_match_id, roomId: offer.room_id };
 }
@@ -191,7 +191,7 @@ export function acceptQuickRematch(
   return db.transaction(() => {
     const offer = offerForToken(db, token);
     if (!offer) throw new HttpError(404, 'Rematch invitation not found');
-    if (offer.status === 'accepted' && offer.invitee_session_id === sessionId) return acceptedMatch(db, offer);
+    if (offer.status === 'accepted' && offer.invitee_session_id === sessionId) return acceptedMatch(offer);
     if (offer.status !== 'open' || offer.expires_at <= now) throw new HttpError(410, 'Rematch invitation expired or was used');
     if (offer.invitee_session_id !== sessionId) throw new HttpError(404, 'Rematch invitation not found');
     assertSession(db, sessionId, now);
