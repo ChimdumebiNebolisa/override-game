@@ -1139,7 +1139,6 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
   const [newHandle, setNewHandle] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [leaders, setLeaders] = useState<LeaderboardEntry[]>([]);
-  const [around, setAround] = useState<LeaderboardEntry[]>([]);
   const [error, setError] = useState("");
   const [infoLoading, setInfoLoading] = useState(true);
   useEffect(() => {
@@ -1160,7 +1159,6 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
         .then(([board, session]) => {
           if (!current) return;
           setLeaders(board.top);
-          setAround(board.around);
           setProfile(session.profile);
         })
         .catch((reason) => { if (current) setError(reason instanceof Error ? reason.message : "Leaderboard unavailable."); })
@@ -1196,7 +1194,7 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
       <div className="panel-heading">
         <p className="eyebrow">{screen === "profile" ? "Player profile" : "Human Ranked"}</p>
         <h1>{screen === "profile" ? profile?.handle ?? (signedIn ? "Signed in." : "Playing as guest.") : "Leaderboard"}</h1>
-        <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/5 · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Official ranks include eligible human Ranked players only."}</p>
+        <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/5 · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Global standings are shared by every player. Official ranks include eligible human Ranked players only."}</p>
       </div>
       {infoLoading && <p className="status-note" role="status">Loading {screen === "profile" ? "profile" : "leaderboard"}…</p>}
       {screen === "profile" && !infoLoading && !signedIn && <button className="google-button" disabled={!firebaseConfig || signInBusy} onClick={() => void signInWithGoogle()}><span>G</span> {signInBusy ? "Signing in…" : firebaseConfig ? "Sign in with Google for Ranked" : "Google sign-in is not configured"}</button>}
@@ -1204,9 +1202,8 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
       {screen === "profile" && profile && <ProfileStats profile={profile} />}
       {screen === "profile" && profile?.handle && <section className="room-form ranked-setup"><label>Change public handle<input value={newHandle} onChange={(event) => setNewHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><p className="status-note">After your first rename, you can change your handle once every 30 days.</p><button className="secondary-cta full" disabled={renaming || !/^[A-Za-z0-9_]{3,16}$/.test(newHandle.trim()) || newHandle.trim() === profile.handle} onClick={rename}>{renaming ? "Changing handle…" : "Change handle"}</button></section>}
       {screen === "leaderboard" && leaders.length > 0 && <LeaderboardList entries={leaders} />}
-      {screen === "leaderboard" && around.length > 0 && <section aria-labelledby="around-title"><h2 id="around-title">Around you</h2><LeaderboardList entries={around} /></section>}
       {!infoLoading && !error && ((screen === "profile" && !profile) || (screen === "leaderboard" && leaders.length === 0)) && <div className="empty-state"><span aria-hidden="true">{screen === "profile" ? "G" : "#"}</span><strong>{screen === "profile" ? "No persistent profile yet" : "No placed players yet"}</strong><p>{screen === "profile" ? "Guest games do not carry into Ranked statistics." : "Bots and benchmark Rivals never appear in the human rankings."}</p></div>}
-      <RivalsPanel rating={profile?.rating} />
+      <RivalsPanel />
       {error && <p className="form-error" role="alert">{error}</p>}
       <button className="secondary-cta full" onClick={() => navigate(screen === "profile" ? "quick" : "ranked")}>{screen === "profile" ? "Play Quick Duel" : "View Ranked"}</button>
     </main>
@@ -1235,14 +1232,13 @@ export function LeaderboardList({ entries }: { entries: LeaderboardEntry[] }) {
   </li>)}</ol>;
 }
 
-export function RivalsPanel({ rating }: { rating?: number }) {
+export function RivalsPanel() {
   return (
     <section className="rivals-panel" aria-labelledby="rivals-title">
-      <div><p className="eyebrow">Practice ladder</p><h2 id="rivals-title">Leaderboard</h2></div>
+      <div><p className="eyebrow">Shared practice standings</p><h2 id="rivals-title">Bot leaderboard</h2></div>
       <div className="rivals-scroll" role="region" aria-label="Practice bot leaderboard" tabIndex={0}>
         <LeaderboardList entries={BOT_LEADERBOARD} />
       </div>
-      <p className="next-rival">{rating === undefined ? "Complete placement to see your standing." : nextRivalText(rating)}</p>
     </section>
   );
 }
