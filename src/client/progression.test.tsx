@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { LeaderboardList, ProfileStats, RankedSettlementDetails, RivalsPanel } from './App';
+import { LeaderboardList, ProfileStats, RankedSettlementDetails } from './App';
 
 describe('Ranked progression displays', () => {
   it('shows only placement progress before the second qualifying match', () => {
@@ -38,30 +38,23 @@ describe('Ranked progression displays', () => {
     expect(result).not.toContain('→');
   });
 
-  it('shows labeled standings in Rank, Username, Tier, W–L–D, XP columns without streak overhead', () => {
-    const board = renderToStaticMarkup(<LeaderboardList entries={[{
-      handle: 'Alpha', rating: 1400, rank: 1, tier: 'Platinum', wins: 7, losses: 2, draws: 1, streak: 3,
-    }]} />);
+  it('shows players and BOT-tagged practice entries in the same RP standings table', () => {
+    const board = renderToStaticMarkup(<LeaderboardList entries={[
+      { handle: 'Alpha', rating: 1400, rank: 1, tier: 'Platinum', wins: 7, losses: 2, draws: 1, streak: 3 },
+      { handle: 'ava_chen', rating: 1390, rank: 2, tier: 'Platinum', wins: 42, losses: 8, draws: 0, streak: 0, bot: true },
+    ]} />);
     expect(board).toContain('<th scope="col">Rank</th>');
     expect(board).toContain('<th scope="col">Username</th>');
     expect(board).toContain('<th scope="col">Tier</th>');
     expect(board).toContain('<th scope="col">W–L–D</th>');
-    expect(board).toContain('<th scope="col">XP</th>');
+    expect(board).toContain('<th scope="col">RP</th>');
     expect(board).toContain('aria-label="7 wins, 2 losses, 1 draw"');
     expect(board).toContain('7–2–1');
     expect(board).toContain('<td class="leaderboard-rating">1400</td>');
+    expect(board).toContain('<td class="leaderboard-rating">1390</td>');
+    expect(board).toContain('<small class="bot-tag">BOT</small>');
+    expect([...board.matchAll(/<th scope="row" class="leaderboard-rank">#(\d+)<\/th>/g)].map(([, rank]) => Number(rank)))
+      .toEqual([1, 2]);
     expect(board).not.toContain('streak');
-
-    const anonymous = renderToStaticMarkup(<RivalsPanel />);
-    expect(anonymous).toContain('Shared practice standings');
-    expect(anonymous).toContain('Bot leaderboard');
-    expect(anonymous).toContain('aria-label="Practice bot leaderboard"');
-    expect(anonymous).toContain('ava_chen');
-    expect(anonymous).toContain('mila_stone');
-    expect([...anonymous.matchAll(/<th scope="row" class="leaderboard-rank">#(\d+)<\/th>/g)].map(([, rank]) => Number(rank)))
-      .toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
-    expect([...anonymous.matchAll(/class="bot-tag"/g)]).toHaveLength(20);
-    expect(anonymous).not.toContain('RP away');
-    expect(anonymous).not.toContain('Complete placement');
   });
 });

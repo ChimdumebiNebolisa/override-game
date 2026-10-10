@@ -477,9 +477,9 @@ dialog:not([open]) { display:none; }
 .profile-stats p:last-child:nth-child(odd) { grid-column:1 / -1; border-inline-end:0; }
 .profile-stats strong { font:800 31px var(--display); }
 .profile-stats span { color:var(--muted); font:9px var(--mono); text-transform:uppercase; letter-spacing:.1em; }
-.leaderboard-scroll, .rivals-scroll { max-block-size:min(58dvh,480px); overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; border:1px solid var(--line); background:white; container-type:inline-size; }
+.leaderboard-scroll { max-block-size:min(58dvh,480px); overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; border:1px solid var(--line); background:white; container-type:inline-size; }
 .leaderboard-scroll { margin-block:28px; }
-.leaderboard-scroll:focus-visible, .rivals-scroll:focus-visible { outline:3px solid var(--amber); outline-offset:3px; }
+.leaderboard-scroll:focus-visible { outline:3px solid var(--amber); outline-offset:3px; }
 .leaderboard-table { inline-size:max(100%,22rem); border-collapse:collapse; text-align:start; white-space:nowrap; font-size:12px; }
 .leaderboard-table th, .leaderboard-table td { padding:11px clamp(5px,1.8cqi,14px); border-block-end:1px solid var(--line); }
 .leaderboard-table thead th { position:sticky; inset-block-start:0; z-index:1; background:var(--ink); color:var(--paper); font:700 9px var(--mono); letter-spacing:.08em; text-align:start; text-transform:uppercase; }
@@ -491,9 +491,6 @@ dialog:not([open]) { display:none; }
 .leaderboard-record { color:var(--muted); font:11px var(--mono); font-variant-numeric:tabular-nums; }
 .leaderboard-rating { color:var(--ink); font:700 12px var(--mono); font-variant-numeric:tabular-nums; text-align:end; }
 .bot-tag { padding:3px 5px; border:1px solid var(--line); color:var(--muted); font:700 8px/1 var(--mono); letter-spacing:.08em; }
-.rivals-panel { margin:34px 0 24px; padding-block-start:25px; border-block-start:4px solid var(--amber); }
-.rivals-panel h2 { margin:0 0 8px; font:750 31px var(--display); text-transform:uppercase; }
-.rivals-scroll .leaderboard-table { margin:0; }
 @container (width < 24rem) {
   .leaderboard-table th, .leaderboard-table td { padding-inline:5px; }
   .leaderboard-player { gap:5px; font-size:14px; }

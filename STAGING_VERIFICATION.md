@@ -18,7 +18,7 @@ The configuration omits a custom CPU override and uses platform defaults for the
 
 1. On supported desktop and mobile browsers, sign in, reload, sign out, and sign in again. Test return to Profile, queue, and a challenge URL. Confirm both clients reach the same intended destination and can select a handle.
 2. With two different real Google identities, create and redeem a challenge by link, then by code in a separate match. Verify queue pairing, both ready acknowledgments, a completed normal-timing match, one settlement, side-swapped rematch, and credit disclosure before readiness.
-3. With four real identities A–D, play two completed, credited matches for each pair: AB, CD, AC, BD, AD, BC. Each player obtains six matches without exceeding two per pair. Check placement completes after two credited matches, public rank is absent before placement, and placed players appear in the shared human leaderboard; the shared bot standings remain separately tagged. Keep scheduling these required tests separate from observations of voluntary rematches.
+3. With four real identities A–D, play two completed, credited matches for each pair: AB, CD, AC, BD, AD, BC. Each player obtains six matches without exceeding two per pair. Check placement completes after two credited matches, public rank is absent before placement, and placed players appear in the shared global leaderboard alongside BOT-tagged practice bots. Keep scheduling these required tests separate from observations of voluntary rematches.
 4. Record commit, browser/device, match IDs, credit, placement counts, profiles, and leaderboard observations using participant aliases. If accounts are unavailable, mark this gate unverified; synthetic profiles do not prove live sign-in.
 
 ## Restore and undo rehearsal

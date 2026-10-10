@@ -213,8 +213,7 @@ export function createApiHandler(context: ApiContext) {
       return json(res, 200, { queue });
     }
     if (path === '/api/leaderboard' && method === 'GET') {
-      const session = existingSession(req, db);
-      return json(res, 200, leaderboard(db, session?.uid ?? null));
+      return json(res, 200, leaderboard(db));
     }
     const actionMatch = path.match(/^\/api\/matches\/([a-f0-9-]{36})\/actions$/);
     if (actionMatch && method === 'POST') {

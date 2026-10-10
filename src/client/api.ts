@@ -377,6 +377,6 @@ export const api = {
   },
 
   getLeaderboard() {
-    return request<{ top: LeaderboardEntry[]; around: LeaderboardEntry[]; selfRank: number | null }>("/api/leaderboard");
+    return request<{ entries: LeaderboardEntry[] }>("/api/leaderboard");
   },
 };

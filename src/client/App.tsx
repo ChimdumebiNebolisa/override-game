@@ -139,25 +139,6 @@ function creditExplanation(multiplier: number): string {
 }
 
 const RIVAL_MILESTONES = [850, 950, 1050, 1150, 1250, 1400, 1550, 1750];
-const BOT_RATINGS = [
-  ["ava_chen", 2196], ["mateo_rivera", 2118], ["kai_turner", 2034], ["harper_brooks", 1976],
-  ["ezra_patel", 1908], ["nora_williams", 1845], ["leo_morgan", 1772], ["isla_reed", 1699],
-  ["theo_bennett", 1638], ["maya_santos", 1584], ["owen_price", 1518], ["zara_kim", 1457],
-  ["luca_bell", 1391], ["cleo_james", 1330], ["finn_parker", 1278], ["amara_cole", 1211],
-  ["eli_ross", 1152], ["sienna_gray", 1097], ["jonah_wells", 1024], ["mila_stone", 948],
-] as const;
-const BOT_LEADERBOARD: LeaderboardEntry[] = BOT_RATINGS.map(([handle, rating], index) => ({
-  handle,
-  rating,
-  rank: index + 1,
-  tier: rating >= 1700 ? "Master" : rating >= 1500 ? "Diamond" : rating >= 1300 ? "Platinum" : rating >= 1100 ? "Gold" : rating >= 900 ? "Silver" : "Bronze",
-  wins: 42 + (index * 7) % 34,
-  losses: 8 + (index * 3) % 15,
-  draws: (index * 2) % 6,
-  streak: (index * 5) % 8,
-  bot: true,
-}));
-
 function nextRivalText(rating: number): string {
   const next = RIVAL_MILESTONES.find((target) => target > rating);
   return next ? `Next Rival: ${next === 1250 ? "ROOK" : `Rival ${next}`} · ${next - rating} RP away` : "All Rival benchmarks cleared.";
@@ -1167,7 +1148,7 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
       Promise.all([api.getLeaderboard(), api.getSession()])
         .then(([board, session]) => {
           if (!current) return;
-          setLeaders(board.top);
+          setLeaders(board.entries);
           setProfile(session.profile);
         })
         .catch((reason) => { if (current) setError(reason instanceof Error ? reason.message : "Leaderboard unavailable."); })
@@ -1201,9 +1182,9 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
     <main className="panel-page info-page">
       <button className="back-link" onClick={() => navigate("home")}>← Home</button>
       <div className="panel-heading">
-        <p className="eyebrow">{screen === "profile" ? "Player profile" : "Human Ranked"}</p>
+        <p className="eyebrow">{screen === "profile" ? "Player profile" : "Global standings"}</p>
         <h1>{screen === "profile" ? profile?.handle ?? (signedIn ? "Signed in." : "Playing as guest.") : "Leaderboard"}</h1>
-        <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/${PLACEMENT_MATCHES} · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Global standings are shared by every player. Official ranks include eligible human Ranked players only."}</p>
+        <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/${PLACEMENT_MATCHES} · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Placed players and practice bots share one RP ranking. BOT tags identify practice bots; practice matches do not change player records."}</p>
       </div>
       {infoLoading && <p className="status-note" role="status">Loading {screen === "profile" ? "profile" : "leaderboard"}…</p>}
       {screen === "profile" && !infoLoading && !signedIn && <button className="google-button" disabled={!firebaseConfig || signInBusy} onClick={() => void signInWithGoogle()}><span>G</span> {signInBusy ? "Signing in…" : firebaseConfig ? "Sign in with Google for Ranked" : "Google sign-in is not configured"}</button>}
@@ -1211,8 +1192,7 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
       {screen === "profile" && profile && <ProfileStats profile={profile} />}
       {screen === "profile" && profile?.handle && <section className="room-form ranked-setup"><label>Change public handle<input value={newHandle} onChange={(event) => setNewHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><p className="status-note">After your first rename, you can change your handle once every 30 days.</p><button className="secondary-cta full" disabled={renaming || !/^[A-Za-z0-9_]{3,16}$/.test(newHandle.trim()) || newHandle.trim() === profile.handle} onClick={rename}>{renaming ? "Changing handle…" : "Change handle"}</button></section>}
       {screen === "leaderboard" && leaders.length > 0 && <div className="leaderboard-scroll" role="region" aria-label="Global Ranked leaderboard" tabIndex={0}><LeaderboardList entries={leaders} /></div>}
-      {!infoLoading && !error && ((screen === "profile" && !profile) || (screen === "leaderboard" && leaders.length === 0)) && <div className="empty-state"><span aria-hidden="true">{screen === "profile" ? "G" : "#"}</span><strong>{screen === "profile" ? "No persistent profile yet" : "No placed players yet"}</strong><p>{screen === "profile" ? "Guest games do not carry into Ranked statistics." : "Bots and benchmark Rivals never appear in the human rankings."}</p></div>}
-      <RivalsPanel />
+      {!infoLoading && !error && screen === "profile" && !profile && <div className="empty-state"><span aria-hidden="true">G</span><strong>No persistent profile yet</strong><p>Guest games do not carry into Ranked statistics.</p></div>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <button className="secondary-cta full" onClick={() => navigate(screen === "profile" ? "quick" : "ranked")}>{screen === "profile" ? "Play Quick Duel" : "View Ranked"}</button>
     </main>
@@ -1235,8 +1215,8 @@ export function ProfileStats({ profile }: { profile: RankedProfile }) {
 
 export function LeaderboardList({ entries }: { entries: LeaderboardEntry[] }) {
   return <table className="leaderboard-table">
-    <thead><tr><th scope="col">Rank</th><th scope="col">Username</th><th scope="col">Tier</th><th scope="col">W–L–D</th><th scope="col">XP</th></tr></thead>
-    <tbody>{entries.map((entry) => <tr key={entry.handle}>
+    <thead><tr><th scope="col">Rank</th><th scope="col">Username</th><th scope="col">Tier</th><th scope="col">W–L–D</th><th scope="col">RP</th></tr></thead>
+    <tbody>{entries.map((entry) => <tr key={`${entry.bot ? "bot" : "player"}:${entry.handle}`}>
       <th scope="row" className="leaderboard-rank">#{entry.rank}</th>
       <td className="leaderboard-player"><span className="leaderboard-handle" title={entry.handle}>{entry.handle}</span>{entry.bot && <small className="bot-tag">BOT</small>}</td>
       <td className="leaderboard-tier">{entry.tier}</td>
@@ -1246,17 +1226,6 @@ export function LeaderboardList({ entries }: { entries: LeaderboardEntry[] }) {
       <td className="leaderboard-rating">{entry.rating}</td>
     </tr>)}</tbody>
   </table>;
-}
-
-export function RivalsPanel() {
-  return (
-    <section className="rivals-panel" aria-labelledby="rivals-title">
-      <div><p className="eyebrow">Shared practice standings</p><h2 id="rivals-title">Bot leaderboard</h2></div>
-      <div className="rivals-scroll" role="region" aria-label="Practice bot leaderboard" tabIndex={0}>
-        <LeaderboardList entries={BOT_LEADERBOARD} />
-      </div>
-    </section>
-  );
 }
 
 function HowTo({ navigate }: { navigate: (screen: Screen) => void }) {
