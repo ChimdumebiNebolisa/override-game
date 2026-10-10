@@ -660,6 +660,10 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
   activeRoundOpen: boolean;
   onContinue: () => void;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(!activeRoundOpen || finalRound);
+  useEffect(() => {
+    setDetailsOpen(!activeRoundOpen || finalRound);
+  }, [result.state.round, activeRoundOpen, finalRound]);
   const rival: Player = player === "A" ? "B" : "A";
   const rows = ([player, rival] as const).map((side) => ({ side, outcome: result.outcomes[side] }));
   const winnerText = result.state.winner === player ? "You win" : result.state.winner === rival ? "Rival wins" : "The match is tied";
@@ -668,8 +672,12 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
       <div className="round-review-heading">
         <p className="eyebrow">Simultaneous reveal</p>
         <h2 id="reveal-title">Round {result.state.status === "finished" ? result.state.round : result.state.round - 1} resolved.</h2>
+        <button className="reveal-details-toggle" type="button" aria-expanded={detailsOpen} aria-controls="reveal-actions"
+          onClick={() => setDetailsOpen((open) => !open)}>
+          {detailsOpen ? "Hide details" : "Show details"}
+        </button>
       </div>
-        <div className="reveal-actions">
+        <div id="reveal-actions" className={`reveal-actions${detailsOpen ? "" : " is-compact"}`}>
           {rows.map(({ side, outcome }) => (
             <div key={side} className={side === player ? "you" : "bot"}>
               <span>{side === player ? "YOU" : "RIVAL"}</span>

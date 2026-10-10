@@ -29,7 +29,15 @@ describe('in-match round feedback', () => {
     expect(html).not.toContain('<dialog');
     expect(html).not.toContain('aria-modal');
     expect(html).toContain('Hide result');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('class="reveal-actions is-compact"');
     expect(html).toContain('Spent 1 Energy');
+  });
+  it('keeps the full explanation open when no next decision is competing for space', () => {
+    const html = renderToStaticMarkup(<RevealPanel result={result} player="A" finalRound={false}
+      activeRoundOpen={false} onContinue={() => undefined} />);
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('class="reveal-actions"');
   });
 
   it('shows who won and labels both scores in the last-round reveal', () => {

@@ -245,6 +245,8 @@ dialog:not([open]) { display:none; }
 .round-review-heading { display: flex; align-items: baseline; gap: 14px; margin-block-end: 10px; }
 .round-review-heading .eyebrow { margin: 0; color: var(--blue); font: 9px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
 .round-review-heading h2 { margin: 0; font: 750 23px var(--display); text-transform: uppercase; }
+.reveal-details-toggle { justify-self: start; padding: 3px 0; border: 0; background: transparent; color: var(--blue); font: 700 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px; }
+.reveal-details-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
 .reveal-actions { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--ink); }
 .reveal-actions > div { min-inline-size: 0; padding: 12px 16px; }
 .reveal-actions > div + div { border-inline-start: 1px solid var(--ink); }
@@ -252,6 +254,7 @@ dialog:not([open]) { display:none; }
 .reveal-actions strong { display: block; margin: 8px 0; font: 750 22px var(--display); text-transform: uppercase; }
 .reveal-actions p { margin:0; color: var(--muted); font-size: 12px; line-height:1.4; }
 .reveal-actions small { display: block; margin-block-start: 7px; color: var(--ink); font: 9px/1.4 var(--mono); }
+.reveal-actions.is-compact p, .reveal-actions.is-compact small { display: none; }
 .reveal-actions .you strong { color: var(--blue); }
 .reveal-actions .bot strong { color: var(--coral); }
 .reveal-winner { margin:14px 0 4px; padding:10px 14px; background:var(--paper); font:800 22px var(--display); text-align:center; text-transform:uppercase; }
