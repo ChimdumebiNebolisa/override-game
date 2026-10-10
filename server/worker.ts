@@ -142,11 +142,25 @@ export default {
   async fetch(request: Request, env: Environment): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path.startsWith('/__/auth/')) return proxyFirebaseAuth(request, env);
+    if (path === '/__/firebase/init.json') return firebaseInitConfig(request, env);
     if (!path.startsWith('/api/') && !path.startsWith('/__ops/recovery/')) return env.ASSETS.fetch(request);
     const id = env.GAME.idFromName('override-game-global');
     return env.GAME.get(id).fetch(request);
   },
 };
+
+function firebaseInitConfig(request: Request, env: Environment): Response {
+  let config: unknown;
+  try { config = JSON.parse(env.FIREBASE_WEB_CONFIG); }
+  catch { return new Response('Firebase auth is not configured', { status: 503 }); }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    return new Response('Firebase auth is not configured', { status: 503 });
+  }
+  const authDomain = new URL(request.url).host;
+  return new Response(JSON.stringify({ ...config, authDomain }), {
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  });
+}
 
 async function proxyFirebaseAuth(request: Request, env: Environment): Promise<Response> {
   let projectId: unknown;

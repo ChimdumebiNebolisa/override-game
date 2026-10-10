@@ -13,7 +13,7 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/__/auth/*", "/__ops/recovery/*"]
+    "run_worker_first": ["/api/*", "/__/auth/*", "/__/firebase/init.json", "/__ops/recovery/*"]
   },
   "durable_objects": {
     "bindings": [{ "name": "GAME", "class_name": "GameDurableObject" }]

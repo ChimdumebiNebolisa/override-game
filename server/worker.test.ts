@@ -283,6 +283,21 @@ it('proxies Firebase auth helper requests to the configured project without foll
   expect(options).toMatchObject({ redirect: 'manual' });
 });
 
+it('serves Firebase auth helper config as JSON on the app origin', async () => {
+  const assetsFetch = vi.fn(async () => new Response('<!doctype html>app'));
+  const env = {
+    FIREBASE_WEB_CONFIG: JSON.stringify({ apiKey: 'test', authDomain: 'override-game.firebaseapp.com', projectId: 'override-game', appId: 'test' }),
+    INVITATION_ENCRYPTION_KEY: 'worker-integration-test-key',
+    GAME: { idFromName(name: string) { return name; }, get() { throw new Error('Not used by this test'); } },
+    ASSETS: { fetch: assetsFetch },
+  };
+
+  const response = await worker.fetch(new Request('https://game.example/__/firebase/init.json'), env);
+  expect(response.headers.get('content-type')).toContain('application/json');
+  expect(await response.json()).toEqual({ apiKey: 'test', authDomain: 'game.example', projectId: 'override-game', appId: 'test' });
+  expect(assetsFetch).not.toHaveBeenCalled();
+});
+
 it('protects PITR bookmarks and restores, then keeps player API paused until the Durable Object restarts', async () => {
   process.env.NODE_ENV = 'test';
   const origin = 'http://localhost:5173';
