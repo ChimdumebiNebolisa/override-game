@@ -7,7 +7,7 @@ const result: RoundResult = {
   state: createInitialState(),
   score: { A: 4, B: 4 },
   outcomes: {
-    A: { action: { type: 'surge', target: 12 }, success: false, reason: 'collision', energySpent: 1, energyEarned: 0 },
+    A: { action: { type: 'surge', target: 12 }, success: false, reason: 'collision', energySpent: 3, energyEarned: 0 },
     B: { action: { type: 'expand', target: 12 }, success: false, reason: 'collision', energySpent: 0, energyEarned: 0 },
   },
 };
@@ -31,7 +31,7 @@ describe('in-match round feedback', () => {
     expect(html).toContain('Hide result');
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('class="reveal-actions is-compact"');
-    expect(html).toContain('Spent 1 Energy');
+    expect(html).toContain('Spent 3 Energy');
   });
   it('keeps the full explanation open when no next decision is competing for space', () => {
     const html = renderToStaticMarkup(<RevealPanel result={result} player="A" finalRound={false}

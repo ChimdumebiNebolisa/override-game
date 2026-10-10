@@ -66,6 +66,7 @@ export const initialSchema = `    CREATE TABLE IF NOT EXISTS sessions (
       player_b_name TEXT NOT NULL,
       state_json TEXT NOT NULL,
       decision_duration_ms INTEGER NOT NULL DEFAULT 5000,
+      timed INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL,
       deadline INTEGER,
       transition_at INTEGER,

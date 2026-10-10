@@ -6,7 +6,7 @@ import { openDatabase } from './db';
 import { createQuickRoom, joinQuickRoom, openRoomForSession } from './rooms';
 import {
   activeMatchForSession, createBotMatch, dueMatches, expireGrace, getMatch, lockAction as serviceLockAction, markConnected, markDisconnected, reconcilePresenceOnStartup,
-  matchForSession, resignMatch, resolveMatch, startNextRound,
+  matchForSession, parseAction, resignMatch, resolveMatch, startNextRound,
 } from './matches';
 import { createInitialState, validateAction, type Action, type MatchState, type RoundResult } from '../src/shared/rules';
 import type { Session } from './http';
@@ -190,6 +190,58 @@ describe('guest matches', () => {
       energy: { A: energyA, B: energyB },
     };
   }
+
+  it('persists both Surge targets privately and resolves each through the shared engine once', () => {
+    const match = humanMatch();
+    const state = facingState(3);
+    db.prepare('UPDATE matches SET state_json = ? WHERE id = ?').run(JSON.stringify(state), match.id);
+    const surge = parseAction({ type: 'surge', target: 12, secondTarget: 13 });
+    lockAction(db, match.id, match.A, surge);
+    const hidden = matchForSession(db, match.id, match.B);
+    expect(hidden.lastResult).toBeNull();
+    expect(JSON.stringify(hidden)).not.toContain('secondTarget');
+    expect(db.prepare('SELECT action_json FROM pending_actions WHERE match_id = ? AND player = ?')
+      .get(match.id, 'A')).toEqual({ action_json: JSON.stringify(surge) });
+    lockAction(db, match.id, match.B, move('expand', 12));
+    const deadline = getMatch(db, match.id)!.deadline!;
+    expect(resolveMatch(db, match.id, deadline)).toBe(true);
+    expect(resolveMatch(db, match.id, deadline)).toBe(false);
+    const result = matchForSession(db, match.id, match.A).lastResult!;
+    expect(result.outcomes.A.action).toEqual(surge);
+    expect(result.outcomes.A.cells).toEqual([
+      { target: 12, success: false, reason: 'collision' },
+      { target: 13, success: true, reason: 'stolen' },
+    ]);
+    expect(result.state.energy.A).toBe(0);
+    expect(result.score).toEqual({ A: 2, B: 0 });
+  });
+
+  it('keeps beginner Practice untimed across rounds while Quick remains timed', () => {
+    randomSide.value = 0;
+    const guest = session('untimed-practice');
+    const practiceId = createBotMatch(db, guest, 'Guest', 'practice', 'easy');
+    expect(matchForSession(db, practiceId, guest)).toMatchObject({ timed: false, deadline: null });
+    lockAction(db, practiceId, guest, move('expand', 2));
+    expect(matchForSession(db, practiceId, guest).lastResult?.state.round).toBe(2);
+    const transition = getMatch(db, practiceId)!;
+    expect(transition).toMatchObject({ timed: 0, status: 'transition', deadline: null });
+    expect(startNextRound(db, practiceId, transition.transition_at!)).toBe(true);
+    expect(matchForSession(db, practiceId, guest)).toMatchObject({ timed: false, deadline: null, state: { round: 2 } });
+
+    const quickGuest = session('timed-quick');
+    const quickId = createBotMatch(db, quickGuest, 'Guest', 'quick', 'easy');
+    expect(getMatch(db, quickId)).toMatchObject({ timed: 1, deadline: 105_000 });
+  });
+
+  it.each([
+    { type: 'surge', target: 12, secondTarget: 12 },
+    { type: 'surge', target: 12, secondTarget: null },
+    { type: 'surge', target: 12, secondTarget: '13' },
+    { type: 'expand', target: 12, secondTarget: 13 },
+    { type: 'override', target: 12, secondTarget: 13 },
+  ])('rejects malformed second targets: %j', (input) => {
+    expectStatus(() => parseAction(input), 400);
+  });
 
   it.each([0, 1])('uses revealed human history for Hard on either side %s', (random) => {
     randomSide.value = random;

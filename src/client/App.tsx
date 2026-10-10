@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { HeroDemo } from "./HeroDemo";
+import { GameBoard } from "./GameBoard";
+import { HowTo } from "./HowTo";
+import { toggleSurgeTarget } from "./move-selection";
 import {
   legalActions,
+  actionTargets,
   legalTargets,
-  createInitialState,
-  resolveRound,
   score,
   type Action,
   type ActionOutcome,
@@ -82,8 +85,8 @@ const ACTIONS: ReadonlyArray<{
 }> = [
   { type: "expand", label: "Expand", cost: 0, short: "Claim an adjacent node" },
   { type: "ambush", label: "Ambush", cost: 0, short: "Predict their Expand" },
-  { type: "surge", label: "Surge", cost: 1, short: "Reach up to 2 spaces" },
-  { type: "override", label: "Override", cost: 3, short: "Steal an adjacent node" },
+  { type: "surge", label: "Surge", cost: 3, short: "Take up to 2 open or rival nodes" },
+  { type: "override", label: "Override", cost: 2, short: "Steal an adjacent node" },
   { type: "pass", label: "Pass", cost: 0, short: "Take no action" },
 ];
 
@@ -99,6 +102,12 @@ const OUTCOME_COPY: Record<ActionOutcome["reason"], string> = {
 };
 
 function outcomeExplanation(outcome: ActionOutcome): string {
+  if (outcome.action.type === "surge" && outcome.cells) {
+    const captured = outcome.cells.filter((cell) => cell.success).length;
+    const stolen = outcome.cells.filter((cell) => cell.reason === "stolen").length;
+    const blocked = outcome.cells.length - captured;
+    return `captured ${captured} ${captured === 1 ? "node" : "nodes"}${stolen ? ` (${stolen} stolen)` : ""}${blocked ? `; ${blocked} collided` : ""}`;
+  }
   if (outcome.reason === "ambush-hit" && outcome.energyEarned === 0) {
     return "read the Expand; Energy was already full";
   }
@@ -146,7 +155,7 @@ function nextRivalText(rating: number): string {
 
 function actionText(action: Action) {
   const name = action.type[0].toUpperCase() + action.type.slice(1);
-  return action.type === "pass" ? name : `${name} ${coordinate(action.target)}`;
+  return action.type === "pass" ? name : `${name} ${actionTargets(action).map(coordinate).join(" + ")}`;
 }
 
 function Brand({ onHome }: { onHome: () => void }) {
@@ -178,14 +187,13 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
     <main className="home-shell">
       <section className="hero">
         <div className="hero-copy">
-          <p className="eyebrow"><span>5×5</span> territory duel</p>
-          <h1>Predict.<br />Counter.<br /><em>Control the grid.</em></h1>
+          <h1>Your rival has a plan.<br /><em>Ruin it.</em></h1>
           <p className="hero-intro">
-            Claim open spaces, counter your rival, and control more territory. Choose a move in secret; both moves reveal together.
+            A territory duel on a 5×5 grid. Choose your move in secret, reveal together, and fight for control.
           </p>
-          <button className="primary-cta" onClick={() => navigate("practice")}>Start with Practice <span>→</span></button>
+          <div className="hero-entry"><button className="primary-cta" onClick={() => navigate("quick")}>Start a game <span>→</span></button><p>No account needed.</p></div>
         </div>
-        <DemoBoard />
+        <HeroDemo />
       </section>
 
       <section className="mode-grid" aria-labelledby="choose-mode">
@@ -213,48 +221,17 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
   );
 }
 
-function DemoBoard() {
-  const rows = ["AA...", "AA...", ".....", "...BB", "...BB"];
-  return (
-    <figure className="demo-stage" aria-labelledby="demo-title">
-      <div className="demo-topline"><span>Example · Round 1</span><span><b>4</b> — <b>4</b> territory</span></div>
-      <div className="demo-layout">
-        <div className="demo-board" aria-hidden="true">
-          <span className="demo-axis demo-corner" />
-          {"ABCDE".split("").map((column, index) => <span key={column} className={`demo-axis ${index === 2 ? "is-target" : ""}`}>{column}</span>)}
-          {rows.flatMap((row, rowIndex) => [
-            <span key={`row-${rowIndex}`} className={`demo-axis demo-row-axis ${rowIndex === 2 ? "is-target" : ""}`}>{rowIndex + 1}</span>,
-            ...row.split("").map((owner, columnIndex) => {
-              const cellIndex = rowIndex * 5 + columnIndex;
-              return <span key={cellIndex} className={`demo-cell ${owner === "." ? "neutral" : owner} ${cellIndex === 12 ? "target" : ""}`}><i /></span>;
-            }),
-          ])}
-        </div>
-        <figcaption className="demo-story">
-          <p className="demo-kicker">Choose in secret</p>
-          <h2 id="demo-title">Both want C3.</h2>
-          <p className="demo-explainer">You and your rival lock in a move before either one is revealed.</p>
-          <div className="demo-moves">
-            <div className="demo-move demo-you"><span>You</span><strong>Expand C3</strong></div>
-            <div className="demo-move demo-rival"><span>Rival</span><strong>Expand C3</strong></div>
-          </div>
-          <div className="demo-result"><b>Collision</b><span>C3 stays neutral.</span></div>
-        </figcaption>
-      </div>
-    </figure>
-  );
-}
-
 function ModeSelect({
   kind,
   onStart,
   navigate,
 }: {
   kind: SoloMode;
-  onStart: (mode: SoloMode, difficulty: Difficulty, creationKey: string) => Promise<void>;
+  onStart: (mode: SoloMode, difficulty: Difficulty, creationKey: string, timed: boolean) => Promise<void>;
   navigate: (screen: Screen) => void;
 }) {
-  const [difficulty, setDifficulty] = useState<Difficulty>("Normal");
+  const [difficulty, setDifficulty] = useState<Difficulty>(kind === "practice" ? "Easy" : "Normal");
+  const [timedPractice, setTimedPractice] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const creationRef = useRef<{ difficulty: Difficulty; key: string } | null>(null);
@@ -262,7 +239,7 @@ function ModeSelect({
     setBusy(true);
     setError("");
     if (creationRef.current?.difficulty !== difficulty) creationRef.current = { difficulty, key: crypto.randomUUID() };
-    try { await onStart(kind, difficulty, creationRef.current.key); creationRef.current = null; }
+    try { await onStart(kind, difficulty, creationRef.current.key, kind === "quick" || timedPractice); creationRef.current = null; }
     catch (reason) { setError(reason instanceof Error ? reason.message : "The match could not start."); }
     finally { setBusy(false); }
   };
@@ -283,6 +260,9 @@ function ModeSelect({
           </button>
         ))}
       </fieldset>
+      {kind === "practice" && <label className="timed-practice"><input type="checkbox" checked={timedPractice} onChange={(event) => setTimedPractice(event.target.checked)} />
+        <span><strong>Use a turn timer</strong><small>Five seconds per round. Off by default while you learn.</small></span>
+      </label>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <button className="primary-cta full" disabled={busy} onClick={launch}>{busy ? "Starting match…" : `Play ${difficulty}`} <span>→</span></button>
       {kind === "quick" && (
@@ -308,7 +288,8 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
 }) {
   const [match, setMatch] = useState(initialMatch.state);
   const [actionType, setActionType] = useState<Action["type"]>("expand");
-  const [target, setTarget] = useState<number | null>(null);
+  const [selectedTargets, setSelectedTargets] = useState<number[]>([]);
+  const target = selectedTargets[0] ?? null;
   const [timeLeft, setTimeLeft] = useState(() => Math.max(0, Math.ceil(((initialMatch.deadline ?? initialMatch.serverNow) - initialMatch.serverNow) / 1000)));
   const [locked, setLocked] = useState(initialMatch.locked);
   const currentRoundRef = useRef(initialMatch.state.round);
@@ -348,7 +329,8 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
     ? { type: "pass" }
     : target === null
       ? null
-      : { type: actionType, target };
+      : actionType === "surge" && selectedTargets.length === 2
+        ? { type: "surge", target, secondTarget: selectedTargets[1] } : { type: actionType, target };
   const decisionOpen = serverStatus === "decision" && match.status === "active";
   const canAct = decisionOpen && !roundActionsDisabled(serverStatus, locked);
 
@@ -379,7 +361,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       currentRoundRef.current = snapshot.state.round;
       lockedRoundRef.current = null;
       setActionType("expand");
-      setTarget(null);
+      setSelectedTargets([]);
     }
     if (acknowledgeRound !== undefined) acknowledgedRoundRef.current = acknowledgeRound;
     setMatch(snapshot.state);
@@ -417,9 +399,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       ? api.subscribe(initialMatch.roomId, () => void refresh())
       : api.subscribeMatch(initialMatch.id, () => void refresh());
     const deadlineDelay = Math.max(0, (deadlineAt ?? Date.now()) - Date.now() + 300);
-    const deadlineFetch = window.setTimeout(() => void refresh(), deadlineDelay);
+    const deadlineFetch = deadlineAt === null ? null : window.setTimeout(() => void refresh(), deadlineDelay);
     const fallbackPoll = window.setInterval(() => void refresh(), 2_000);
-    return () => { active = false; window.clearTimeout(deadlineFetch); window.clearInterval(fallbackPoll); unsubscribe(); };
+    return () => { active = false; if (deadlineFetch !== null) window.clearTimeout(deadlineFetch); window.clearInterval(fallbackPoll); unsubscribe(); };
   }, [initialMatch.id, initialMatch.roomId, match.round, match.status, deadlineAt]);
 
   const receiveTimeout = async () => {
@@ -440,7 +422,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   };
 
   useEffect(() => {
-    if (!canAct || match.status === "finished") return;
+    if (!initialMatch.timed || !canAct || match.status === "finished") return;
     const timer = window.setInterval(() => {
       setTimeLeft((value) => {
         if (value <= 1) {
@@ -452,7 +434,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [canAct, match]);
+  }, [initialMatch.timed, canAct, match]);
 
   const nextRound = async () => {
     setNetworkError("");
@@ -468,7 +450,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       focusRoundAfterReveal.current = snapshot.status !== "finished";
       if (!receiveSnapshot(snapshot, acknowledgedRound)) return;
       setActionType("expand");
-      setTarget(null);
+      setSelectedTargets([]);
       setTimeLeft(Math.max(0, Math.ceil(((snapshot.deadline ?? snapshot.serverNow) - snapshot.serverNow) / 1000)));
     } catch (reason) {
       setNetworkError(reason instanceof Error ? reason.message : "The next round could not be loaded.");
@@ -478,7 +460,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   const chooseAction = (type: Action["type"]) => {
     if (!canAct) return;
     setActionType(type);
-    setTarget(null);
+    setSelectedTargets([]);
   };
 
   const restartPractice = async () => {
@@ -529,7 +511,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       <header className="match-header">
         <button ref={leaveButtonRef} className="icon-button" onClick={() => setConfirmResign(true)} aria-label="Leave match">×</button>
         <div><span>{mode === "practice" ? "Practice" : mode === "ranked" ? "Ranked Duel" : `Quick Duel · ${initialMatch.roomId ? "Friend" : difficulty}`}</span><strong ref={roundLabelRef} tabIndex={-1}>{roundLabel}</strong></div>
-        <div className={`timer ${timeLeft <= 2 ? "urgent" : ""}`} aria-label={`${timeLeft} seconds remaining`}><b>0{timeLeft}</b><span>SEC</span></div>
+        {initialMatch.timed
+          ? <div className={`timer ${timeLeft <= 2 ? "urgent" : ""}`} aria-label={`${timeLeft} seconds remaining`}><b>0{timeLeft}</b><span>SEC</span></div>
+          : <div className="timer untimed" aria-label="Untimed Practice"><b>—</b><span>NO TIMER</span></div>}
       </header>
 
       <section className="score-rail" aria-label="Match score">
@@ -551,7 +535,8 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       <div className="game-layout">
         <section className="board-panel" aria-labelledby="board-title">
           <div className="board-label"><span id="board-title">Territory grid</span><span>{locked ? "MOVE LOCKED" : reveal && !canAct ? "ROUND REVEALED" : "CHOOSE A TARGET"}</span></div>
-          <GameBoard board={match.board} legal={legal} target={target} disabled={!canAct} onTarget={setTarget} />
+          <GameBoard board={match.board} legal={legal} target={target} secondTarget={selectedTargets[1] ?? null} disabled={!canAct}
+            onTarget={(cell) => setSelectedTargets((current) => actionType === "surge" ? toggleSurgeTarget(current, cell) : [cell])} />
           <div className="energy-bar" aria-label={`Your Energy ${match.energy[me]} of 3. Rival Energy ${match.energy[rival]} of 3.`}>
             <span>ENERGY</span>
             {[1, 2, 3].map((value) => <i key={value} className={value <= match.energy[me] ? "charged" : ""}>ϟ</i>)}
@@ -584,7 +569,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
             })}
           </div>
           <div className="selection-line">
-            <span>Selected</span><strong>{selectedAction ? actionText(selectedAction) : `${ACTIONS.find((item) => item.type === actionType)?.label}: choose a node`}</strong>
+            <span>Selected{actionType === "surge" ? ` · ${selectedTargets.length}/2 · tap again to deselect` : ""}</span><strong>{selectedAction ? actionText(selectedAction) : `${ACTIONS.find((item) => item.type === actionType)?.label}: choose a node`}</strong>
           </div>
           {networkError && <p className="form-error" role="alert">{networkError}</p>}
           {connectionError && <p className="form-error" role="status">{connectionError}</p>}
@@ -602,39 +587,6 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
 
       {confirmResign && (!reveal || decisionOpen) && <ResignDialog ranked={mode === "ranked"} onCancel={closeResign} onConfirm={() => void resign()} />}
     </main>
-  );
-}
-
-function GameBoard({ board, legal, target, disabled, onTarget }: {
-  board: MatchState["board"];
-  legal: number[];
-  target: number | null;
-  disabled: boolean;
-  onTarget: (target: number) => void;
-}) {
-  return (
-    <div className="board-grid" role="group" aria-label="5 by 5 territory grid">
-      <span className="axis corner" aria-hidden="true" />
-      {["A", "B", "C", "D", "E"].map((label) => <span className="axis" aria-hidden="true" key={label}>{label}</span>)}
-      {board.map((cell, index) => {
-        const row = Math.floor(index / 5);
-        const isLegal = legal.includes(index);
-        return (
-          <span className="cell-slot" key={index}>
-            {index % 5 === 0 && <span className="axis row-axis" aria-hidden="true">{row + 1}</span>}
-            <button
-              className={`board-cell owner-${cell} ${isLegal ? "legal" : ""} ${target === index ? "targeted" : ""}`}
-              onClick={() => isLegal && onTarget(index)}
-              disabled={disabled || !isLegal}
-              aria-label={`${coordinate(index)}, ${cell === "neutral" ? "neutral" : `owned by player ${cell}`}${isLegal ? ", legal target" : ""}`}
-              aria-pressed={target === index}
-            >
-              {cell === "A" ? <span>●</span> : cell === "B" ? <span>◆</span> : <span className="node-dot" />}
-            </button>
-          </span>
-        );
-      })}
-    </div>
   );
 }
 
@@ -1140,7 +1092,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { 
   );
 }
 
-function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderboard" | "profile" | "how-to"; navigate: (screen: Screen) => void; authRedirectError: string }) {
+function InfoScreen({ screen, navigate, authRedirectError, onStartPractice }: { screen: "leaderboard" | "profile" | "how-to"; navigate: (screen: Screen) => void; authRedirectError: string; onStartPractice: () => void }) {
   const [profile, setProfile] = useState<RankedProfile | null>(null);
   const [signedIn, setSignedIn] = useState(false);
   const [firebaseConfig, setFirebaseConfig] = useState<{ apiKey: string; authDomain: string; projectId: string; appId: string } | null>(null);
@@ -1196,7 +1148,7 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
         : reason instanceof Error ? reason.message : "Google sign-in failed.");
     } finally { setSignInBusy(false); }
   };
-  if (screen === "how-to") return <HowTo navigate={navigate} />;
+  if (screen === "how-to") return <HowTo navigate={navigate} onStartPractice={onStartPractice} />;
   return (
     <main className="panel-page info-page">
       <button className="back-link" onClick={() => navigate("home")}>← Home</button>
@@ -1245,60 +1197,6 @@ export function LeaderboardList({ entries }: { entries: LeaderboardEntry[] }) {
       <td className="leaderboard-rating">{entry.rating}</td>
     </tr>)}</tbody>
   </table>;
-}
-
-function HowTo({ navigate }: { navigate: (screen: Screen) => void }) {
-  const [expandTarget, setExpandTarget] = useState<number | null>(null);
-  const [surgeTarget, setSurgeTarget] = useState<number | null>(null);
-  const opening = createInitialState();
-  const expandTargets = legalTargets(opening, "A", "expand");
-  const ambushResult = expandTarget === null ? null : resolveRound(opening, {
-    A: { type: "expand", target: expandTarget },
-    B: { type: "ambush", target: expandTarget },
-  });
-  const surgeTargets = ambushResult ? legalTargets(ambushResult.state, "B", "surge") : [];
-  const surgeResult = ambushResult && surgeTarget !== null
-    ? resolveRound(ambushResult.state, { A: { type: "pass" }, B: { type: "surge", target: surgeTarget } })
-    : null;
-  return (
-    <main className="panel-page how-page">
-      <button className="back-link" onClick={() => navigate("home")}>← Home</button>
-      <div className="panel-heading"><p className="eyebrow">How to play · Interactive guide</p><h1>Read the board.<br />Then read your rival.</h1><p>Finish with more nodes after 12 rounds. Both players choose from the same board in secret, then reveal together.</p></div>
-      <section className="tutorial-card" aria-labelledby="tutorial-title">
-        <div className="tutorial-copy">
-          <p className="eyebrow">01 · Choose an Expand</p>
-          <h2 id="tutorial-title">Pick a highlighted node.</h2>
-          <p>Expand claims a neutral node beside your territory. Choose one now; the example rival will secretly Ambush the same target.</p>
-          {!expandTarget && <p className="tutorial-hint">Select any highlighted node on the grid to continue.</p>}
-          {ambushResult && <div className="tutorial-result" role="status">
-            <strong>Both moves revealed</strong>
-            <span>Player A {OUTCOME_COPY[ambushResult.outcomes.A.reason]}.</span>
-            <span>Player B {OUTCOME_COPY[ambushResult.outcomes.B.reason]} and now has {ambushResult.state.energy.B} Energy.</span>
-          </div>}
-          {ambushResult && <>
-            <p className="eyebrow">02 · Spend Energy</p>
-            <h2>Choose a Surge target.</h2>
-            <p>Surge costs 1 Energy and reaches up to two spaces from your territory. Override costs 3 Energy and steals an adjacent enemy node.</p>
-            {surgeResult && <div className="tutorial-result" role="status"><strong>Round resolved</strong><span>Player B {OUTCOME_COPY[surgeResult.outcomes.B.reason]} at {coordinate(surgeTarget!)}.</span></div>}
-          </>}
-        </div>
-        <div className="tutorial-board">
-          <div className="board-label"><span>Example territory</span><span>{surgeResult ? "SURGE REVEALED" : ambushResult ? "AMBUSH REVEALED" : "CHOOSE EXPAND"}</span></div>
-          <GameBoard
-            board={surgeResult?.state.board ?? ambushResult?.state.board ?? opening.board}
-            legal={surgeResult ? [] : ambushResult ? surgeTargets : expandTargets}
-            target={surgeResult ? surgeTarget : ambushResult ? surgeTarget : expandTarget}
-            disabled={Boolean(surgeResult)}
-            onTarget={(target) => ambushResult ? setSurgeTarget(target) : setExpandTarget(target)}
-          />
-          <div className="tutorial-energy"><span>PLAYER B ENERGY</span><strong>{surgeResult?.state.energy.B ?? ambushResult?.state.energy.B ?? 0} / 3</strong></div>
-        </div>
-      </section>
-      <div className="action-rules">{ACTIONS.map((action) => <p key={action.type}><strong>{action.label}{action.cost ? ` · ${action.cost} Energy` : ""}</strong><span>{action.type === "ambush" ? "Blocks Expand only when you predict its exact target." : action.short + "."}</span></p>)}</div>
-      <p className="tutorial-footnote">The example follows the same legality and resolution rules as a match. Practice adds live legal target cues and explains every revealed outcome.</p>
-      <button className="primary-cta full" onClick={() => navigate("practice")}>Try Practice <span>→</span></button>
-    </main>
-  );
 }
 
 export function App() {
@@ -1376,9 +1274,9 @@ export function App() {
     setScreen(next);
     window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   };
-  const start = async (mode: SoloMode, difficulty: Difficulty, creationKey: string, parentMatchId?: string, restartMatchId?: string) => {
+  const start = async (mode: SoloMode, difficulty: Difficulty, creationKey: string, parentMatchId?: string, restartMatchId?: string, timed = mode === "quick") => {
     if (!parentMatchId) void api.trackEvent("opponent_selected", `${mode}-bot`).catch(() => undefined);
-    const response = await api.createBotMatch(mode, difficulty.toLowerCase() as Lowercase<Difficulty>, creationKey, parentMatchId, restartMatchId);
+    const response = await api.createBotMatch(mode, difficulty.toLowerCase() as Lowercase<Difficulty>, creationKey, parentMatchId, restartMatchId, timed);
     setSolo({ mode, difficulty });
     setBotMatch(response.match);
     setGameKey((value) => value + 1);
@@ -1391,13 +1289,14 @@ export function App() {
     <div className="app-shell">
       {screen !== "game" && <AppHeader navigate={navigate} />}
       {screen === "home" && <Home navigate={navigate} />}
-      {screen === "practice" && <ModeSelect kind="practice" onStart={start} navigate={navigate} />}
-      {screen === "quick" && <ModeSelect kind="quick" onStart={start} navigate={navigate} />}
-      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.status === "voided" ? undefined : botMatch.id); }} onRestartPractice={(key) => start("practice", solo.difficulty, key, undefined, botMatch.id)} />}
+      {screen === "practice" && <ModeSelect kind="practice" onStart={(mode, difficulty, key, timed) => start(mode, difficulty, key, undefined, undefined, timed)} navigate={navigate} />}
+      {screen === "quick" && <ModeSelect kind="quick" onStart={(mode, difficulty, key, timed) => start(mode, difficulty, key, undefined, undefined, timed)} navigate={navigate} />}
+      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.status === "voided" ? undefined : botMatch.id, undefined, botMatch.timed); }} onRestartPractice={(key) => start("practice", solo.difficulty, key, undefined, botMatch.id, botMatch.timed)} />}
       {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} authRedirectError={authRedirectError} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
-      {(screen === "leaderboard" || screen === "profile" || screen === "how-to") && <InfoScreen screen={screen} authRedirectError={authRedirectError} navigate={navigate} />}
+      {(screen === "leaderboard" || screen === "profile" || screen === "how-to") && <InfoScreen screen={screen} authRedirectError={authRedirectError} navigate={navigate}
+        onStartPractice={() => navigate("practice")} />}
     </div>
   );
 }

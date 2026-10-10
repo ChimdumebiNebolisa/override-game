@@ -2,7 +2,9 @@ export type Player = "A" | "B";
 type Cell = Player | "neutral";
 export type Board = readonly Cell[];
 export type TargetedActionType = "expand" | "ambush" | "surge" | "override";
-export type Action = { type: TargetedActionType; target: number } | { type: "pass" };
+export type Action = { type: Exclude<TargetedActionType, "surge">; target: number }
+  | { type: "surge"; target: number; secondTarget?: number }
+  | { type: "pass" };
 type EndingReason = "standard" | "sudden-death" | "board-exhaustion" | "forfeit" | "resignation";
 
 export interface GameConfig {
@@ -38,6 +40,7 @@ export interface ActionOutcome {
   reason: ActionReason;
   energySpent: number;
   energyEarned: number;
+  cells?: ReadonlyArray<{ target: number; success: boolean; reason: ActionReason }>;
 }
 
 export interface RoundResult {
@@ -78,7 +81,7 @@ const distance = (left: number, right: number): number =>
   Math.abs(left % BOARD_SIZE - right % BOARD_SIZE);
 
 const cost = (type: Action["type"]): number =>
-  type === "surge" ? 1 : type === "override" ? 3 : 0;
+  type === "surge" ? 3 : type === "override" ? 2 : 0;
 
 export function createInitialState(config: Partial<GameConfig> = {}): MatchState {
   const selected = { ...DEFAULT_CONFIG, ...config };
@@ -101,6 +104,12 @@ export function score(board: Board): Readonly<Record<Player, number>> {
   };
 }
 
+export function actionTargets(action: Action): number[] {
+  if (action.type === "pass") return [];
+  return action.type === "surge" && action.secondTarget !== undefined
+    ? [action.target, action.secondTarget] : [action.target];
+}
+
 export function legalTargets(state: MatchState, player: Player, type: TargetedActionType): number[] {
   if (state.status !== "active" || state.energy[player] < cost(type)) return [];
   const owner = type === "ambush" ? opponent(player) : player;
@@ -108,7 +117,7 @@ export function legalTargets(state: MatchState, player: Player, type: TargetedAc
   const reach = type === "surge" ? 2 : 1;
   const targets: number[] = [];
   for (let target = 0; target < state.board.length; target++) {
-    if (state.board[target] !== targetOwner) continue;
+    if (type === "surge" ? state.board[target] === player : state.board[target] !== targetOwner) continue;
     if (state.board.some((cell, source) => cell === owner &&
         distance(source, target) > 0 && distance(source, target) <= reach)) {
       targets.push(target);
@@ -121,7 +130,15 @@ export function legalActions(state: MatchState, player: Player): Action[] {
   if (state.status !== "active") return [];
   const actions: Action[] = [];
   for (const type of ["expand", "ambush", "surge", "override"] as const) {
-    for (const target of legalTargets(state, player, type)) actions.push({ type, target });
+    const targets = legalTargets(state, player, type);
+    for (const target of targets) actions.push({ type, target });
+    if (type === "surge") {
+      for (let first = 0; first < targets.length; first++) {
+        for (let second = first + 1; second < targets.length; second++) {
+          actions.push({ type, target: targets[first], secondTarget: targets[second] });
+        }
+      }
+    }
   }
   actions.push({ type: "pass" });
   return actions;
@@ -133,16 +150,17 @@ export function validateAction(state: MatchState, player: Player, action: Action
   if (!["expand", "ambush", "surge", "override"].includes(action.type)) {
     return { ok: false, reason: "invalid-action" };
   }
-  if (!Number.isInteger(action.target) || action.target < 0 || action.target >= state.board.length) {
+  const targets = actionTargets(action);
+  if (targets.some((target) => !Number.isInteger(target) || target < 0 || target >= state.board.length) || new Set(targets).size !== targets.length) {
     return { ok: false, reason: "invalid-target" };
   }
   if (state.energy[player] < cost(action.type)) return { ok: false, reason: "insufficient-energy" };
   const owner = action.type === "ambush" ? opponent(player) : player;
   const targetOwner = action.type === "override" ? opponent(player) : "neutral";
-  if (state.board[action.target] !== targetOwner) return { ok: false, reason: "occupied-target" };
+  if (targets.some((target) => action.type === "surge" ? state.board[target] === player : state.board[target] !== targetOwner)) return { ok: false, reason: "occupied-target" };
   const reach = action.type === "surge" ? 2 : 1;
-  const inReach = state.board.some((cell, source) => cell === owner &&
-    distance(source, action.target) > 0 && distance(source, action.target) <= reach);
+  const inReach = targets.every((target) => state.board.some((cell, source) => cell === owner &&
+    distance(source, target) > 0 && distance(source, target) <= reach));
   return inReach ? { ok: true } : {
     ok: false, reason: action.type === "surge" ? "out-of-range" : "not-adjacent",
   };
@@ -151,7 +169,9 @@ export function validateAction(state: MatchState, player: Player, action: Action
 function exhausted(state: MatchState): boolean {
   return !state.board.includes("neutral") &&
     legalTargets(state, "A", "override").length === 0 &&
-    legalTargets(state, "B", "override").length === 0;
+    legalTargets(state, "B", "override").length === 0 &&
+    legalTargets(state, "A", "surge").length === 0 &&
+    legalTargets(state, "B", "surge").length === 0;
 }
 
 export function resolveRound(
@@ -178,26 +198,29 @@ export function resolveRound(
     const action = actions[player];
     const other = actions[opponent(player)];
     let reason: ActionReason;
+    let cells: ActionOutcome["cells"];
     if (action.type === "pass") {
       reason = submitted[player] === null ? "automatic-pass" : "passed";
     } else if (action.type === "ambush") {
       reason = other.type === "expand" && other.target === action.target
         ? "ambush-hit" : "ambush-missed";
       if (reason === "ambush-hit") nextEnergy[player] = Math.min(state.config.energyCap, nextEnergy[player] + 1);
-    } else if (action.type === "override") {
-      reason = "stolen";
-      nextBoard[action.target] = player;
-    } else if (other.type === "ambush" && action.type === "expand" && other.target === action.target) {
-      reason = "intercepted";
-    } else if ((other.type === "expand" || other.type === "surge") && other.target === action.target) {
-      reason = "collision";
     } else {
-      reason = "claimed";
-      nextBoard[action.target] = player;
+      cells = actionTargets(action).map((target) => {
+        const cellReason: ActionReason = action.type === "expand" && other.type === "ambush" && other.target === target
+          ? "intercepted"
+          : (other.type === "expand" || other.type === "surge") && actionTargets(other).includes(target)
+            ? "collision" : state.board[target] === opponent(player) ? "stolen" : "claimed";
+        const success = cellReason === "claimed" || cellReason === "stolen";
+        if (success) nextBoard[target] = player;
+        return { target, success, reason: cellReason };
+      });
+      reason = cells.find((cell) => cell.reason === "stolen")?.reason ?? cells.find((cell) => cell.success)?.reason ?? cells[0].reason;
     }
     outcomes[player] = {
       action: { ...action }, success: reason === "claimed" || reason === "stolen" || reason === "ambush-hit",
       reason, energySpent: cost(action.type), energyEarned: reason === "ambush-hit" ? nextEnergy[player] - state.energy[player] : 0,
+      ...(cells ? { cells } : {}),
     };
   }
 

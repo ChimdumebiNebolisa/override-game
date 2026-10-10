@@ -31,15 +31,24 @@ describe("bot policies", () => {
     const choices = Array.from({ length: 10 }, (_, seed) => chooseBotAction(facing, "A", "easy", [], seed));
     expect(choices.filter((chosen) => chosen.type === "expand")).toHaveLength(8);
     expect(choices[8].type).toBe("ambush");
-    expect(chooseBotAction({ ...facing, energy: { A: 1, B: 0 } }, "A", "easy", [], 9).type).toBe("surge");
+    expect(chooseBotAction({ ...facing, energy: { A: 2, B: 0 } }, "A", "easy", [], 9).type).not.toBe("surge");
+    expect(chooseBotAction({ ...facing, energy: { A: 3, B: 0 } }, "A", "easy", [], 9).type).toBe("surge");
   });
 
   it("uses Normal's board and Energy assessment to choose a safe Expand or a useful Override", () => {
     const expansion = chooseBotAction(facing, "A", "normal");
     expect(expansion.type).toBe("expand");
     if (expansion.type !== "pass") expect(expansion.target).not.toBe(12);
-    const full = state(["AAAAA", "AAAAA", "AAAAA", "BBBBB", "BBBBB"], 3);
+    const full = state(["AAAAA", "AAAAA", "AAAAA", "BBBBB", "BBBBB"], 2);
     expect(chooseBotAction(full, "A", "normal").type).toBe("override");
+  });
+
+  it.each(["normal", "hard"] as const)("lets %s use Surge to steal two rival cells", (difficulty) => {
+    const current = state([".....", ".....", ".ABB.", ".....", "....."], 3);
+    const chosen = chooseBotAction(current, "A", difficulty);
+    expect(chosen).toEqual({ type: "surge", target: 12, secondTarget: 13 });
+    expect(validateAction(current, "A", chosen)).toEqual({ ok: true });
+    expect(resolveRound(current, { A: chosen, B: { type: "pass" } }).score).toEqual({ A: 3, B: 0 });
   });
 
   it("uses only the last three revealed opponent actions for Hard predictions", () => {

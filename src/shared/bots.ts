@@ -1,4 +1,4 @@
-import { BOARD_SIZE, legalActions, legalTargets, type Action, type Board, type MatchState, type Player } from "./rules";
+import { actionTargets, BOARD_SIZE, legalActions, legalTargets, type Action, type Board, type MatchState, type Player } from "./rules";
 
 export type BotDifficulty = "easy" | "normal" | "hard";
 
@@ -51,8 +51,9 @@ export function chooseBotAction(
         value = 14 + openNeighbors * 2 - (opponentExpand.has(target) ? 4 : 0);
         break;
       case "surge":
-        value = 9 + openNeighbors * 2 + (ownExpand.has(target) ? 0 : 3) +
-          (state.energy[player] >= 2 ? 1 : 0) - (opponentExpand.has(target) ? 2 : 0);
+        value = actionTargets(action).reduce((total, cell) => total +
+          (state.board[cell] === opponent(player) ? 24 : 12) + frontier(state.board, cell) * 2 -
+          (opponentExpand.has(cell) ? 2 : 0), -4);
         break;
       case "override":
         value = 18 + openNeighbors - (state.energy[player] === 3 ? 2 : 0);

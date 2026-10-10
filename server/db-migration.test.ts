@@ -66,6 +66,7 @@ describe('database schema migration', () => {
     expect(columns(db, 'sessions')).toContain('google_nonce_hash');
     expect(columns(db, 'rooms')).toContain('creation_key');
     expect(columns(db, 'matches')).toContain('decision_duration_ms');
+    expect(columns(db, 'matches')).toContain('timed');
     expect(columns(db, 'ranked_invitations')).toContain('code');
     expect(db.prepare('SELECT id FROM sessions').get()).toEqual({ id: sessionTokenId(legacySessionToken) });
     expect(existingSession({ headers: { cookie: `override_session=${legacySessionToken}` } } as never, db)?.id)
@@ -81,12 +82,12 @@ describe('database schema migration', () => {
     expect(legacyRoom.invite_token_hash).toBe(invitationTokenHash('legacy-room-token'));
     expect(revealInvitationSecret(legacyRoom.invite_token)).toBe('legacy-room-token');
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
-      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 },
+      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 },
     ]);
     db.close();
 
     db = openDatabase(path);
-    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 5 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 6 });
     expect(db.prepare('SELECT id FROM sessions').get()).toEqual({ id: sessionTokenId(legacySessionToken) });
     db.close();
   });
@@ -110,8 +111,9 @@ describe('database schema migration', () => {
     const recovered = openDatabase(path);
     expect(columns(recovered, 'sessions')).toContain('google_nonce_hash');
     expect(columns(recovered, 'ranked_invitations')).toContain('code');
+    expect(columns(recovered, 'matches')).toContain('timed');
     expect(recovered.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
-      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 },
+      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 },
     ]);
     recovered.close();
   });

@@ -21,6 +21,7 @@ export interface MatchRow {
   player_b_name: string;
   state_json: string;
   decision_duration_ms: number;
+  timed: number;
   status: 'readying' | 'decision' | 'transition' | 'grace' | 'finished' | 'voided';
   deadline: number | null;
   transition_at: number | null;
@@ -103,6 +104,7 @@ export function matchForSession(db: Database.Database, id: string, session: Sess
     roomId: row.room_id,
     mode: row.mode,
     botDifficulty: row.bot_difficulty,
+    timed: Boolean(row.timed),
     player,
     playerNames: { A: row.player_a_name, B: row.player_b_name },
     state,
@@ -136,12 +138,18 @@ export function parseAction(value: unknown): Action {
   if (data.type === 'pass') return { type: 'pass' };
   if (data.type === 'expand' || data.type === 'ambush' || data.type === 'surge' || data.type === 'override') {
     if (!Number.isInteger(data.target)) throw new HttpError(400, 'Choose a target');
+    if (data.secondTarget !== undefined) {
+      if (data.type !== 'surge' || !Number.isInteger(data.secondTarget) || data.secondTarget === data.target) {
+        throw new HttpError(400, 'Choose two different Surge targets');
+      }
+      return { type: 'surge', target: data.target as number, secondTarget: data.secondTarget as number };
+    }
     return { type: data.type, target: data.target as number };
   }
   throw new HttpError(400, 'Unknown action');
 }
 
-export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy', parentMatchId?: string, creationKey?: string, restartMatchId?: string, admitNewWork?: () => void) {
+export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy', parentMatchId?: string, creationKey?: string, restartMatchId?: string, admitNewWork?: () => void, timed = mode !== 'practice') {
   return db.transaction(() => {
     if (creationKey) {
       const existing = db.prepare(`SELECT * FROM matches WHERE (player_a_key = ? OR player_b_key = ?) AND creation_key = ?
@@ -149,7 +157,8 @@ export function createBotMatch(db: Database.Database, session: Session, name: st
       if (existing) {
         const existingName = existing.player_a_key === session.id ? existing.player_a_name : existing.player_b_name;
         if (existing.mode !== mode || existing.bot_difficulty !== difficulty || existingName !== name ||
-            existing.parent_match_id !== (parentMatchId ?? null) || existing.restart_match_id !== (restartMatchId ?? null)) {
+            existing.parent_match_id !== (parentMatchId ?? null) || existing.restart_match_id !== (restartMatchId ?? null) ||
+            Boolean(existing.timed) !== timed) {
           throw new HttpError(409, 'Creation key was used for another bot match');
         }
         return existing.id;
@@ -181,12 +190,12 @@ export function createBotMatch(db: Database.Database, session: Session, name: st
     admitNewWork?.();
     const id = randomUUID();
     db.prepare(`INSERT INTO matches
-      (id, room_id, creation_key, parent_match_id, restart_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status, deadline, started_at, revision)
-      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'decision', ?, ?, 1)`)
+      (id, room_id, creation_key, parent_match_id, restart_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, timed, status, deadline, started_at, revision)
+      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'decision', ?, ?, 1)`)
       .run(id, creationKey ?? null, parentMatchId ?? null, restartMatchId ?? null, mode, difficulty,
         humanSide === 'A' ? session.id : `bot:${id}`, humanSide === 'B' ? session.id : `bot:${id}`,
         humanSide === 'A' ? name : 'Bot', humanSide === 'B' ? name : 'Bot',
-        JSON.stringify(createInitialState()), now + 5_000, now);
+        JSON.stringify(createInitialState()), timed ? 1 : 0, timed ? now + 5_000 : null, now);
     if (restarted) {
       const finalState: MatchState = { ...stateOf(restarted), status: 'finished', winner: null, endingReason: null };
       const stopped = db.prepare(`UPDATE matches SET state_json = ?, status = 'voided', deadline = NULL,
@@ -221,7 +230,7 @@ export function lockAction(db: Database.Database, id: string, session: Session, 
     const player = playerFor(row, session);
     if (!player) throw new HttpError(404, 'Match not found');
     const now = Date.now();
-    if (row.status !== 'decision' || row.deadline === null || now >= row.deadline) {
+    if (row.status !== 'decision' || (row.deadline === null && row.timed) || (row.deadline !== null && now >= row.deadline)) {
       throw new HttpError(409, 'This round is no longer accepting moves');
     }
     const state = stateOf(row);
@@ -353,7 +362,7 @@ export function startNextRound(db: Database.Database, id: string, now = Date.now
       return changed.changes === 1;
     }
     const changed = db.prepare("UPDATE matches SET status = 'decision', deadline = ?, transition_at = NULL, revision = revision + 1 WHERE id = ? AND status = 'transition'")
-      .run(now + row.decision_duration_ms, id);
+      .run(row.timed ? now + row.decision_duration_ms : null, id);
     return changed.changes === 1;
   })();
 }
@@ -394,7 +403,7 @@ export function markConnected(db: Database.Database, id: string, player: Player,
     const row = getMatch(db, id);
     if (row?.status === 'grace' && row.disconnected_a_at === null && row.disconnected_b_at === null) {
       db.prepare("UPDATE matches SET status = 'decision', deadline = ?, grace_until = NULL, revision = revision + 1 WHERE id = ? AND status = 'grace'")
-        .run(now + row.decision_duration_ms, id);
+        .run(row.timed ? now + row.decision_duration_ms : null, id);
     }
   }).immediate();
 }

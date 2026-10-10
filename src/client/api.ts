@@ -25,6 +25,7 @@ export interface PublicMatch {
   roomId: string | null;
   mode: "quick" | "practice" | "ranked";
   botDifficulty: "easy" | "normal" | "hard" | null;
+  timed: boolean;
   player: Player;
   playerNames: Record<Player, string>;
   state: MatchState;
@@ -222,10 +223,10 @@ export const api = {
     return request<{ closed: boolean }>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
   },
 
-  createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", creationKey: string, parentMatchId?: string, restartMatchId?: string) {
+  createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", creationKey: string, parentMatchId?: string, restartMatchId?: string, timed = mode === "quick") {
     return request<MatchResponse<PublicMatch>>("/api/bot-matches", {
       method: "POST",
-      body: JSON.stringify({ displayName: "Player", mode, difficulty, parentMatchId, restartMatchId, creationKey }),
+      body: JSON.stringify({ displayName: "Player", mode, difficulty, parentMatchId, restartMatchId, creationKey, timed }),
     });
   },
 

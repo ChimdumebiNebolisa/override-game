@@ -123,5 +123,5 @@ it('initializes the current Worker schema without unsupported table_info pragmas
 
   expect(() => initializeDatabase(db, { workerBaseline: true })).not.toThrow();
   expect(adapter.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-    .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
+    .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }]);
 });

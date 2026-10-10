@@ -19,6 +19,27 @@ function state(rows: string[], energyA = 0, energyB = 0, round = 1): MatchState 
 
 const facing = [".....", ".....", ".A.B.", ".....", "....."];
 
+describe("action Energy costs", () => {
+  it.each([
+    [0, false, false], [1, false, false], [2, true, false], [3, true, true],
+  ] as const)("with %i Energy, Override affordability is %s and Surge affordability is %s", (energy, canOverride, canSurge) => {
+    const current = state([".....", ".....", ".AB..", ".....", "....."], energy);
+    for (const [move, affordable, spent] of [
+      [action("override", 12), canOverride, 2], [action("surge", 10), canSurge, 3],
+    ] as const) {
+      expect(validateAction(current, "A", move).ok).toBe(affordable);
+      expect(legalActions(current, "A").some((candidate) => candidate.type === move.type)).toBe(affordable);
+      if (affordable) {
+        const result = resolveRound(current, { A: move, B: pass });
+        expect(result.outcomes.A.energySpent).toBe(spent);
+        expect(result.state.energy.A).toBe(energy - spent);
+      } else {
+        expect(() => resolveRound(current, { A: move, B: pass })).toThrow("insufficient-energy");
+      }
+    }
+  });
+});
+
 describe("opening and legality", () => {
   it("starts with the exact opposite 2x2 corners and zero Energy", () => {
     const opening = createInitialState();
@@ -58,6 +79,95 @@ describe("opening and legality", () => {
 });
 
 describe("simultaneous resolution", () => {
+  it("lets one Surge steal two rival cells for 3 Energy total", () => {
+    const before = state([".....", ".....", ".ABB.", ".....", "....."], 3);
+    const move: Action = { type: "surge", target: 12, secondTarget: 13 };
+    expect(validateAction(before, "A", move)).toEqual({ ok: true });
+    expect(legalActions(before, "A")).toContainEqual(move);
+    const result = resolveRound(before, { A: move, B: pass });
+    expect(result.score).toEqual({ A: 3, B: 0 });
+    expect(result.state.energy.A).toBe(0);
+    expect(result.outcomes.A).toMatchObject({ success: true, energySpent: 3, cells: [
+      { target: 12, success: true, reason: "stolen" },
+      { target: 13, success: true, reason: "stolen" },
+    ] });
+    expect(before.board).toEqual(board([".....", ".....", ".ABB.", ".....", "....."]));
+  });
+
+  it("allows a mix of neutral and rival targets, without Ambush interception", () => {
+    const before = state([".....", ".....", ".ABB.", ".....", "....."], 3);
+    const result = resolveRound(before, { A: { type: "surge", target: 6, secondTarget: 12 }, B: action("ambush", 6) });
+    expect(result.score).toEqual({ A: 3, B: 1 });
+    expect(result.outcomes.A.cells).toEqual([
+      { target: 6, success: true, reason: "claimed" },
+      { target: 12, success: true, reason: "stolen" },
+    ]);
+    expect(result.outcomes.B.reason).toBe("ambush-missed");
+  });
+
+  it.each([action("expand", 12), { type: "surge", target: 14, secondTarget: 12 } as Action])(
+    "collides only on the shared cell against %j", (rival) => {
+      const before = state(facing, 3, 3);
+      const a: Action = { type: "surge", target: 10, secondTarget: 12 };
+      const result = resolveRound(before, { A: a, B: rival });
+      expect(result.state.board[10]).toBe("A");
+      expect(result.state.board[12]).toBe("neutral");
+      expect(result.outcomes.A).toMatchObject({ success: true, energySpent: 3, cells: [
+        { target: 10, success: true, reason: "claimed" },
+        { target: 12, success: false, reason: "collision" },
+      ] });
+      if (rival.type === "surge") {
+        expect(result.state.board[14]).toBe("B");
+        expect(result.state.energy).toEqual({ A: 0, B: 0 });
+      }
+      expect(resolveRound(before, { B: rival, A: a })).toEqual(result);
+    },
+  );
+
+  it("resolves mutual two-cell steals from the pre-round board", () => {
+    const before = state([".....", ".....", ".AABB", ".....", "....."], 3, 3);
+    const result = resolveRound(before, {
+      A: { type: "surge", target: 13, secondTarget: 14 },
+      B: { type: "surge", target: 11, secondTarget: 12 },
+    });
+    expect(result.state.board.slice(11, 15)).toEqual(["B", "B", "A", "A"]);
+    expect(result.score).toEqual({ A: 2, B: 2 });
+  });
+
+  it("spends Surge Energy even when both neutral targets collide", () => {
+    const before = state(facing, 3, 3);
+    const result = resolveRound(before, {
+      A: { type: "surge", target: 7, secondTarget: 12 },
+      B: { type: "surge", target: 12, secondTarget: 7 },
+    });
+    expect(result.state.board).toEqual(before.board);
+    expect(result.state.energy).toEqual({ A: 0, B: 0 });
+    for (const player of ["A", "B"] as const) {
+      expect(result.outcomes[player]).toMatchObject({ success: false, reason: "collision", energySpent: 3 });
+      expect(result.outcomes[player].cells!.every((cell) => !cell.success && cell.reason === "collision")).toBe(true);
+    }
+  });
+
+  it("validates both Surge targets against the starting board and rejects duplicates", () => {
+    const before = state(facing, 3);
+    for (const [secondTarget, reason] of [
+      [12, "invalid-target"], [25, "invalid-target"], [11, "occupied-target"], [4, "out-of-range"],
+    ] as const) {
+      const move: Action = { type: "surge", target: 12, secondTarget };
+      expect(validateAction(before, "A", move)).toEqual({ ok: false, reason });
+      expect(() => resolveRound(before, { A: move, B: pass })).toThrow(reason);
+    }
+    // The first capture cannot extend the second target's range in the same round.
+    expect(validateAction(before, "A", { type: "surge", target: 1 }).ok).toBe(true);
+    expect(validateAction(before, "A", { type: "surge", target: 1, secondTarget: 0 })).toEqual({ ok: false, reason: "out-of-range" });
+    expect(validateAction({ ...before, energy: { A: 2, B: 0 } }, "A", { type: "surge", target: 12, secondTarget: 13 }))
+      .toEqual({ ok: false, reason: "insufficient-energy" });
+    const pairs = legalActions(before, "A").filter((move) => move.type === "surge" && move.secondTarget !== undefined);
+    const targets = legalTargets(before, "A", "surge");
+    expect(pairs).toHaveLength(targets.length * (targets.length - 1) / 2);
+    for (const move of pairs) expect(validateAction(before, "A", move)).toEqual({ ok: true });
+  });
+
   it.each([
     ["Expand/Expand different", action("expand", 10), action("expand", 14), "claimed", "claimed"],
     ["Expand/Expand same", action("expand", 12), action("expand", 12), "collision", "collision"],
@@ -66,27 +176,27 @@ describe("simultaneous resolution", () => {
     ["Surge/Surge different", action("surge", 5), action("surge", 9), "claimed", "claimed"],
     ["Surge/Surge same", action("surge", 12), action("surge", 12), "collision", "collision"],
   ] as const)("%s", (_name, a, b, reasonA, reasonB) => {
-    const before = state(facing, 1, 1);
+    const before = state(facing, 3, 3);
     const result = resolveRound(before, { A: a, B: b });
     expect(result.outcomes.A.reason).toBe(reasonA);
     expect(result.outcomes.B.reason).toBe(reasonB);
     if (a.type !== "pass" && b.type !== "pass" && "target" in a && "target" in b && a.target === b.target) {
       expect(result.state.board[a.target]).toBe("neutral");
     }
-    expect(result.state.energy.A).toBe(1 - (a.type === "surge" ? 1 : 0));
-    expect(result.state.energy.B).toBe(1 - (b.type === "surge" ? 1 : 0));
+    expect(result.state.energy.A).toBe(3 - (a.type === "surge" ? 3 : 0));
+    expect(result.state.energy.B).toBe(3 - (b.type === "surge" ? 3 : 0));
     expect(before.board).toEqual(board(facing));
-    expect(before.energy).toEqual({ A: 1, B: 1 });
+    expect(before.energy).toEqual({ A: 3, B: 3 });
   });
 
   it("rewards a correct Ambush after blocking Expand, available next round", () => {
-    const before = state(facing);
+    const before = state(facing, 2);
     const result = resolveRound(before, { A: action("ambush", 12), B: action("expand", 12) });
     expect(result.outcomes.A).toMatchObject({ success: true, reason: "ambush-hit", energyEarned: 1 });
     expect(result.outcomes.B.reason).toBe("intercepted");
     expect(result.state.board[12]).toBe("neutral");
-    expect(before.energy.A).toBe(0);
-    expect(result.state.energy.A).toBe(1);
+    expect(before.energy.A).toBe(2);
+    expect(result.state.energy.A).toBe(3);
     expect(legalTargets(before, "A", "surge")).toEqual([]);
     expect(legalTargets(result.state, "A", "surge")).not.toEqual([]);
   });
@@ -103,7 +213,7 @@ describe("simultaneous resolution", () => {
   });
 
   it("does not intercept Surge or Override", () => {
-    const surge = resolveRound(state(facing, 0, 1), { A: action("ambush", 12), B: action("surge", 12) });
+    const surge = resolveRound(state(facing, 0, 3), { A: action("ambush", 12), B: action("surge", 12) });
     expect(surge.outcomes.A.reason).toBe("ambush-missed");
     expect(surge.state.board[12]).toBe("B");
     const override = resolveRound(state([".....", ".....", ".AB..", ".....", "....."], 0, 3), {
@@ -134,7 +244,7 @@ describe("simultaneous resolution", () => {
     const result = resolveRound(before, { A: a, B: b });
     expect(result.state.board[11]).toBe("B");
     expect(result.state.board[12]).toBe("A");
-    expect(result.state.energy).toEqual({ A: 0, B: 0 });
+    expect(result.state.energy).toEqual({ A: 1, B: 1 });
     expect(result.outcomes.A.reason).toBe("stolen");
     expect(result.outcomes.B.reason).toBe("stolen");
     expect(resolveRound(before, { B: b, A: a })).toEqual(result);

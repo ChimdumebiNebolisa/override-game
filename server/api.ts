@@ -138,9 +138,10 @@ export function createApiHandler(context: ApiContext) {
       const body = await readJson(req);
       const mode = body.mode === 'practice' ? 'practice' : 'quick';
       const difficulty = body.difficulty === 'normal' || body.difficulty === 'hard' ? body.difficulty : 'easy';
+      const timed = mode === 'quick' || body.timed === true;
       const parentMatchId = typeof body.parentMatchId === 'string' ? body.parentMatchId : undefined;
       const restartMatchId = typeof body.restartMatchId === 'string' ? body.restartMatchId : undefined;
-      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty, parentMatchId, parseCreationKey(body.creationKey), restartMatchId, requireNewGameAdmission);
+      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty, parentMatchId, parseCreationKey(body.creationKey), restartMatchId, requireNewGameAdmission, timed);
       logMatchEvent('match_started', id);
       return json(res, 201, { match: matchForSession(db, id, session) });
     }
