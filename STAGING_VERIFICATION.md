@@ -5,14 +5,14 @@ Use this procedure after the nine fixes in `AUDIT_REPORT_2026-10-10.md` pass loc
 ## Prerequisites and deployment
 
 1. Run `npx wrangler login`, then `npx wrangler whoami`. Confirm the account owns the `cnebolisa.workers.dev` subdomain. If it differs, correct staging's `PUBLIC_ORIGIN` before deploying.
-2. Confirm Workers **Free** in Cloudflare Billing and Firebase **Spark** in project `override-game`. An expired login, inaccessible billing page, or Paid/Blaze plan leaves deployment blocked. Do not change subscriptions as part of this rehearsal.
+2. Confirm the existing Workers **Paid** account in Cloudflare Billing and Firebase **Spark** in project `override-game`. The owner directed staging to use Workers Paid on 2026-10-10. Paid usage beyond included allowances can incur charges; budget notifications are not a spending cap. No subscription changes are part of this rehearsal.
 3. Run `npm ci`, `npm test`, `npm run build`, `npm audit --omit=dev --audit-level=high`, and `npm audit --audit-level=high`. Run `npm run test:worker-runtime` on Linux and the container backup/restore check.
 4. Dry-run both default and staging deployment into ignored scratch directories. Confirm staging binds `GAME` to its own `GameDurableObject` namespace. Its binding must not set `script_name` to the production Worker.
 5. Use two independent cryptographically random secrets, at least 32 bytes each, for staging's `INVITATION_ENCRYPTION_KEY` and `RECOVERY_CONTROL_TOKEN`. A local ignored `.dev.vars.staging` was generated during remediation; preserve its invitation key for the full restore fixture. For a fresh checkout, generate fresh values. Upload each with `npx wrangler secret put <NAME> --env staging`; never reuse production secrets.
 6. Deploy only with `npx wrangler deploy --env staging`. Confirm the resulting hostname matches staging's `PUBLIC_ORIGIN`. Check `/`, `/api/health`, and `/api/config`.
 7. Add the staging hostname to Firebase Authentication's Authorized domains and `https://<staging-host>/__/auth/handler` to the Google OAuth client's authorized redirect URIs. Preserve existing production entries. Both runtimes verify Firebase ID tokens against public signing certificates; no Admin private key is needed.
 
-The configuration omits the paid CPU override and uses platform defaults. Workers Free has a 10 ms Worker request CPU limit; inspect actual staging errors and CPU metrics rather than treating a local build as evidence of compliance. See [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [environment isolation](https://developers.cloudflare.com/durable-objects/reference/environments/).
+The configuration omits a custom CPU override and uses platform defaults for the selected Paid plan. Inspect actual staging errors and CPU metrics rather than treating a local build as evidence of runtime behavior. See [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [environment isolation](https://developers.cloudflare.com/durable-objects/reference/environments/).
 
 ## Identity, Ranked, and placement
 
@@ -45,16 +45,16 @@ Local mocked storage tests verify marker consumption, serialization, rejection p
 
 | Gate | Record |
 | --- | --- |
-| Tested commit and working-tree state | Base `e3c306fa22ee6c71df7bedecf4af7add238b7198` plus uncommitted remediation; see `IMPLEMENTATION_STATUS.md`. |
-| Workers Free / Firebase Spark, date checked | 2026-10-10: Workers Paid blocks deployment; Firebase Spark confirmed. Wrangler login restored and whoami succeeded. |
+| Tested commit and working-tree state | Remediation commit `9330943ddd21a5c1fc5a08248b80a9c2be9c4785`; local verification and remote CI passed. |
+| Workers Paid / Firebase Spark, date checked | 2026-10-10: Workers Paid selected for staging by owner; Firebase Spark confirmed. Wrangler login restored and whoami succeeded. |
 | Staging Worker URL and namespace | Planned `https://override-game-staging.cnebolisa.workers.dev`; not deployed, namespace uncreated. |
-| Local tests, audits, builds, dry-runs, Linux smoke, container | Windows/Linux: clean installs, 209 tests/25 files, builds passed. Both audits zero vulnerabilities; both dry-runs and Linux workerd smoke passed. Node backup/replay and the local container backup/restore job passed. |
+| Local tests, audits, builds, dry-runs, Linux smoke, container | Windows/Linux: clean installs, 209 tests/25 files, builds passed. Both audits zero vulnerabilities; both dry-runs and Linux workerd smoke passed. Node backup/replay and the local container backup/restore job passed. Remote CI passed after push. |
 | Desktop/mobile identity and Ranked journey | Unverified in staging. |
 | Four-account placement and leaderboard | Unverified; four real accounts required. |
 | Restore and undo snapshots / healthy restart | Mock regressions passed; live PITR and Data Studio checks unverified. |
-| CPU, SQL usage, and runtime errors | Local smoke ledger: 531 estimated reads / 354 estimated writes. Actual Free CPU and platform SQL metrics unverified. |
+| CPU, SQL usage, and runtime errors | Local smoke ledger: 531 estimated reads / 354 estimated writes. Paid staging CPU and platform SQL metrics unverified. |
 | Two-device interruption / mobile screen reader | Unverified; physical devices and human checks required. |
 | Human playtest go / tune / stop | No human sessions or decision collected. Dedicated Node metrics command verified with a synthetic backup fixture. |
-| Unverified checks and required access | Workers Free, staging deployment/configuration, real accounts/devices, and playtest participants. Separate secrets are in ignored `.dev.vars.staging`, not uploaded. Remote CI is unverified for the uncommitted remediation. |
+| Unverified checks and required access | Staging deployment/configuration, real accounts/devices, and playtest participants. Separate secrets are in ignored `.dev.vars.staging`, not uploaded. |
 
 Missing external evidence remains unverified even when all local checks pass. Public rollout is a subsequent action.
