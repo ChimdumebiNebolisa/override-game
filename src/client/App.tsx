@@ -1182,7 +1182,7 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
     <main className="panel-page info-page">
       <button className="back-link" onClick={() => navigate("home")}>← Home</button>
       <div className="panel-heading">
-        <p className="eyebrow">{screen === "profile" ? "Player profile" : "Global standings"}</p>
+        {screen === "profile" && <p className="eyebrow">Player profile</p>}
         <h1>{screen === "profile" ? profile?.handle ?? (signedIn ? "Signed in." : "Playing as guest.") : "Leaderboard"}</h1>
         <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/${PLACEMENT_MATCHES} · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Placed players and practice bots share one RP ranking. BOT tags identify practice bots; practice matches do not change player records."}</p>
       </div>
