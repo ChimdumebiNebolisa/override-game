@@ -71,22 +71,33 @@ button:not(:disabled) { cursor: pointer; }
 }
 .full { inline-size: 100%; }
 
-.demo-stage { position: relative; inline-size: min(100%, 610px); aspect-ratio: 1.12; justify-self: end; background: var(--ink); padding: clamp(38px, 6vw, 70px); clip-path: polygon(4% 0, 100% 0, 100% 92%, 94% 100%, 0 100%, 0 7%); box-shadow: 18px 18px 0 color-mix(in oklch, var(--blue) 18%, transparent); }
-.demo-stage::before { content: "LIVE GRID // ALPHA"; position: absolute; inset: 18px auto auto 24px; color: oklch(0.7401 0.0299 256.5); font: 9px var(--mono); letter-spacing: .18em; }
-.demo-stamp { position: absolute; inset-inline-end: 24px; inset-block-start: 16px; color: oklch(0.7401 0.0299 256.5); font: 10px var(--mono); text-transform: uppercase; }
-.demo-stamp b { color: var(--amber); margin-inline-start: 12px; font-size: 15px; }
-.demo-board { block-size: 100%; display: grid; grid-template-columns: repeat(5, 1fr); grid-template-rows: repeat(5, 1fr); gap: clamp(5px, .9vw, 10px); }
-.demo-cell { position: relative; display: grid; place-items: center; border: 1px solid oklch(0.3917 0.0302 259.7); background: oklch(0.2864 0.0333 257.7); }
-.demo-cell::before, .demo-cell::after { content:""; position:absolute; background:oklch(0.4502 0.0312 259); }
-.demo-cell::before { inline-size: 3px; block-size: 3px; border-radius: 50%; }
+.demo-stage { container-type: inline-size; inline-size: min(100%, 610px); aspect-ratio: 1.3; justify-self: end; margin: 0; background: var(--ink); color: white; padding: clamp(26px, 3vw, 38px); display: grid; grid-template-rows: auto minmax(0, 1fr); gap: clamp(18px, 2.5vw, 28px); clip-path: polygon(4% 0, 100% 0, 100% 92%, 94% 100%, 0 100%, 0 7%); box-shadow: 18px 18px 0 color-mix(in oklch, var(--blue) 18%, transparent); }
+.demo-topline { display: flex; justify-content: space-between; gap: 12px; color: oklch(0.7401 0.0299 256.5); font: 700 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.demo-topline b { color: white; font-size: 16px; }
+.demo-layout { min-block-size: 0; display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr); align-items: center; gap: clamp(16px, 2vw, 24px); }
+.demo-board { inline-size: 100%; aspect-ratio: 1; display: grid; grid-template-columns: 16px repeat(5, minmax(0, 1fr)); grid-template-rows: 16px repeat(5, minmax(0, 1fr)); gap: clamp(3px, .55vw, 7px); }
+.demo-axis { display: grid; place-items: center; color: oklch(0.7401 0.0299 256.5); font: 9px var(--mono); }
+.demo-axis.is-target { color: var(--amber); font-weight: 800; }
+.demo-cell { position: relative; min-inline-size: 0; display: grid; place-items: center; border: 1px solid oklch(0.3917 0.0302 259.7); background: oklch(0.2864 0.0333 257.7); }
+.demo-cell::before { content:""; inline-size: 4px; aspect-ratio: 1; border-radius: 50%; background: oklch(0.56 0.03 none); }
 .demo-cell.A { background: var(--blue); border-color: oklch(0.6717 0.144 266.6); }
 .demo-cell.B { background: var(--coral); border-color: oklch(0.7725 0.1076 27.5); }
-.demo-cell.A::before { inline-size: 14px; block-size: 14px; border: 3px solid white; background: transparent; }
-.demo-cell.B::before { inline-size: 14px; block-size: 14px; border: 3px solid white; background: transparent; border-radius: 1px; transform: rotate(45deg); }
-.demo-cell.x { border-color: var(--amber); }
-.demo-cell.x::after { inline-size: 70%; block-size: 1px; background: var(--amber); transform: rotate(-45deg); }
-.demo-caption { position: absolute; inset: auto 24px 16px; display: flex; justify-content: space-between; color: white; font: 10px var(--mono); letter-spacing: .1em; }
-.demo-caption b { color: var(--amber); }
+.demo-cell.A::before { inline-size: 44%; border: 2px solid white; background: transparent; }
+.demo-cell.B::before { inline-size: 38%; border: 2px solid white; background: transparent; border-radius: 1px; transform: rotate(45deg); }
+.demo-cell.target { border: 2px solid var(--amber); }
+.demo-cell.target::after { content:"+"; position: absolute; inset-block-start: 1px; inset-inline-end: 4px; color: white; font: 800 11px var(--mono); }
+.demo-story { min-inline-size: 0; }
+.demo-kicker { margin: 0 0 10px; color: var(--amber); font: 700 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+.demo-story h2 { margin: 0; font: 800 clamp(25px, 3vw, 36px)/.98 var(--display); letter-spacing: -.025em; text-transform: uppercase; }
+.demo-explainer { margin: 12px 0 18px; color: oklch(0.78 0.025 none); font-size: 13px; line-height: 1.45; }
+.demo-moves { display: grid; gap: 7px; }
+.demo-move { min-inline-size: 0; padding: 8px 10px; border-inline-start: 3px solid var(--blue); background: oklch(0.22 0.025 258); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 3px 8px; }
+.demo-move span { color: oklch(0.74 0.03 none); font: 9px var(--mono); text-transform: uppercase; }
+.demo-move strong { font: 750 12px var(--display); text-transform: uppercase; }
+.demo-rival { border-inline-start-color: var(--coral); }
+.demo-result { margin-block-start: 12px; padding-block-start: 10px; border-block-start: 1px solid oklch(0.39 0.03 258); display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 9px; }
+.demo-result b { color: var(--amber); font: 800 13px var(--display); text-transform: uppercase; }
+.demo-result span { color: oklch(0.78 0.025 none); font-size: 11px; }
 
 @media (min-width: 901px) {
   .hero h1 { font-size: clamp(58px, min(7vw, 12svh), 104px); }
@@ -540,10 +551,10 @@ dialog:not([open]) { display:none; }
   .hero { gap:45px; }
   .hero h1 { font-size:clamp(54px, 18vw, 78px); }
   .hero-intro { font-size:15px; margin:24px 0; }
-  .demo-stage { padding:43px 30px; clip-path:polygon(5% 0,100% 0,100% 93%,94% 100%,0 100%,0 6%); }
-  .demo-caption { inset:auto 13px 13px; font-size:7px; }
-  .demo-stage::before, .demo-stamp { font-size:7px; }
-  .demo-stamp { inset-inline-end:14px; }
+  .demo-stage { padding:28px 22px 26px; aspect-ratio:auto; clip-path:polygon(5% 0,100% 0,100% 94%,94% 100%,0 100%,0 6%); }
+  .demo-layout { grid-template-columns:1fr; }
+  .demo-board { inline-size:min(100%, 320px); justify-self:center; }
+  .demo-story { inline-size:min(100%, 360px); justify-self:center; }
   .mode-grid { margin-block-start:56px; }
   .mode-card { padding:18px; }
   .panel-page { inline-size:min(100% - 32px, 680px); padding-block-start:30px; }

@@ -178,10 +178,10 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
     <main className="home-shell">
       <section className="hero">
         <div className="hero-copy">
-          <p className="eyebrow"><span>5×5</span> simultaneous strategy</p>
+          <p className="eyebrow"><span>5×5</span> territory duel</p>
           <h1>Predict.<br />Counter.<br /><em>Control the grid.</em></h1>
           <p className="hero-intro">
-            Choose in secret. Reveal together. Outread your opponent in a complete match that takes about a minute.
+            Choose one move in secret. Both moves reveal at once, and every node you claim shifts the score.
           </p>
           <button className="primary-cta" onClick={() => navigate("practice")}>Start with Practice <span>→</span></button>
         </div>
@@ -214,15 +214,34 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
 }
 
 function DemoBoard() {
-  const cells = ["A", "A", "n", "n", "n", "A", "A", "n", "x", "n", "n", "n", "x", "n", "n", "n", "x", "n", "B", "B", "n", "n", "n", "B", "B"];
+  const rows = ["AA...", "AA...", ".....", "...BB", "...BB"];
   return (
-    <div className="demo-stage" aria-hidden="true">
-      <div className="demo-stamp">Round 07 <b>03.2</b></div>
-      <div className="demo-board">
-        {cells.map((cell, index) => <span key={index} className={`demo-cell ${cell}`}><i /></span>)}
+    <figure className="demo-stage" aria-labelledby="demo-title">
+      <div className="demo-topline"><span>Example · Round 1</span><span><b>4</b> — <b>4</b> territory</span></div>
+      <div className="demo-layout">
+        <div className="demo-board" aria-hidden="true">
+          <span className="demo-axis demo-corner" />
+          {"ABCDE".split("").map((column, index) => <span key={column} className={`demo-axis ${index === 2 ? "is-target" : ""}`}>{column}</span>)}
+          {rows.flatMap((row, rowIndex) => [
+            <span key={`row-${rowIndex}`} className={`demo-axis demo-row-axis ${rowIndex === 2 ? "is-target" : ""}`}>{rowIndex + 1}</span>,
+            ...row.split("").map((owner, columnIndex) => {
+              const cellIndex = rowIndex * 5 + columnIndex;
+              return <span key={cellIndex} className={`demo-cell ${owner === "." ? "neutral" : owner} ${cellIndex === 12 ? "target" : ""}`}><i /></span>;
+            }),
+          ])}
+        </div>
+        <figcaption className="demo-story">
+          <p className="demo-kicker">Choose in secret</p>
+          <h2 id="demo-title">Both want C3.</h2>
+          <p className="demo-explainer">You and your rival lock in a move before either one is revealed.</p>
+          <div className="demo-moves">
+            <div className="demo-move demo-you"><span>You</span><strong>Expand C3</strong></div>
+            <div className="demo-move demo-rival"><span>Rival</span><strong>Expand C3</strong></div>
+          </div>
+          <div className="demo-result"><b>Collision</b><span>C3 stays neutral.</span></div>
+        </figcaption>
       </div>
-      <div className="demo-caption"><span>A · 09</span><b>SIMULTANEOUS REVEAL</b><span>11 · B</span></div>
-    </div>
+    </figure>
   );
 }
 
