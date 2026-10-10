@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { publicOrigin } from './config';
 import { applySecurityHeaders, assertMutationOrigin, existingSession, requireSession } from './http';
@@ -39,8 +40,14 @@ it('sets browser security headers including Firebase Authentication origins', ()
   applySecurityHeaders(response);
   expect(headers.get('content-security-policy')).toContain("object-src 'none'");
   expect(headers.get('content-security-policy')).toContain('https://identitytoolkit.googleapis.com');
+  expect(headers.get('content-security-policy')).toContain("frame-src 'self' https://*.firebaseapp.com");
   expect(headers.get('permissions-policy')).toBe('camera=(), microphone=(), geolocation=()');
   expect(headers.get('x-frame-options')).toBe('DENY');
+});
+
+it('allows the staging origin to load its same-origin Firebase auth iframe', () => {
+  const staticHeaders = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8');
+  expect(staticHeaders).toContain("frame-src 'self' https://*.firebaseapp.com");
 });
 
 it('sets HSTS only when responses are served in production', () => {

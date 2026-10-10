@@ -29,7 +29,7 @@ export function applySecurityHeaders(res: Pick<ServerResponse, 'setHeader'>): vo
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https://accounts.google.com",
     "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://*.firebaseapp.com",
-    'frame-src https://*.firebaseapp.com https://accounts.google.com',
+    "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com",
   ].join('; '));
 }
 
