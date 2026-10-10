@@ -46,7 +46,7 @@ export function HeroDemo() {
   return (
     <section ref={sectionRef} className="hero-demo" data-phase={demo.phase} aria-labelledby="demo-title">
       <header className="demo-heading">
-        <p className="demo-kicker">Play the last round <span>15 / 15 · sudden death</span></p>
+        <p className="demo-kicker"><span>FINAL ROUND · 15 / 15</span></p>
         <h2 id="demo-title">{finished ? resultTitle : demo.phase === "committed" ? "Move committed." : demo.phase === "revealed" ? "Both moves revealed." : "Final round. Choose your move."}</h2>
       </header>
       <div className="demo-score" aria-label={`${finished ? "Final" : "Current"} territory score: you ${totals.A}, rival ${totals.B}`}>
@@ -54,16 +54,6 @@ export function HeroDemo() {
         <small>{finished ? "Final territory" : "Territory"}</small>
         <span><b>{totals.B}</b>Rival <i className="demo-owner rival" aria-hidden="true" /></span>
       </div>
-      <div className="demo-action-row">
-        <label htmlFor="demo-action">Your action
-          <select id="demo-action" ref={actionRef} value={demo.actionType} disabled={!choosing}
-            aria-describedby="demo-action-hint" onChange={(event) => dispatch({ type: "action", actionType: event.target.value as Action["type"] })}>
-            {ACTIONS.map((item) => <option key={item.type} value={item.type}>{item.label} · {item.cost ? `${item.cost} Energy` : "free"}</option>)}
-          </select>
-        </label>
-        <span className="demo-energy">Your Energy <b>{demo.match.energy.A} / 3</b></span>
-      </div>
-      <p id="demo-action-hint" className="demo-hint">{action.hint}</p>
       <div key={demo.attempt} className="demo-board" role="group" aria-label="Final round board. Highlighted spaces are legal choices.">
         <span className="demo-axis" aria-hidden="true" />
         {"ABCDE".split("").map((column) => <span key={column} className="demo-axis" aria-hidden="true">{column}</span>)}
@@ -86,19 +76,31 @@ export function HeroDemo() {
           }),
         ])}
       </div>
-      <div className="demo-feedback" role="status" aria-live="polite" aria-atomic="true">
-        {revealed ? <>
-          <p className="demo-revealed-moves"><span>You: {moveText(demo.result!.outcomes.A.action)}</span><span>Rival: {moveText(demo.result!.outcomes.B.action)}</span></p>
-          <p>{finished ? `${resultTitle} ${totals.A}–${totals.B}. ${demoExplanation(demo.result!)}` : "Both moves are in. Resolving territory…"}</p>
-        </> : <>
-          <p>{demo.phase === "committed" ? "Locked in. Revealing together…" : selected ? `${moveText(selected)} selected. Commit when ready.` : "Choose an action, then a highlighted space."}</p>
-          <p className="demo-secret">Rival’s move is locked and hidden.</p>
-        </>}
+      <div className="demo-controls">
+        <div className="demo-action-row">
+          <label htmlFor="demo-action">Action
+            <select id="demo-action" ref={actionRef} value={demo.actionType} disabled={!choosing}
+              aria-describedby="demo-action-hint" onChange={(event) => dispatch({ type: "action", actionType: event.target.value as Action["type"] })}>
+              {ACTIONS.map((item) => <option key={item.type} value={item.type}>{item.label} · {item.cost ? `${item.cost} Energy` : "free"}</option>)}
+            </select>
+          </label>
+          <span className="demo-energy">Energy <b>{demo.match.energy.A} / 3</b></span>
+        </div>
+        <p id="demo-action-hint" className="demo-hint">{action.hint}</p>
+        <div className="demo-feedback" role="status" aria-live="polite" aria-atomic="true">
+          {revealed ? <>
+            <p className="demo-revealed-moves"><span>You: {moveText(demo.result!.outcomes.A.action)}</span><span>Rival: {moveText(demo.result!.outcomes.B.action)}</span></p>
+            <p>{finished ? `${resultTitle} ${totals.A}–${totals.B}. ${demoExplanation(demo.result!)}` : "Both moves are in. Resolving territory…"}</p>
+          </> : <>
+            <p>{demo.phase === "committed" ? "Locked in. Revealing together…" : selected ? `${moveText(selected)} selected. Commit when ready.` : "Choose an action, then a highlighted space."}</p>
+            <p className="demo-secret">Rival’s move is locked and hidden.</p>
+          </>}
+        </div>
+        {finished ? <button ref={retryRef} className="demo-commit" onClick={() => dispatch({ type: "reset" })}>Try another move <span aria-hidden="true">↺</span></button> :
+          <button className="demo-commit" disabled={!choosing || !selected} onClick={() => dispatch({ type: "commit" })}>
+            {choosing ? "Commit move" : "Move committed"}<span aria-hidden="true">{choosing ? "→" : "✓"}</span>
+          </button>}
       </div>
-      {finished ? <button ref={retryRef} className="demo-commit" onClick={() => dispatch({ type: "reset" })}>Try another move <span aria-hidden="true">↺</span></button> :
-        <button className="demo-commit" disabled={!choosing || !selected} onClick={() => dispatch({ type: "commit" })}>
-          {choosing ? "Commit move" : "Move committed"}<span aria-hidden="true">{choosing ? "→" : "✓"}</span>
-        </button>}
     </section>
   );
 }
