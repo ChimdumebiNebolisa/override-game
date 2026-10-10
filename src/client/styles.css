@@ -477,22 +477,27 @@ dialog:not([open]) { display:none; }
 .profile-stats p:last-child:nth-child(odd) { grid-column:1 / -1; border-inline-end:0; }
 .profile-stats strong { font:800 31px var(--display); }
 .profile-stats span { color:var(--muted); font:9px var(--mono); text-transform:uppercase; letter-spacing:.1em; }
-.leaderboard-list { list-style:none; padding:0; margin:28px 0; border-block-start:1px solid var(--ink); }
-.leaderboard-list li { min-block-size:58px; display:grid; grid-template-columns:50px 1fr 100px 80px; align-items:center; gap:10px; border-block-end:1px solid var(--line); }
-.leaderboard-list li > b { color:var(--blue); font:700 13px var(--mono); }
-.leaderboard-list li > strong { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font:700 18px var(--display); }
-.leaderboard-list li > span { display:flex; flex-direction:column; gap:2px; color:var(--muted); font-size:12px; }
-.leaderboard-list li > span small { font:9px/1.35 var(--mono); }
-.leaderboard-list li > span .leaderboard-record, .leaderboard-list li > span .leaderboard-streak { overflow-wrap:anywhere; }
-.leaderboard-list li > em { text-align:end; font:700 12px var(--mono); font-style:normal; }
+.leaderboard-scroll, .rivals-scroll { max-block-size:min(58dvh,480px); overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; border:1px solid var(--line); background:white; container-type:inline-size; }
+.leaderboard-scroll { margin-block:28px; }
+.leaderboard-scroll:focus-visible, .rivals-scroll:focus-visible { outline:3px solid var(--amber); outline-offset:3px; }
+.leaderboard-table { inline-size:max(100%,22rem); border-collapse:collapse; text-align:start; white-space:nowrap; font-size:12px; }
+.leaderboard-table th, .leaderboard-table td { padding:11px clamp(5px,1.8cqi,14px); border-block-end:1px solid var(--line); }
+.leaderboard-table thead th { position:sticky; inset-block-start:0; z-index:1; background:var(--ink); color:var(--paper); font:700 9px var(--mono); letter-spacing:.08em; text-align:start; text-transform:uppercase; }
+.leaderboard-table tbody tr:last-child > * { border-block-end:0; }
+.leaderboard-table tbody th { color:var(--blue); font:700 12px var(--mono); }
+.leaderboard-player { display:flex; align-items:center; gap:8px; font:700 16px var(--display); }
+.leaderboard-handle { overflow:clip; text-overflow:ellipsis; }
+.leaderboard-tier { color:var(--ink); font:700 11px var(--display); text-transform:uppercase; }
+.leaderboard-record { color:var(--muted); font:11px var(--mono); font-variant-numeric:tabular-nums; }
+.leaderboard-rating { color:var(--ink); font:700 12px var(--mono); font-variant-numeric:tabular-nums; text-align:end; }
 .bot-tag { padding:3px 5px; border:1px solid var(--line); color:var(--muted); font:700 8px/1 var(--mono); letter-spacing:.08em; }
 .rivals-panel { margin:34px 0 24px; padding-block-start:25px; border-block-start:4px solid var(--amber); }
 .rivals-panel h2 { margin:0 0 8px; font:750 31px var(--display); text-transform:uppercase; }
-.rivals-scroll { max-block-size:min(58dvh, 480px); overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; border:1px solid var(--line); background:white; }
-.rivals-scroll:focus-visible { outline:3px solid var(--amber); outline-offset:3px; }
-.rivals-scroll .leaderboard-list { margin:0; border-block-start:0; }
-.rivals-scroll .leaderboard-list li { padding-inline:16px; }
-.rivals-scroll .leaderboard-list li:last-child { border-block-end:0; }
+.rivals-scroll .leaderboard-table { margin:0; }
+@container (width < 24rem) {
+  .leaderboard-table th, .leaderboard-table td { padding-inline:5px; }
+  .leaderboard-player { gap:5px; font-size:14px; }
+}
 .next-rival { margin:10px 0 0; color:var(--muted); font-size:11px; }
 .how-steps { padding:0; margin:32px 0; list-style:none; border-block-start:1px solid var(--ink); }
 .how-steps li { display:grid; grid-template-columns:54px 1fr; gap:18px; padding:22px 0; border-block-end:1px solid var(--line); }
@@ -534,11 +539,6 @@ dialog:not([open]) { display:none; }
   .site-header nav { gap:6px; }
   .site-header nav button { font-size:11px; }
   .brand { font-size:20px; }
-  .leaderboard-list li { grid-template-columns:42px minmax(0,1fr) 74px; grid-template-rows:auto auto; gap:2px 8px; padding:8px 0; }
-  .leaderboard-list li > b { grid-row:1 / 3; }
-  .leaderboard-list li > strong { grid-column:2; grid-row:1; font-size:14px; overflow-wrap:anywhere; }
-  .leaderboard-list li > span { grid-column:2; grid-row:2; }
-  .leaderboard-list li > em { grid-column:3; grid-row:1 / 3; }
   .home-shell { padding:42px 18px 54px; }
   .hero { gap:45px; }
   .hero h1 { font-size:clamp(54px, 18vw, 78px); }

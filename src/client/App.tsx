@@ -1210,7 +1210,7 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
       {screen === "profile" && signedIn && !profile?.handle && <button className="primary-cta full" onClick={() => navigate("ranked")}>Set up Ranked profile <span>→</span></button>}
       {screen === "profile" && profile && <ProfileStats profile={profile} />}
       {screen === "profile" && profile?.handle && <section className="room-form ranked-setup"><label>Change public handle<input value={newHandle} onChange={(event) => setNewHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><p className="status-note">After your first rename, you can change your handle once every 30 days.</p><button className="secondary-cta full" disabled={renaming || !/^[A-Za-z0-9_]{3,16}$/.test(newHandle.trim()) || newHandle.trim() === profile.handle} onClick={rename}>{renaming ? "Changing handle…" : "Change handle"}</button></section>}
-      {screen === "leaderboard" && leaders.length > 0 && <LeaderboardList entries={leaders} />}
+      {screen === "leaderboard" && leaders.length > 0 && <div className="leaderboard-scroll" role="region" aria-label="Global Ranked leaderboard" tabIndex={0}><LeaderboardList entries={leaders} /></div>}
       {!infoLoading && !error && ((screen === "profile" && !profile) || (screen === "leaderboard" && leaders.length === 0)) && <div className="empty-state"><span aria-hidden="true">{screen === "profile" ? "G" : "#"}</span><strong>{screen === "profile" ? "No persistent profile yet" : "No placed players yet"}</strong><p>{screen === "profile" ? "Guest games do not carry into Ranked statistics." : "Bots and benchmark Rivals never appear in the human rankings."}</p></div>}
       <RivalsPanel />
       {error && <p className="form-error" role="alert">{error}</p>}
@@ -1234,14 +1234,18 @@ export function ProfileStats({ profile }: { profile: RankedProfile }) {
 }
 
 export function LeaderboardList({ entries }: { entries: LeaderboardEntry[] }) {
-  return <ol className="leaderboard-list">{entries.map((entry) => <li key={entry.handle}>
-    <b>#{entry.rank}</b><strong>{entry.handle}{entry.bot && <small className="bot-tag">BOT</small>}</strong>
-    <span>{entry.tier}
-      <small className="leaderboard-record">{entry.wins} {entry.wins === 1 ? "win" : "wins"} · {entry.losses} {entry.losses === 1 ? "loss" : "losses"} · {entry.draws} {entry.draws === 1 ? "draw" : "draws"}</small>
-      <small className="leaderboard-streak">{entry.streak > 0 ? `${entry.streak} ${entry.streak === 1 ? "win" : "wins"} in a row` : "No current win streak"}</small>
-    </span>
-    <em>{entry.rating} RP</em>
-  </li>)}</ol>;
+  return <table className="leaderboard-table">
+    <thead><tr><th scope="col">Rank</th><th scope="col">Username</th><th scope="col">Tier</th><th scope="col">W–L–D</th><th scope="col">XP</th></tr></thead>
+    <tbody>{entries.map((entry) => <tr key={entry.handle}>
+      <th scope="row" className="leaderboard-rank">#{entry.rank}</th>
+      <td className="leaderboard-player"><span className="leaderboard-handle" title={entry.handle}>{entry.handle}</span>{entry.bot && <small className="bot-tag">BOT</small>}</td>
+      <td className="leaderboard-tier">{entry.tier}</td>
+      <td className="leaderboard-record" aria-label={`${entry.wins} ${entry.wins === 1 ? "win" : "wins"}, ${entry.losses} ${entry.losses === 1 ? "loss" : "losses"}, ${entry.draws} ${entry.draws === 1 ? "draw" : "draws"}`}>
+        {entry.wins}–{entry.losses}–{entry.draws}
+      </td>
+      <td className="leaderboard-rating">{entry.rating}</td>
+    </tr>)}</tbody>
+  </table>;
 }
 
 export function RivalsPanel() {

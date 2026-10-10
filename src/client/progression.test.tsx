@@ -38,18 +38,19 @@ describe('Ranked progression displays', () => {
     expect(result).not.toContain('→');
   });
 
-  it('shows complete human records and the same clearly labeled, descending bot standings', () => {
+  it('shows labeled standings in Rank, Username, Tier, W–L–D, XP columns without streak overhead', () => {
     const board = renderToStaticMarkup(<LeaderboardList entries={[{
       handle: 'Alpha', rating: 1400, rank: 1, tier: 'Platinum', wins: 7, losses: 2, draws: 1, streak: 3,
     }]} />);
-    expect(board).toContain('7 wins · 2 losses · 1 draw');
-    expect(board).toContain('3 wins in a row');
-
-    const withoutStreak = renderToStaticMarkup(<LeaderboardList entries={[{
-      handle: 'Rookie', rating: 900, rank: 2, tier: 'Bronze', wins: 1, losses: 0, draws: 0, streak: 0,
-    }]} />);
-    expect(withoutStreak).toContain('1 win · 0 losses · 0 draws');
-    expect(withoutStreak).toContain('No current win streak');
+    expect(board).toContain('<th scope="col">Rank</th>');
+    expect(board).toContain('<th scope="col">Username</th>');
+    expect(board).toContain('<th scope="col">Tier</th>');
+    expect(board).toContain('<th scope="col">W–L–D</th>');
+    expect(board).toContain('<th scope="col">XP</th>');
+    expect(board).toContain('aria-label="7 wins, 2 losses, 1 draw"');
+    expect(board).toContain('7–2–1');
+    expect(board).toContain('<td class="leaderboard-rating">1400</td>');
+    expect(board).not.toContain('streak');
 
     const anonymous = renderToStaticMarkup(<RivalsPanel />);
     expect(anonymous).toContain('Shared practice standings');
@@ -57,7 +58,7 @@ describe('Ranked progression displays', () => {
     expect(anonymous).toContain('aria-label="Practice bot leaderboard"');
     expect(anonymous).toContain('ava_chen');
     expect(anonymous).toContain('mila_stone');
-    expect([...anonymous.matchAll(/<b>#(\d+)<\/b>/g)].map(([, rank]) => Number(rank)))
+    expect([...anonymous.matchAll(/<th scope="row" class="leaderboard-rank">#(\d+)<\/th>/g)].map(([, rank]) => Number(rank)))
       .toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
     expect([...anonymous.matchAll(/class="bot-tag"/g)]).toHaveLength(20);
     expect(anonymous).not.toContain('RP away');
