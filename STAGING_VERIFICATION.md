@@ -18,7 +18,7 @@ The configuration omits a custom CPU override and uses platform defaults for the
 
 1. On supported desktop and mobile browsers, sign in, reload, sign out, and sign in again. Test return to Profile, queue, and a challenge URL. Confirm both clients reach the same intended destination and can select a handle.
 2. With two different real Google identities, create and redeem a challenge by link, then by code in a separate match. Verify queue pairing, both ready acknowledgments, a completed normal-timing match, one settlement, side-swapped rematch, and credit disclosure before readiness.
-3. With four real identities A–D, play two completed, credited matches for each pair: AB, CD, AC, BD, AD, BC. Each player obtains six matches without exceeding two per pair. Check placement completes at the fifth credited match, public rank is absent before placement, and placed players appear in Top Players/Around You. Keep scheduling these required tests separate from observations of voluntary rematches.
+3. With four real identities A–D, play two completed, credited matches for each pair: AB, CD, AC, BD, AD, BC. Each player obtains six matches without exceeding two per pair. Check placement completes after two credited matches, public rank is absent before placement, and placed players appear in the shared human leaderboard; the shared bot standings remain separately tagged. Keep scheduling these required tests separate from observations of voluntary rematches.
 4. Record commit, browser/device, match IDs, credit, placement counts, profiles, and leaderboard observations using participant aliases. If accounts are unavailable, mark this gate unverified; synthetic profiles do not prove live sign-in.
 
 ## Restore and undo rehearsal
@@ -45,10 +45,10 @@ Local mocked storage tests verify marker consumption, serialization, rejection p
 
 | Gate | Record |
 | --- | --- |
-| Tested commit and working-tree state | `70dbce0458b07105418568e1901da28b1b41e118`; remediation code is from `9330943ddd21a5c1fc5a08248b80a9c2be9c4785`, and the documentation follow-up passed main CI. |
+| Tested commit and working-tree state | `b0b6d659a9ebb5eda645da985e8553621f195643`; clean working tree at deployment. The two-match placement update passed all 209 tests across 25 files and `npm run build`. |
 | Workers Paid / Firebase Spark, date checked | 2026-10-10: Workers Paid selected for staging by owner; Firebase Spark confirmed. Wrangler login restored and whoami succeeded. |
-| Staging Worker URL and namespace | Deployed `https://override-game-staging.cnebolisa.workers.dev`, version `e4222950-ec24-43b1-8350-d8e489354483`; staging environment uses its own `GAME` Durable Object binding. |
-| Staging secrets and smoke | Both dedicated staging secrets uploaded. `/`, `/api/health`, `/api/config` returned 200; health was `ok: true`, config reported project `override-game` and staging auth domain. Firebase OAuth allowlists remain pending. |
+| Staging Worker URL and namespace | Deployed `https://override-game-staging.cnebolisa.workers.dev`, version `f7e65226-b1d0-4792-bbd6-e5a4a27b09d2`; staging environment uses its own `GAME` Durable Object binding. |
+| Staging secrets and smoke | Existing dedicated staging secrets retained. `/`, `/api/health`, `/api/config` returned 200; health was `ok: true`, config reported project `override-game` and staging auth domain. Served client asset contains the two-match placement copy and shared bot standings label. Firebase OAuth allowlists remain pending. |
 | Local tests, audits, builds, dry-runs, Linux smoke, container | Windows/Linux: clean installs, 209 tests/25 files, builds passed. Both audits zero vulnerabilities; both dry-runs and Linux workerd smoke passed. Node backup/replay and the local container backup/restore job passed. Main CI passed after push. |
 | Desktop/mobile identity and Ranked journey | Unverified in staging. |
 | Four-account placement and leaderboard | Unverified; four real accounts required. |

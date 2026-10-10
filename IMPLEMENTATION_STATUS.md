@@ -2,6 +2,8 @@
 
 The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.md` records approved decisions and acceptance criteria. This status tracks evidence without changing those requirements. Current remediation addresses the [2026-10-10 audit](AUDIT_REPORT_2026-10-10.md); [STAGING_VERIFICATION.md](STAGING_VERIFICATION.md) records the remaining release procedure. The dated sections below preserve implementation history.
 
+**Latest staging deployment:** Commit `b0b6d659a9ebb5eda645da985e8553621f195643` is deployed to `https://override-game-staging.cnebolisa.workers.dev` as version `f7e65226-b1d0-4792-bbd6-e5a4a27b09d2`. `npm test` passed 209 tests across 25 files and `npm run build` passed before deployment. Live `/`, `/api/health`, and `/api/config` checks returned 200; health reported `ok: true`, and the served asset includes the two-match placement copy and shared bot standings. Real-account sign-in and gameplay remain unverified; Firebase authorized-domain/OAuth callback setup is still pending.
+
 ## Current remediation evidence — 2026-10-10
 
 **Tested source:** remediation commit `9330943ddd21a5c1fc5a08248b80a9c2be9c4785`, including base `e3c306fa22ee6c71df7bedecf4af7add238b7198`. Local checks and all three main CI jobs passed. Staging is deployed and its basic HTTP smoke passed; production rollout is not claimed.
