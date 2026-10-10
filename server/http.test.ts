@@ -39,6 +39,7 @@ it('sets browser security headers including Firebase Authentication origins', ()
   } as unknown) as Pick<ServerResponse, 'setHeader'>;
   applySecurityHeaders(response);
   expect(headers.get('content-security-policy')).toContain("object-src 'none'");
+  expect(headers.get('content-security-policy')).toContain("script-src 'self' https://apis.google.com");
   expect(headers.get('content-security-policy')).toContain('https://identitytoolkit.googleapis.com');
   expect(headers.get('content-security-policy')).toContain("frame-src 'self' https://*.firebaseapp.com");
   expect(headers.get('permissions-policy')).toBe('camera=(), microphone=(), geolocation=()');
@@ -47,6 +48,7 @@ it('sets browser security headers including Firebase Authentication origins', ()
 
 it('allows the staging origin to load its same-origin Firebase auth iframe', () => {
   const staticHeaders = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8');
+  expect(staticHeaders).toContain("script-src 'self' https://apis.google.com");
   expect(staticHeaders).toContain("frame-src 'self' https://*.firebaseapp.com");
 });
 

@@ -25,7 +25,7 @@ export function applySecurityHeaders(res: Pick<ServerResponse, 'setHeader'>): vo
     "object-src 'none'",
     "frame-ancestors 'none'",
     "form-action 'self'",
-    "script-src 'self'",
+    "script-src 'self' https://apis.google.com",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https://accounts.google.com",
     "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://*.firebaseapp.com",
