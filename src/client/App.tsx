@@ -181,7 +181,7 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
           <p className="eyebrow"><span>5×5</span> territory duel</p>
           <h1>Predict.<br />Counter.<br /><em>Control the grid.</em></h1>
           <p className="hero-intro">
-            Choose one move in secret. Both moves reveal at once, and every node you claim shifts the score.
+            Claim open spaces, counter your rival, and control more territory. Choose a move in secret; both moves reveal together.
           </p>
           <button className="primary-cta" onClick={() => navigate("practice")}>Start with Practice <span>→</span></button>
         </div>
