@@ -38,7 +38,7 @@ describe('Ranked progression displays', () => {
     expect(result).not.toContain('→');
   });
 
-  it('shows complete human leaderboard records and does not invent personalized Rival progress', () => {
+  it('shows complete human leaderboard records and a clearly labeled, descending bot practice ladder', () => {
     const board = renderToStaticMarkup(<LeaderboardList entries={[{
       handle: 'Alpha', rating: 1400, rank: 1, tier: 'Platinum', wins: 7, losses: 2, draws: 1, streak: 3,
     }]} />);
@@ -46,7 +46,13 @@ describe('Ranked progression displays', () => {
     expect(board).toContain('Streak 3');
 
     const anonymous = renderToStaticMarkup(<RivalsPanel />);
-    expect(anonymous).toContain('Complete placement to unlock personalized Rival progress.');
+    expect(anonymous).toContain('Practice ladder');
+    expect(anonymous).toContain('aria-label="Practice bot leaderboard"');
+    expect(anonymous).toContain('ava_chen');
+    expect(anonymous).toContain('mila_stone');
+    expect([...anonymous.matchAll(/<b>#(\d+)<\/b>/g)].map(([, rank]) => Number(rank)))
+      .toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
+    expect([...anonymous.matchAll(/class="bot-tag"/g)]).toHaveLength(20);
     expect(anonymous).not.toContain('RP away');
     expect(renderToStaticMarkup(<RivalsPanel rating={1300} />)).toContain('100 RP away');
   });

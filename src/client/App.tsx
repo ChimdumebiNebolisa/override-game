@@ -138,6 +138,24 @@ function creditExplanation(multiplier: number): string {
 }
 
 const RIVAL_MILESTONES = [850, 950, 1050, 1150, 1250, 1400, 1550, 1750];
+const BOT_RATINGS = [
+  ["ava_chen", 2196], ["mateo_rivera", 2118], ["kai_turner", 2034], ["harper_brooks", 1976],
+  ["ezra_patel", 1908], ["nora_williams", 1845], ["leo_morgan", 1772], ["isla_reed", 1699],
+  ["theo_bennett", 1638], ["maya_santos", 1584], ["owen_price", 1518], ["zara_kim", 1457],
+  ["luca_bell", 1391], ["cleo_james", 1330], ["finn_parker", 1278], ["amara_cole", 1211],
+  ["eli_ross", 1152], ["sienna_gray", 1097], ["jonah_wells", 1024], ["mila_stone", 948],
+] as const;
+const BOT_LEADERBOARD: LeaderboardEntry[] = BOT_RATINGS.map(([handle, rating], index) => ({
+  handle,
+  rating,
+  rank: index + 1,
+  tier: rating >= 1700 ? "Master" : rating >= 1500 ? "Diamond" : rating >= 1300 ? "Platinum" : rating >= 1100 ? "Gold" : rating >= 900 ? "Silver" : "Bronze",
+  wins: 42 + (index * 7) % 34,
+  losses: 8 + (index * 3) % 15,
+  draws: (index * 2) % 6,
+  streak: (index * 5) % 8,
+  bot: true,
+}));
 
 function nextRivalText(rating: number): string {
   const next = RIVAL_MILESTONES.find((target) => target > rating);
@@ -1211,19 +1229,20 @@ export function ProfileStats({ profile }: { profile: RankedProfile }) {
 
 export function LeaderboardList({ entries }: { entries: LeaderboardEntry[] }) {
   return <ol className="leaderboard-list">{entries.map((entry) => <li key={entry.handle}>
-    <b>#{entry.rank}</b><strong>{entry.handle}</strong>
+    <b>#{entry.rank}</b><strong>{entry.handle}{entry.bot && <small className="bot-tag">BOT</small>}</strong>
     <span>{entry.tier}<small>W-L-D {entry.wins}-{entry.losses}-{entry.draws} · Streak {entry.streak}</small></span>
     <em>{entry.rating} RP</em>
   </li>)}</ol>;
 }
 
 export function RivalsPanel({ rating }: { rating?: number }) {
-  const next = rating === undefined ? undefined : RIVAL_MILESTONES.find((target) => target > rating);
   return (
     <section className="rivals-panel" aria-labelledby="rivals-title">
-      <div><p className="eyebrow">System benchmarks</p><h2 id="rivals-title">Rivals to beat</h2><small>Rivals are milestones created by OVERRIDE. They are not human accounts and never affect Global Rank.</small></div>
-      <div className="rival-track">{RIVAL_MILESTONES.map((target) => <span key={target} className={rating !== undefined && target <= rating ? "cleared" : target === next ? "next" : ""}><b>{target === 1250 ? "ROOK" : "RIVAL"}</b><small>{target} RP</small></span>)}</div>
-      <p className="next-rival">{rating === undefined ? "Complete placement to unlock personalized Rival progress." : nextRivalText(rating)}</p>
+      <div><p className="eyebrow">Practice ladder</p><h2 id="rivals-title">Leaderboard</h2></div>
+      <div className="rivals-scroll" role="region" aria-label="Practice bot leaderboard" tabIndex={0}>
+        <LeaderboardList entries={BOT_LEADERBOARD} />
+      </div>
+      <p className="next-rival">{rating === undefined ? "Complete placement to see your standing." : nextRivalText(rating)}</p>
     </section>
   );
 }
