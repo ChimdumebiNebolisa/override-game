@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type Database from 'better-sqlite3';
 import { openDatabase } from './db';
 import { leaderboard, profileView, tierFor } from './progression';
+import { PRACTICE_BOTS } from '../src/shared/leaderboard-bots';
 
 let db: Database.Database | null = null;
 afterEach(() => { db?.close(); db = null; });
@@ -44,5 +45,14 @@ describe('Ranked progression', () => {
     expect(board.entries).toHaveLength(20);
     expect(board.entries.every((entry) => entry.bot)).toBe(true);
     expect(board.entries.map((entry) => entry.rank)).toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
+  });
+
+  it('keeps synthetic bot records consistent with their Elo expectation against 1500 RP', () => {
+    for (const bot of PRACTICE_BOTS) {
+      const matches = bot.wins + bot.losses + bot.draws;
+      const expectedScore = 1 / (1 + 10 ** ((1500 - bot.rating) / 400));
+      const recordScore = (bot.wins + bot.draws / 2) / matches;
+      expect(Math.abs(recordScore - expectedScore), bot.handle).toBeLessThan(0.015);
+    }
   });
 });
