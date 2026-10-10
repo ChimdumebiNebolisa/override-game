@@ -3,12 +3,133 @@ import worker, { GameDurableObject } from './worker.js';
 import { createWorkerTestStorage } from './worker-test-storage.js';
 import { createInitialState } from '../src/shared/rules.js';
 import { createRankedShell } from './ranked.js';
+import { createQuickRoom, joinQuickRoom } from './rooms.js';
+import { getMatch, markConnected } from './matches.js';
 
 const originalEnvironment = process.env.NODE_ENV;
 const originalOrigin = process.env.PUBLIC_ORIGIN;
 const originalFirebase = process.env.FIREBASE_WEB_CONFIG;
 const originalKey = process.env.INVITATION_ENCRYPTION_KEY;
 const stores: ReturnType<typeof createWorkerTestStorage>[] = [];
+
+function blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T> { return callback(); }
+
+function fixture() {
+  process.env.NODE_ENV = 'test';
+  const store = createWorkerTestStorage();
+  stores.push(store);
+  const sockets: WorkerWebSocket[] = [];
+  const env = {
+    PUBLIC_ORIGIN: 'http://localhost:5173',
+    FIREBASE_WEB_CONFIG: JSON.stringify({ apiKey: 'test', projectId: 'override-game', appId: 'test' }),
+    INVITATION_ENCRYPTION_KEY: 'worker-integration-test-key',
+    RECOVERY_CONTROL_TOKEN: 'local-recovery-token-for-test-only-0123456789',
+    GAME: { idFromName(name: string) { return name; }, get() { throw new Error('Not used'); } },
+    ASSETS: { async fetch() { return new Response('app'); } },
+  };
+  const ctx = { blockConcurrencyWhile, storage: store.storage, acceptWebSocket() {}, getWebSockets() { return sockets; } };
+  return { store, sockets, env, ctx };
+}
+
+it.each(['unrelated-room', 'same-room', 'same-match', 'room-to-match', 'other-player'] as const)(
+  'checks effective socket identity for %s during disconnect debounce', async (replacement) => {
+    const { store, sockets, env, ctx } = fixture();
+    const durable = new GameDurableObject(ctx, env);
+    await durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/config`));
+    const now = Date.now();
+    const host = { id: 'host', uid: null, createdAt: now, expiresAt: now + 86_400_000 };
+    const guest = { ...host, id: 'guest' };
+    for (const session of [host, guest]) store.sqlite.prepare('INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)').run(session.id, now, session.expiresAt);
+    const room = createQuickRoom(store.sqlite, host, 'Host');
+    const joined = joinQuickRoom(store.sqlite, guest, { code: room.code }, 'Guest');
+    const other = createQuickRoom(store.sqlite, host, 'Host');
+    const side = getMatch(store.sqlite, joined.matchId!)!.player_a_key === host.id ? 'A' : 'B';
+    markConnected(store.sqlite, joined.matchId!, side, now);
+    const closed: { key: string; sessionId: string; roomId: string | null; matchId: string | null } =
+      { key: host.id, sessionId: host.id, roomId: room.id, matchId: null };
+    if (replacement === 'room-to-match') { closed.roomId = null; closed.matchId = joined.matchId!; }
+    const current = {
+      ...closed,
+      key: replacement === 'other-player' ? guest.id : host.id,
+      roomId: replacement === 'unrelated-room' ? other.id : replacement === 'same-match' ? null : room.id,
+      matchId: replacement === 'same-match' ? joined.matchId! : null,
+    };
+    sockets.push({ deserializeAttachment: () => current, send() {} } as unknown as WorkerWebSocket);
+    await durable.webSocketClose({ deserializeAttachment: () => closed } as unknown as WorkerWebSocket);
+    await durable.alarm();
+    expect(getMatch(store.sqlite, joined.matchId!)![side === 'A' ? 'disconnected_a_at' : 'disconnected_b_at']).toBeNull();
+    store.sqlite.prepare('UPDATE worker_socket_closures SET due_at = ?').run(now - 1);
+    await durable.alarm();
+    const disconnected = getMatch(store.sqlite, joined.matchId!)![side === 'A' ? 'disconnected_a_at' : 'disconnected_b_at'];
+    if (replacement === 'unrelated-room' || replacement === 'other-player') expect(disconnected).not.toBeNull();
+    else expect(disconnected).toBeNull();
+  },
+);
+
+it('keeps recovery available after rejected bookmarks or an alarm scheduling failure', async () => {
+  const { store, env, ctx } = fixture();
+  const restoreBookmark = vi.fn(async (bookmark: string) => {
+    if (bookmark === 'rejected') throw new Error('Unknown bookmark');
+    return 'undo';
+  });
+  const storage = {
+    ...store.storage,
+    getCurrentBookmark: async () => 'current',
+    getBookmarkForTime: async () => { throw new Error('Unavailable time'); },
+    onNextSessionRestoreBookmark: restoreBookmark,
+  };
+  const durable = new GameDurableObject({ ...ctx, storage, abort() {} }, env);
+  const headers = { authorization: `Bearer ${env.RECOVERY_CONTROL_TOKEN}` };
+  const restore = (body: object) => durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/__ops/recovery/restore`, {
+    method: 'POST', headers, body: JSON.stringify(body),
+  }));
+  const unavailable = new GameDurableObject(ctx, env);
+  expect((await unavailable.fetch(new Request(`${env.PUBLIC_ORIGIN}/__ops/recovery/restore`, {
+    method: 'POST', headers, body: '{}',
+  }))).status).toBe(501);
+  const disabled = new GameDurableObject(ctx, { ...env, RECOVERY_CONTROL_TOKEN: undefined });
+  expect((await disabled.fetch(new Request(`${env.PUBLIC_ORIGIN}/__ops/recovery/bookmark`, { method: 'POST' }))).status).toBe(404);
+  expect((await restore({ bookmark: 'invalid/bookmark' })).status).toBe(400);
+  expect((await restore({ bookmark: 'rejected' })).status).toBe(400);
+  expect((await restore({ timestamp: Date.now() + 86_400_000 })).status).toBe(400);
+  expect((await restore({ timestamp: Date.now() - 31 * 86_400_000 })).status).toBe(400);
+  expect((await restore({ timestamp: Date.now() - 1_000 })).status).toBe(400);
+  expect((await durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/health`))).status).toBe(200);
+  storage.setAlarm = async () => { throw new Error('Alarm unavailable'); };
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+  expect((await restore({ bookmark: 'valid' })).status).toBe(500);
+  errorLog.mockRestore();
+  expect(restoreBookmark).toHaveBeenCalledTimes(1);
+  expect(store.sqlite.prepare('SELECT COUNT(*) AS count FROM worker_recovery_control').get()).toEqual({ count: 0 });
+});
+
+it('serializes overlapping restores so only one platform restore is scheduled', async () => {
+  const { env, ctx, store } = fixture();
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => { release = resolve; });
+  const restoreBookmark = vi.fn(async () => { await waiting; return 'undo'; });
+  let gate: Promise<unknown> = Promise.resolve();
+  const serializeCalls = vi.fn();
+  const serialize = <T>(callback: () => Promise<T>): Promise<T> => {
+    serializeCalls();
+    const operation = gate.then(callback);
+    gate = operation.catch(() => {});
+    return operation;
+  };
+  const storage = { ...store.storage, getBookmarkForTime: async () => 'prior', onNextSessionRestoreBookmark: restoreBookmark };
+  const durable = new GameDurableObject({ ...ctx, blockConcurrencyWhile: serialize, storage, abort() {} }, env);
+  const restore = () => durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/__ops/recovery/restore`, {
+    method: 'POST', headers: { authorization: `Bearer ${env.RECOVERY_CONTROL_TOKEN}` }, body: JSON.stringify({ bookmark: 'prior' }),
+  }));
+  const first = restore();
+  await vi.waitFor(() => expect(restoreBookmark).toHaveBeenCalledOnce());
+  const second = restore();
+  await vi.waitFor(() => expect(serializeCalls).toHaveBeenCalledTimes(2));
+  release();
+  expect((await first).status).toBe(202);
+  expect((await second).status).toBe(409);
+  expect(restoreBookmark).toHaveBeenCalledOnce();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -47,6 +168,7 @@ it('routes Worker API requests through durable SQLite sessions and room creation
   const storage = { ...store.storage, sql };
   const sockets: WorkerWebSocket[] = [];
   const ctx = {
+    blockConcurrencyWhile,
     storage,
     acceptWebSocket(socket: WorkerWebSocket) { sockets.push(socket); },
     getWebSockets() { return sockets; },
@@ -97,7 +219,7 @@ it('reopens an initialized Worker database after guest session data has been wri
   };
   const store = createWorkerTestStorage();
   stores.push(store);
-  const ctx = { storage: store.storage, acceptWebSocket() {}, getWebSockets() { return []; } };
+  const ctx = { blockConcurrencyWhile, storage: store.storage, acceptWebSocket() {}, getWebSockets() { return []; } };
   const request = new Request(`${origin}/api/session`);
 
   const firstInstance = new GameDurableObject(ctx, env);
@@ -120,7 +242,7 @@ it('rejects an oversized JSON stream before consuming the remaining request body
     GAME: { idFromName(name: string) { return name; }, get() { return { fetch(request: Request): Promise<Response> { return durable.fetch(request); } }; } },
     ASSETS: { async fetch() { return new Response('app'); } },
   };
-  const ctx = { storage: store.storage, acceptWebSocket() {}, getWebSockets() { return []; } };
+  const ctx = { blockConcurrencyWhile, storage: store.storage, acceptWebSocket() {}, getWebSockets() { return []; } };
   durable = new GameDurableObject(ctx, env);
   let deliveredChunks = 0;
   let cancelled = false;
@@ -169,12 +291,17 @@ it('protects PITR bookmarks and restores, then keeps player API paused until the
   const restoredBookmarks: string[] = [];
   const alarms: number[] = [];
   const abort = vi.fn();
+  const restartSteps: string[] = [];
   const storage = {
     ...store.storage,
     async getCurrentBookmark() { return 'bookmark-current'; },
     async getBookmarkForTime(timestamp: number) { return `bookmark-at-${timestamp}`; },
     async onNextSessionRestoreBookmark(bookmark: string) { restoredBookmarks.push(bookmark); return 'bookmark-before-restore'; },
     async setAlarm(timestamp: number) { alarms.push(timestamp); await store.storage.setAlarm(timestamp); },
+    async sync() {
+      expect(store.sqlite.prepare('SELECT COUNT(*) AS count FROM worker_recovery_control').get()).toEqual({ count: 0 });
+      restartSteps.push('flush');
+    },
   };
   let durable!: GameDurableObject;
   const env = {
@@ -185,7 +312,7 @@ it('protects PITR bookmarks and restores, then keeps player API paused until the
     GAME: { idFromName(name: string) { return name; }, get() { return { fetch(request: Request): Promise<Response> { return durable.fetch(request); } }; } },
     ASSETS: { async fetch() { return new Response('app'); } },
   };
-  const ctx = { storage, abort, acceptWebSocket() {}, getWebSockets() { return []; } };
+  const ctx = { blockConcurrencyWhile, storage, abort: (...args: unknown[]) => { restartSteps.push('abort'); abort(...args); }, acceptWebSocket() {}, getWebSockets() { return []; } };
   durable = new GameDurableObject(ctx, env);
   const endpoint = `${origin}/__ops/recovery/bookmark`;
   const unauthorized = await worker.fetch(new Request(endpoint, { method: 'POST' }), env);
@@ -213,9 +340,27 @@ it('protects PITR bookmarks and restores, then keeps player API paused until the
   expect(restoredBookmarks).toEqual([`bookmark-at-${requestedAt}`]);
   expect(alarms).toHaveLength(1);
   expect((await worker.fetch(new Request(`${origin}/api/health`), env)).status).toBe(503);
+  const duplicate = await durable.fetch(new Request(`${origin}/__ops/recovery/restore`, {
+    method: 'POST', headers, body: JSON.stringify({ bookmark: 'bookmark-other' }),
+  }));
+  expect(duplicate.status).toBe(409);
 
   await durable.alarm();
   expect(abort).toHaveBeenCalledOnce();
+  expect(abort).toHaveBeenCalledWith('Recovery restart', { retryAlarm: false });
+  expect(restartSteps).toEqual(['flush', 'abort']);
+  const restarted = new GameDurableObject(ctx, env);
+  expect((await restarted.fetch(new Request(`${origin}/api/health`))).status).toBe(200);
+  // Model an older snapshot containing the old persistent recovery intent.
+  store.sqlite.prepare('INSERT INTO worker_recovery_control VALUES (1, ?, ?, ?)').run(Date.now(), 'prior', 'undo');
+  const legacy = new GameDurableObject(ctx, env);
+  await Promise.resolve();
+  expect(alarms).toHaveLength(2);
+  expect((await legacy.fetch(new Request(`${origin}/api/health`))).status).toBe(503);
+  await legacy.alarm();
+  const afterUndo = new GameDurableObject(ctx, env);
+  expect((await afterUndo.fetch(new Request(`${origin}/api/health`))).status).toBe(200);
+  expect(abort).toHaveBeenCalledTimes(2);
 });
 
 it('pauses new games at the safety threshold while accepted match actions and alarms continue', async () => {
@@ -231,7 +376,7 @@ it('pauses new games at the safety threshold while accepted match actions and al
     GAME: { idFromName(name: string) { return name; }, get() { return { fetch(request: Request): Promise<Response> { return durable.fetch(request); } }; } },
     ASSETS: { async fetch() { return new Response('app'); } },
   };
-  const ctx = { storage: store.storage, acceptWebSocket() {}, getWebSockets() { return []; } };
+  const ctx = { blockConcurrencyWhile, storage: store.storage, acceptWebSocket() {}, getWebSockets() { return []; } };
   durable = new GameDurableObject(ctx, env);
   const session = await worker.fetch(new Request(`${origin}/api/session`), env);
   const cookie = session.headers.get('set-cookie')!.split(';')[0];
@@ -281,7 +426,7 @@ it('settles an interrupted terminal Ranked match once from the Worker alarm path
     GAME: { idFromName(name: string) { return name; }, get() { return { fetch(request: Request): Promise<Response> { return durable.fetch(request); } }; } },
     ASSETS: { async fetch() { return new Response('app'); } },
   };
-  const ctx = { storage: store.storage, acceptWebSocket() {}, getWebSockets() { return []; } };
+  const ctx = { blockConcurrencyWhile, storage: store.storage, acceptWebSocket() {}, getWebSockets() { return []; } };
   durable = new GameDurableObject(ctx, env);
   store.sqlite.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)').run('runtime-a', 'RuntimeA', 'runtimea', 1);
   store.sqlite.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)').run('runtime-b', 'RuntimeB', 'runtimeb', 1);

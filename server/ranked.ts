@@ -264,7 +264,7 @@ function pairSearchingInTransaction(db: Database.Database, uid: string, ownProfi
 }
 
 /** Join (or resume) the single Ranked queue lease for this UID and pair atomically when eligible. */
-export function joinRankedQueue(db: Database.Database, uid: string, now = Date.now()): RankedQueueResult {
+export function joinRankedQueue(db: Database.Database, uid: string, now = Date.now(), admitNewWork?: () => void): RankedQueueResult {
   return db.transaction((): RankedQueueResult => {
     expireStaleSearchingInTransaction(db, now);
     expireDueReadyShellsInTransaction(db, now);
@@ -276,6 +276,7 @@ export function joinRankedQueue(db: Database.Database, uid: string, now = Date.n
       throw new HttpError(429, `Ranked queue cooldown active until ${cooldownUntil}`);
     }
     if (!current) {
+      admitNewWork?.();
       db.prepare(`INSERT INTO ranked_ownership (uid, state, match_id, lease_expires_at)
         VALUES (?, 'searching', NULL, ?)`)
         .run(uid, now + QUEUE_LEASE_MS);

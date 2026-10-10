@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import WebSocket from 'ws';
+import Database from 'better-sqlite3';
 
 if (process.platform !== 'linux') {
   console.error('The Wrangler Worker runtime smoke test is intended for Linux CI.');
@@ -27,7 +28,7 @@ function remember(chunk) {
 function startWorker() {
   child = spawn(process.execPath, [
     wrangler, 'dev', '--local', '--ip', '127.0.0.1', '--port', String(port),
-    '--inspector-port', '0', '--persist-to', persistPath, '--log-level', 'error',
+    '--inspector-port', '0', '--persist-to', persistPath, '--log-level', 'info',
     '--var', `PUBLIC_ORIGIN:${origin}`,
     '--var', 'INVITATION_ENCRYPTION_KEY:ci-runtime-smoke-only-key-0123456789abcdef',
   ], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -145,6 +146,20 @@ async function smoke() {
   const guestSocket = await openRoomSocket(room.id, guestCookie);
   await nextMessage(guestSocket, (message) => message.roomId === room.id);
 
+  const priorId = joined.data.room.matchId;
+  const prior = await request(`/api/matches/${priorId}`, { cookie: hostCookie });
+  const resigned = await request(`/api/matches/${priorId}/resign`, { method: 'POST', cookie: hostCookie, body: { confirm: true } });
+  if (resigned.response.status !== 200) throw new Error(`Quick resignation failed: ${JSON.stringify(resigned.data)}`);
+  const offered = await request(`/api/matches/${priorId}/rematch`, { method: 'POST', cookie: hostCookie, body: {} });
+  if (offered.response.status !== 201) throw new Error(`Quick rematch offer failed: ${JSON.stringify(offered.data)}`);
+  const rematchBody = { token: offered.data.invitation.token };
+  const accepted = await request('/api/quick/rematches/accept', { method: 'POST', cookie: guestCookie, body: rematchBody });
+  if (accepted.response.status !== 200 || accepted.data.match.id === priorId) throw new Error('Quick rematch link did not create a fresh match');
+  const retried = await request(`/api/matches/${priorId}/rematch/accept`, { method: 'POST', cookie: guestCookie, body: rematchBody });
+  if (retried.response.status !== 200 || retried.data.match.id !== accepted.data.match.id) throw new Error('Quick rematch retry created a different match');
+  const swapped = await request(`/api/matches/${accepted.data.match.id}`, { cookie: hostCookie });
+  if (swapped.data.match.player === prior.data.match.player) throw new Error('Quick rematch did not swap player sides');
+
   const matchResult = await request('/api/bot-matches', {
     method: 'POST', cookie: hostCookie,
     body: { mode: 'practice', difficulty: 'easy', displayName: 'Runtime host', creationKey: crypto.randomUUID() },
@@ -172,12 +187,27 @@ async function smoke() {
     await delay(500);
   }
   if (resumedMatch?.state.round < 2) throw new Error('Worker alarm did not advance the persisted match deadline');
-  console.log('Wrangler Worker runtime smoke passed: session restart, SQLite migrations, alarm deadline, room sockets, and match persistence.');
+  await stopWorker();
+  const files = readdirSync(persistPath, { recursive: true }).filter((name) => String(name).endsWith('.sqlite'));
+  let usage;
+  for (const file of files) {
+    const db = new Database(join(persistPath, String(file)), { readonly: true });
+    try {
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'worker_usage'").get()) {
+        usage = db.prepare('SELECT SUM(rows_read) AS reads, SUM(rows_written) AS writes FROM worker_usage').get();
+        break;
+      }
+    } finally { db.close(); }
+  }
+  if (!usage || usage.reads <= 0 || usage.writes <= 0) throw new Error('Worker SQL usage ledger did not record real-runtime reads and writes');
+  console.log(`Worker SQL ledger: ${usage.reads} estimated reads, ${usage.writes} estimated writes (includes safety multipliers).`);
+  console.log('Wrangler Worker runtime smoke passed: session restart, SQLite migrations, alarm deadline, room sockets, Quick rematch/retry/side swap, usage ledger, and match persistence.');
 }
 
 try {
   await smoke();
 } catch (error) {
+  await delay(1_000);
   console.error(`${error instanceof Error ? error.stack : String(error)}\nWrangler output:\n${logs}`);
   process.exitCode = 1;
 } finally {

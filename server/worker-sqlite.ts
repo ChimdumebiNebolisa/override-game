@@ -7,8 +7,10 @@ interface SqlCursor {
   toArray(): unknown[];
 }
 
+type SqlBinding = string | number | null | ArrayBuffer;
+
 interface SqlStorage {
-  exec(sql: string, ...bindings: unknown[]): SqlCursor;
+  exec(sql: string, ...bindings: SqlBinding[]): SqlCursor;
 }
 
 interface TransactionStorage {
@@ -16,9 +18,9 @@ interface TransactionStorage {
 }
 
 interface WorkerStatement {
-  get(...bindings: unknown[]): unknown;
-  all(...bindings: unknown[]): unknown[];
-  run(...bindings: unknown[]): { changes: number };
+  get(...bindings: SqlBinding[]): unknown;
+  all(...bindings: SqlBinding[]): unknown[];
+  run(...bindings: SqlBinding[]): { changes: number };
 }
 
 /** Synchronous better-sqlite3 subset backed by a SQLite Durable Object. */
@@ -31,38 +33,36 @@ export class WorkerSqliteDatabase {
 
   pragma(statement: string): unknown[] {
     if (statement.startsWith('journal_mode') || statement.startsWith('busy_timeout')) return [];
-    return this.sql.exec(`PRAGMA ${statement}`).toArray();
+    return this.consume(this.sql.exec(`PRAGMA ${statement}`));
   }
 
   exec(statement: string): this {
-    this.sql.exec(statement);
+    this.consume(this.sql.exec(statement));
     return this;
   }
 
   prepare(statement: string): WorkerStatement {
     return {
       get: (...bindings) => {
-        const cursor = this.sql.exec(statement, ...bindings);
-        const row = cursor.next();
-        this.readRows += cursor.rowsRead;
-        this.writtenRows += cursor.rowsWritten;
-        return row.done ? undefined : row.value;
+        return this.consume(this.sql.exec(statement, ...bindings))[0];
       },
       all: (...bindings) => {
-        const cursor = this.sql.exec(statement, ...bindings);
-        const rows = cursor.toArray();
-        this.readRows += cursor.rowsRead;
-        this.writtenRows += cursor.rowsWritten;
-        return rows;
+        return this.consume(this.sql.exec(statement, ...bindings));
       },
       run: (...bindings) => {
         const cursor = this.sql.exec(statement, ...bindings);
-        this.writtenRows += cursor.rowsWritten;
-        const result = this.sql.exec('SELECT changes() AS changes').toArray()[0] as { changes: number } | undefined;
-        this.readRows += 1;
+        this.consume(cursor);
+        const result = this.consume(this.sql.exec('SELECT changes() AS changes'))[0] as { changes: number } | undefined;
         return { changes: result?.changes ?? cursor.rowsWritten };
       },
     };
+  }
+
+  private consume(cursor: SqlCursor): unknown[] {
+    const rows = cursor.toArray();
+    this.readRows += cursor.rowsRead;
+    this.writtenRows += cursor.rowsWritten;
+    return rows;
   }
 
   transaction<T>(callback: () => T): (() => T) & { immediate: () => T } {

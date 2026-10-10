@@ -117,7 +117,7 @@ function acceptedMatch(db: Database.Database, offer: OfferRow): AcceptedQuickRem
 }
 
 /** Create or resume a 30-second offer for the other participant in a completed Quick friend match. */
-export function requestQuickRematch(db: Database.Database, matchId: string, sessionId: string, now = Date.now()): QuickRematchOffer {
+export function requestQuickRematch(db: Database.Database, matchId: string, sessionId: string, now = Date.now(), admitNewWork?: () => void): QuickRematchOffer {
   return db.transaction(() => {
     assertSession(db, sessionId, now);
     const match = getParentMatch(db, matchId);
@@ -132,6 +132,7 @@ export function requestQuickRematch(db: Database.Database, matchId: string, sess
     const pending = db.prepare(`SELECT * FROM quick_rematch_invitations
       WHERE parent_match_id = ? AND status = 'open' AND expires_at > ?`).get(matchId, now) as OfferRow | undefined;
     if (pending) return view(pending);
+    admitNewWork?.();
 
     const rawToken = randomBytes(32).toString('base64url');
     const row: OfferRow = {
@@ -143,8 +144,9 @@ export function requestQuickRematch(db: Database.Database, matchId: string, sess
     db.prepare(`INSERT INTO quick_rematch_invitations
       (id, token, token_hash, parent_match_id, room_id, creator_session_id, invitee_session_id, status, new_match_id,
        created_at, expires_at, accepted_at)
-      VALUES (@id, @token, @token_hash, @parent_match_id, @room_id, @creator_session_id, @invitee_session_id, @status,
-       @new_match_id, @created_at, @expires_at, @accepted_at)`).run(row);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(row.id, row.token, row.token_hash, row.parent_match_id,
+        row.room_id, row.creator_session_id, row.invitee_session_id, row.status, row.new_match_id,
+        row.created_at, row.expires_at, row.accepted_at);
     return view(row);
   }).immediate();
 }
@@ -184,6 +186,7 @@ export function acceptQuickRematch(
   token: string,
   sessionId: string,
   now = Date.now(),
+  admitNewWork?: () => void,
 ): AcceptedQuickRematch {
   return db.transaction(() => {
     const offer = offerForToken(db, token);
@@ -196,6 +199,7 @@ export function acceptQuickRematch(
     const parent = getParentMatch(db, offer.parent_match_id);
     const room = assertRoomOwnsCompletedMatch(db, parent);
     if (room.id !== offer.room_id) throw new HttpError(409, 'Rematch room changed');
+    admitNewWork?.();
 
     const matchId = randomUUID();
     db.prepare(`INSERT INTO matches (id, room_id, mode, player_a_key, player_b_key, player_a_name, player_b_name,

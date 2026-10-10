@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { createInitialState, type RoundResult } from '../shared/rules';
+import { createInitialState, resolveRound, type RoundResult } from '../shared/rules';
 import { RevealPanel, roundActionsDisabled, snapshotKeepsRoundLocked } from './App';
 
 const result: RoundResult = {
@@ -13,6 +13,15 @@ const result: RoundResult = {
 };
 
 describe('in-match round feedback', () => {
+  it.each([1, 6, 12, 13, 15])('labels the actual resolved round %i from the rules result', (round) => {
+    const before = { ...createInitialState(), round, phase: round > 12 ? 'sudden-death' as const : 'standard' as const };
+    const resolved = resolveRound(before, {
+      A: round === 12 || round === 13 ? { type: 'expand', target: 10 } : { type: 'pass' }, B: { type: 'pass' },
+    });
+    const html = renderToStaticMarkup(<RevealPanel result={resolved} player="A"
+      finalRound={resolved.state.status === 'finished'} activeRoundOpen={false} onContinue={() => undefined} />);
+    expect(html).toContain(`Round ${round} resolved.`);
+  });
   it('keeps a round summary non-modal while a decision is open', () => {
     const html = renderToStaticMarkup(<RevealPanel result={result} player="A" finalRound={false}
       activeRoundOpen onContinue={() => undefined} />);

@@ -648,7 +648,7 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
     <section className="round-review" role="region" aria-labelledby="reveal-title" aria-live="polite">
       <div className="round-review-heading">
         <p className="eyebrow">Simultaneous reveal</p>
-        <h2 id="reveal-title">Round {result.state.round} resolved.</h2>
+        <h2 id="reveal-title">Round {result.state.status === "finished" ? result.state.round : result.state.round - 1} resolved.</h2>
       </div>
         <div className="reveal-actions">
           {rows.map(({ side, outcome }) => (

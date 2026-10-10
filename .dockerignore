@@ -6,5 +6,7 @@ dist
 data
 coverage
 .env*
+.dev.vars*
+.tmp-storage
 *.md
 *.docx

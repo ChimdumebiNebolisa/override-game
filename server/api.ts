@@ -97,19 +97,17 @@ export function createApiHandler(context: ApiContext) {
     }
 
     if (path === '/api/rooms' && method === 'POST') {
-      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       const body = await readJson(req);
-      return json(res, 201, { room: createQuickRoom(db, session, displayName(body.displayName), parseCreationKey(body.creationKey)) });
+      return json(res, 201, { room: createQuickRoom(db, session, displayName(body.displayName), parseCreationKey(body.creationKey), requireNewGameAdmission) });
     }
     if (path === '/api/rooms/join' && method === 'POST') {
-      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       const body = await readJson(req);
       const code = typeof body.code === 'string' ? body.code.trim() : undefined;
       const token = typeof body.token === 'string' ? body.token.trim() : undefined;
       if (!code && !token) throw new HttpError(400, 'Enter a room code or use an invite link');
-      const room = joinQuickRoom(db, session, { code, token }, displayName(body.displayName));
+      const room = joinQuickRoom(db, session, { code, token }, displayName(body.displayName), requireNewGameAdmission);
       if (room.matchId) {
         connectLiveParticipants(room.matchId);
         logMatchEvent('match_started', room.matchId);
@@ -136,14 +134,13 @@ export function createApiHandler(context: ApiContext) {
       return json(res, 200, { room, match: room.matchId ? matchForSession(db, room.matchId, session) : null });
     }
     if (path === '/api/bot-matches' && method === 'POST') {
-      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       const body = await readJson(req);
       const mode = body.mode === 'practice' ? 'practice' : 'quick';
       const difficulty = body.difficulty === 'normal' || body.difficulty === 'hard' ? body.difficulty : 'easy';
       const parentMatchId = typeof body.parentMatchId === 'string' ? body.parentMatchId : undefined;
       const restartMatchId = typeof body.restartMatchId === 'string' ? body.restartMatchId : undefined;
-      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty, parentMatchId, parseCreationKey(body.creationKey), restartMatchId);
+      const id = createBotMatch(db, session, displayName(body.displayName ?? 'Player'), mode, difficulty, parentMatchId, parseCreationKey(body.creationKey), restartMatchId, requireNewGameAdmission);
       logMatchEvent('match_started', id);
       return json(res, 201, { match: matchForSession(db, id, session) });
     }
@@ -152,18 +149,16 @@ export function createApiHandler(context: ApiContext) {
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       if (method === 'GET') return json(res, 200, { queue: rankedQueueStatus(db, session.uid) });
       if (method === 'POST') {
-        requireNewGameAdmission();
-        const queue = joinRankedQueue(db, session.uid);
+        const queue = joinRankedQueue(db, session.uid, undefined, requireNewGameAdmission);
         recordTelemetryEvent(db, session.id, 'matchmaking_started', 'ranked-queue');
         return json(res, 200, { queue });
       }
       if (method === 'DELETE') return json(res, 200, { left: leaveRankedQueue(db, session.uid) });
     }
     if (path === '/api/ranked/challenges' && method === 'POST') {
-      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
-      return json(res, 201, { invitation: createRankedChallenge(db, session.uid) });
+      return json(res, 201, { invitation: createRankedChallenge(db, session.uid, undefined, requireNewGameAdmission) });
     }
     if (path === '/api/ranked/challenges/current' && method === 'GET') {
       const session = requireSession(req, res, db);
@@ -171,28 +166,25 @@ export function createApiHandler(context: ApiContext) {
       return json(res, 200, { invitation: pendingRankedChallenge(db, session.uid) });
     }
     if (path === '/api/ranked/challenges/accept' && method === 'POST') {
-      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       const body = await readJson(req);
       if (typeof body.token !== 'string') throw new HttpError(400, 'Challenge token required');
-      return json(res, 200, { shell: acceptRankedChallenge(db, body.token, session.uid) });
+      return json(res, 200, { shell: acceptRankedChallenge(db, body.token, session.uid, undefined, requireNewGameAdmission) });
     }
     if (path === '/api/ranked/challenges/accept-code' && method === 'POST') {
-      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       const body = await readJson(req);
       if (typeof body.code !== 'string') throw new HttpError(400, 'Challenge code required');
-      return json(res, 200, { shell: acceptRankedChallengeByCode(db, body.code, session.uid) });
+      return json(res, 200, { shell: acceptRankedChallengeByCode(db, body.code, session.uid, undefined, requireNewGameAdmission) });
     }
     if (path === '/api/ranked/rematches/accept' && method === 'POST') {
-      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       if (!session.uid) throw new HttpError(401, 'Sign in with Google first');
       const body = await readJson(req);
       if (typeof body.token !== 'string') throw new HttpError(400, 'Rematch token required');
-      return json(res, 200, { shell: acceptRankedRematch(db, body.token, session.uid) });
+      return json(res, 200, { shell: acceptRankedRematch(db, body.token, session.uid, undefined, requireNewGameAdmission) });
     }
     const rankedRematch = path.match(/^\/api\/ranked\/matches\/([a-f0-9-]{36})\/rematch$/);
     if (rankedRematch && (method === 'POST' || method === 'GET')) {
@@ -204,7 +196,7 @@ export function createApiHandler(context: ApiContext) {
           .get(invitation.id) as { creator_uid: string } | undefined : null;
         return json(res, 200, { invitation, requestedByYou: owner?.creator_uid === session.uid });
       }
-      const invitation = requestRankedRematch(db, rankedRematch[1], session.uid);
+      const invitation = requestRankedRematch(db, rankedRematch[1], session.uid, undefined, requireNewGameAdmission);
       notifyMatch(rankedRematch[1]);
       return json(res, 201, { invitation });
     }
@@ -263,7 +255,7 @@ export function createApiHandler(context: ApiContext) {
     if (quickRematch && (method === 'GET' || method === 'POST')) {
       const session = requireSession(req, res, db);
       if (method === 'POST') {
-        const invitation = requestQuickRematch(db, quickRematch[1], session.id);
+        const invitation = requestQuickRematch(db, quickRematch[1], session.id, undefined, requireNewGameAdmission);
         notifyMatch(quickRematch[1]);
         const parent = getMatch(db, quickRematch[1]);
         if (parent?.room_id) notifyRoom(parent.room_id);
@@ -279,7 +271,7 @@ export function createApiHandler(context: ApiContext) {
       const session = requireSession(req, res, db);
       const body = await readJson(req);
       if (typeof body.token !== 'string') throw new HttpError(400, 'Rematch token required');
-      const accepted = acceptQuickRematch(db, body.token, session.id);
+      const accepted = acceptQuickRematch(db, body.token, session.id, undefined, requireNewGameAdmission);
       connectLiveParticipants(accepted.matchId);
       notifyRoom(accepted.roomId);
       notifyMatch(accepted.matchId);
@@ -287,13 +279,12 @@ export function createApiHandler(context: ApiContext) {
     }
     const quickRematchAccept = path.match(/^\/api\/matches\/([a-f0-9-]{36})\/rematch\/accept$/);
     if (quickRematchAccept && method === 'POST') {
-      requireNewGameAdmission();
       const session = requireSession(req, res, db);
       const body = await readJson(req);
       if (typeof body.token !== 'string') throw new HttpError(400, 'Rematch token required');
       const offer = pendingQuickRematch(db, quickRematchAccept[1], session.id);
       if (!offer || offer.token !== body.token) throw new HttpError(404, 'Rematch invitation not found');
-      const accepted = acceptQuickRematch(db, body.token, session.id);
+      const accepted = acceptQuickRematch(db, body.token, session.id, undefined, requireNewGameAdmission);
       connectLiveParticipants(accepted.matchId);
       notifyRoom(accepted.roomId);
       notifyMatch(accepted.matchId);

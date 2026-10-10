@@ -113,15 +113,16 @@ function currentShell(db: Database.Database, matchId: string): AcceptedRankedInv
 }
 
 /** Create a private, high-entropy Ranked challenge link that expires after 30 minutes. */
-export function createRankedChallenge(db: Database.Database, creatorUid: string, now = Date.now()): CreatedRankedInvitation {
+export function createRankedChallenge(db: Database.Database, creatorUid: string, now = Date.now(), admitNewWork?: () => void): CreatedRankedInvitation {
   return db.transaction(() => {
     assertHandle(db, creatorUid);
     assertNoRankedOwnership(db, [creatorUid]);
     const existing = pendingRankedChallenge(db, creatorUid, now);
     if (existing) return existing;
+    admitNewWork?.();
     const insert = db.prepare(`INSERT INTO ranked_invitations
       (id, token, token_hash, code, code_hash, kind, creator_uid, invitee_uid, parent_match_id, status, match_id, created_at, expires_at, accepted_at)
-      VALUES (@id, @token, @token_hash, @code, @code_hash, @kind, @creator_uid, @invitee_uid, @parent_match_id, @status, @match_id, @created_at, @expires_at, @accepted_at)`);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (let attempt = 0; attempt < 10; attempt++) {
       const rawToken = token();
       const rawCode = challengeCode();
@@ -133,7 +134,8 @@ export function createRankedChallenge(db: Database.Database, creatorUid: string,
         expires_at: now + CHALLENGE_LIFETIME_MS, accepted_at: null,
       };
       try {
-        insert.run(row);
+        insert.run(row.id, row.token, row.token_hash, row.code, row.code_hash, row.kind, row.creator_uid,
+          row.invitee_uid, row.parent_match_id, row.status, row.match_id, row.created_at, row.expires_at, row.accepted_at);
         return invitationView(row);
       } catch (error) {
         if (!String(error).includes('UNIQUE constraint')) throw error;
@@ -166,11 +168,12 @@ export function acceptRankedChallenge(
   inviteToken: string,
   inviteeUid: string,
   now = Date.now(),
+  admitNewWork?: () => void,
 ): AcceptedRankedInvitation {
   return db.transaction(() => {
     const invite = getInvitationByToken(db, inviteToken);
     if (!invite || invite.kind !== 'challenge') throw new HttpError(404, 'Ranked challenge not found');
-    return acceptChallengeRow(db, invite, inviteeUid, now);
+    return acceptChallengeRow(db, invite, inviteeUid, now, admitNewWork);
   }).immediate();
 }
 
@@ -180,6 +183,7 @@ export function acceptRankedChallengeByCode(
   rawCode: string,
   inviteeUid: string,
   now = Date.now(),
+  admitNewWork?: () => void,
 ): AcceptedRankedInvitation {
   const code = rawCode.toUpperCase().replace(/[ -]/g, '');
   if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$/.test(code)) throw new HttpError(400, 'Enter a valid challenge code');
@@ -202,7 +206,7 @@ export function acceptRankedChallengeByCode(
   return db.transaction(() => {
     const invite = getInvitationByCode(db, code);
     if (!invite) throw new HttpError(404, 'Ranked challenge not found');
-    return acceptChallengeRow(db, invite, inviteeUid, now);
+    return acceptChallengeRow(db, invite, inviteeUid, now, admitNewWork);
   }).immediate();
 }
 
@@ -211,12 +215,14 @@ function acceptChallengeRow(
   invite: InvitationRow,
   inviteeUid: string,
   now: number,
+  admitNewWork?: () => void,
 ): AcceptedRankedInvitation {
     if (invite.status === 'accepted' && invite.invitee_uid === inviteeUid && invite.match_id) return currentShell(db, invite.match_id);
     if (invite.status !== 'open' || invite.expires_at <= now) throw new HttpError(410, 'Ranked challenge expired or was already used');
     if (invite.creator_uid === inviteeUid) throw new HttpError(400, 'You cannot accept your own challenge');
     assertHandle(db, inviteeUid);
     assertNoRankedOwnership(db, [invite.creator_uid, inviteeUid]);
+    admitNewWork?.();
 
     const shell = createRankedShell(db, invite.creator_uid, inviteeUid, now);
     const changed = db.prepare(`UPDATE ranked_invitations SET invitee_uid = ?, status = 'accepted', match_id = ?, accepted_at = ?
@@ -251,6 +257,7 @@ export function requestRankedRematch(
   matchId: string,
   creatorUid: string,
   now = Date.now(),
+  admitNewWork?: () => void,
 ): CreatedRankedInvitation {
   return db.transaction(() => {
     const match = parentMatch(db, matchId);
@@ -268,6 +275,7 @@ export function requestRankedRematch(
       throw new HttpError(409, 'A rematch invitation is already pending');
     }
     const rawToken = token();
+    admitNewWork?.();
     const row: InvitationRow = {
       id: randomUUID(), token: protectInvitationSecret(rawToken), code: null, kind: 'rematch', creator_uid: creatorUid, invitee_uid: inviteeUid,
       token_hash: invitationTokenHash(rawToken), code_hash: null,
@@ -276,8 +284,9 @@ export function requestRankedRematch(
     };
     db.prepare(`INSERT INTO ranked_invitations
       (id, token, token_hash, code, code_hash, kind, creator_uid, invitee_uid, parent_match_id, status, match_id, created_at, expires_at, accepted_at)
-      VALUES (@id, @token, @token_hash, @code, @code_hash, @kind, @creator_uid, @invitee_uid, @parent_match_id, @status, @match_id, @created_at, @expires_at, @accepted_at)`)
-      .run(row);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(row.id, row.token, row.token_hash, row.code, row.code_hash, row.kind, row.creator_uid,
+        row.invitee_uid, row.parent_match_id, row.status, row.match_id, row.created_at, row.expires_at, row.accepted_at);
     return invitationView(row);
   }).immediate();
 }
@@ -302,6 +311,7 @@ export function acceptRankedRematch(
   inviteToken: string,
   inviteeUid: string,
   now = Date.now(),
+  admitNewWork?: () => void,
 ): AcceptedRankedInvitation {
   return db.transaction(() => {
     const invite = getInvitationByToken(db, inviteToken);
@@ -311,6 +321,7 @@ export function acceptRankedRematch(
     if (invite.invitee_uid !== inviteeUid || !invite.parent_match_id) throw new HttpError(404, 'Ranked rematch not found');
     const prior = parentMatch(db, invite.parent_match_id);
     assertNoRankedOwnership(db, [invite.creator_uid, inviteeUid]);
+    admitNewWork?.();
     const shell = createRankedShell(db, prior.player_a_key, prior.player_b_key, now);
     const swapped = db.prepare(`UPDATE matches SET player_a_key = ?, player_b_key = ?
       WHERE id = ? AND mode = 'ranked' AND status = 'readying' AND started_at IS NULL`)

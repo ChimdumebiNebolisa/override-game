@@ -10,15 +10,17 @@ interface Storage {
   transactionSync<T>(callback: () => T): T;
   getAlarm(): Promise<number | null>;
   setAlarm(timestamp: number): Promise<void>;
+  sync(): Promise<void>;
   getCurrentBookmark?(): Promise<string>;
   getBookmarkForTime?(timestamp: number): Promise<string>;
   onNextSessionRestoreBookmark?(bookmark: string): Promise<string>;
 }
 interface SocketState {
   storage: Storage;
+  blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
   acceptWebSocket(socket: WorkerWebSocket, tags?: string[]): void;
   getWebSockets(tag?: string): WorkerWebSocket[];
-  abort?(): void;
+  abort?(message?: string, options?: { retryAlarm: boolean }): void;
 }
 interface Namespace {
   idFromName(name: string): unknown;
@@ -195,6 +197,9 @@ export class GameDurableObject {
       id INTEGER PRIMARY KEY CHECK(id = 1), requested_at INTEGER NOT NULL,
       target_bookmark TEXT NOT NULL, undo_bookmark TEXT NOT NULL
     );`);
+    if (this.recoveryPending()) {
+      ctx.blockConcurrencyWhile(async () => { await ctx.storage.setAlarm(Date.now() + 250); });
+    }
   }
 
   private async api(requestOrigin?: string) {
@@ -293,8 +298,11 @@ export class GameDurableObject {
   async alarm(): Promise<void> {
     const start = performance.now();
     if (this.recoveryPending()) {
-      this.ctx.abort?.();
-      return;
+      return this.ctx.blockConcurrencyWhile(async () => {
+        this.database.prepare('DELETE FROM worker_recovery_control WHERE id = 1').run();
+        await this.ctx.storage.sync();
+        this.ctx.abort?.('Recovery restart', { retryAlarm: false });
+      });
     }
     try {
       const core = await this.core();
@@ -322,7 +330,7 @@ export class GameDurableObject {
         this.logMatchEvent(core.getMatch(this.db, id)?.status === 'voided' ? 'ranked_voided' : 'ranked_settled', id);
         this.notify('match', id);
       }
-      const hourly = this.ctx.storage.sql.exec('SELECT last_pruned_at FROM worker_maintenance WHERE id = 1').toArray()[0] as { last_pruned_at: number } | undefined;
+      const hourly = this.database.prepare('SELECT last_pruned_at FROM worker_maintenance WHERE id = 1').get() as { last_pruned_at: number } | undefined;
       if (!hourly || hourly.last_pruned_at <= now - 60 * 60_000) {
         core.pruneExpiredGuestData(this.db, now);
         this.database.prepare(`INSERT INTO worker_maintenance (id, last_pruned_at) VALUES (1, ?)
@@ -377,14 +385,16 @@ export class GameDurableObject {
     for (const row of pending) {
       this.database.prepare('DELETE FROM worker_socket_closures WHERE id = ?').run(row.id);
       const attachment = JSON.parse(row.attachment_json) as SocketAttachment;
-      const stillConnected = this.ctx.getWebSockets().some((socket) => {
-        const current = socket.deserializeAttachment() as SocketAttachment | null;
-        return current?.key === attachment.key && (current.matchId === attachment.matchId ||
-          (attachment.roomId !== null && current.roomId === attachment.roomId));
-      });
-      if (stillConnected) continue;
       const room = attachment.roomId ? core.getRoom(this.db, attachment.roomId) : null;
       const matchId = attachment.matchId ?? room?.match_id ?? null;
+      const stillConnected = this.ctx.getWebSockets().some((socket) => {
+        const current = socket.deserializeAttachment() as SocketAttachment | null;
+        if (current?.key !== attachment.key) return false;
+        const currentMatchId = current.matchId ?? (current.roomId ? core.getRoom(this.db, current.roomId)?.match_id : null) ?? null;
+        return (matchId !== null && currentMatchId === matchId) ||
+          (matchId === null && currentMatchId === null && attachment.roomId !== null && current.roomId === attachment.roomId);
+      });
+      if (stillConnected) continue;
       if (!matchId) continue;
       const match = core.getMatch(this.db, matchId);
       const side = this.sideForMatch(matchId, attachment.key, core);
@@ -522,28 +532,31 @@ export class GameDurableObject {
       return Response.json({ bookmark: await this.ctx.storage.getCurrentBookmark() }, { headers: noStore });
     }
     if (url.pathname !== '/__ops/recovery/restore') return Response.json({ error: 'Not found' }, { status: 404, headers: noStore });
-    if (this.recoveryPending()) return Response.json({ error: 'A recovery is already in progress' }, { status: 409, headers: noStore });
     if (!this.ctx.storage.getBookmarkForTime || !this.ctx.storage.onNextSessionRestoreBookmark || !this.ctx.abort) {
       return Response.json({ error: 'PITR restore is unavailable in this runtime' }, { status: 501, headers: noStore });
     }
     const body = await limitedJson(request, 1_024);
-    let targetBookmark: string;
-    if (typeof body.bookmark === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(body.bookmark)) {
-      targetBookmark = body.bookmark;
-    } else if (typeof body.timestamp === 'number' && Number.isFinite(body.timestamp) &&
-      body.timestamp <= Date.now() && body.timestamp >= Date.now() - 30 * 24 * 60 * 60_000) {
-      try { targetBookmark = await this.ctx.storage.getBookmarkForTime(body.timestamp); }
-      catch { return Response.json({ error: 'The requested time is outside the available recovery window' }, { status: 400, headers: noStore }); }
-    } else {
-      return Response.json({ error: 'Provide a bookmark or a timestamp within the last 30 days' }, { status: 400, headers: noStore });
-    }
-    let undoBookmark: string;
-    try { undoBookmark = await this.ctx.storage.onNextSessionRestoreBookmark(targetBookmark); }
-    catch { return Response.json({ error: 'Cloudflare could not schedule this restore' }, { status: 400, headers: noStore }); }
-    this.database.prepare(`INSERT INTO worker_recovery_control (id, requested_at, target_bookmark, undo_bookmark)
-      VALUES (1, ?, ?, ?)`).run(Date.now(), targetBookmark, undoBookmark);
-    await this.ctx.storage.setAlarm(Date.now() + 250);
-    return Response.json({ status: 'restore-scheduled', targetBookmark, undoBookmark, restartAfterMs: 250 }, { status: 202, headers: noStore });
+    return this.ctx.blockConcurrencyWhile(async () => {
+      if (this.recoveryPending()) return Response.json({ error: 'A recovery is already in progress' }, { status: 409, headers: noStore });
+      let targetBookmark: string;
+      if (typeof body.bookmark === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(body.bookmark)) {
+        targetBookmark = body.bookmark;
+      } else if (typeof body.timestamp === 'number' && Number.isFinite(body.timestamp) &&
+        body.timestamp <= Date.now() && body.timestamp >= Date.now() - 30 * 24 * 60 * 60_000) {
+        try { targetBookmark = await this.ctx.storage.getBookmarkForTime!(body.timestamp); }
+        catch { return Response.json({ error: 'The requested time is outside the available recovery window' }, { status: 400, headers: noStore }); }
+      } else {
+        return Response.json({ error: 'Provide a bookmark or a timestamp within the last 30 days' }, { status: 400, headers: noStore });
+      }
+      let undoBookmark: string;
+      // Arm first: a failed alarm write must not leave a platform restore scheduled.
+      await this.ctx.storage.setAlarm(Date.now() + 250);
+      try { undoBookmark = await this.ctx.storage.onNextSessionRestoreBookmark!(targetBookmark); }
+      catch { return Response.json({ error: 'Cloudflare could not schedule this restore' }, { status: 400, headers: noStore }); }
+      this.database.prepare(`INSERT INTO worker_recovery_control (id, requested_at, target_bookmark, undo_bookmark)
+        VALUES (1, ?, ?, ?)`).run(Date.now(), targetBookmark, undoBookmark);
+      return Response.json({ status: 'restore-scheduled', targetBookmark, undoBookmark, restartAfterMs: 250 }, { status: 202, headers: noStore });
+    });
   }
 }
 

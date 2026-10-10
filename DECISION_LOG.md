@@ -13,9 +13,9 @@ The implementation plan remains the detailed source for exact behavior, mileston
 ## D11 — Authentication provider
 
 **Recorded:** 2026-10-04
-**Decision:** Use Firebase Authentication for Google sign-in. The web SDK obtains Firebase ID tokens, and the Node server verifies them with Firebase Admin while allowing only the Google provider. Keep the existing opaque game sessions, authoritative game services, WebSocket transport, and SQLite profiles; this decision does not migrate game data to Firestore or Firebase Realtime Database.
+**Decision (updated 2026-10-10):** Use Firebase Authentication for Google sign-in. The web SDK obtains Firebase ID tokens; both Node and Worker verify them with JOSE against Firebase Secure Token public signing certificates while allowing only the Google provider. Keep the existing opaque game sessions, authoritative game services, WebSocket transport, and SQLite profiles; this decision does not migrate game data to Firestore or Firebase Realtime Database.
 **Approval:** The product owner directed the implementation to proceed with this switch after reviewing Firebase Auth as the alternative to direct Google OAuth integration.
-**Operational requirements:** Enable Google as a Firebase Authentication provider, authorize deployed origins, provide public web-app config, and keep Firebase Admin credentials server-side. Verify real sign-in with two distinct accounts in staging before release.
+**Operational requirements:** Enable Google as a Firebase Authentication provider, authorize deployed origins and their same-origin OAuth callback URIs, and provide public web-app config. No Firebase Admin service-account credential is required. The earlier custom game-session nonce design is superseded by the Firebase SDK redirect flow and server verification of the signed token; its unused nullable migration columns remain for compatibility. Verify real sign-in with two distinct accounts in staging before release. Use four real Google accounts, playing two matches per pair, for complete placement/leaderboard verification.
 
 ## D12 — Zero-spend hosting
 

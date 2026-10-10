@@ -1,7 +1,11 @@
 import { afterEach, expect, it } from 'vitest';
 import { initializeDatabase } from './schema-initializer.js';
 import { WorkerSqliteDatabase, asDomainDatabase } from './worker-sqlite.js';
-import { createQuickRoom } from './rooms.js';
+import { createQuickRoom, joinQuickRoom } from './rooms.js';
+import { resignMatch } from './matches.js';
+import { requestQuickRematch, acceptQuickRematch } from './quick-rematch.js';
+import { createRankedChallenge, acceptRankedChallenge, requestRankedRematch, acceptRankedRematch } from './invitations.js';
+import { acknowledgeRankedReady, markRankedReadyPresence, settleRankedMatch } from './ranked.js';
 import { createWorkerTestStorage } from './worker-test-storage.js';
 
 const originalEnvironment = process.env.NODE_ENV;
@@ -14,6 +18,62 @@ afterEach(() => {
   else process.env.NODE_ENV = originalEnvironment;
   if (originalKey === undefined) delete process.env.INVITATION_ENCRYPTION_KEY;
   else process.env.INVITATION_ENCRYPTION_KEY = originalKey;
+});
+
+it('creates and accepts Quick and Ranked invitations using the platform binding contract', () => {
+  process.env.NODE_ENV = 'test';
+  process.env.INVITATION_ENCRYPTION_KEY = 'worker-adapter-test-key';
+  const { db } = workerDatabase();
+  initializeDatabase(db);
+  const now = Date.now();
+  const host = { id: 'host', uid: null, createdAt: now, expiresAt: now + 86_400_000 };
+  const guest = { ...host, id: 'guest' };
+  for (const session of [host, guest]) {
+    db.prepare('INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)').run(session.id, now, session.expiresAt);
+  }
+  const room = createQuickRoom(db, host, 'Host');
+  const joined = joinQuickRoom(db, guest, { code: room.code }, 'Guest');
+  resignMatch(db, joined.matchId!, host);
+  const quick = requestQuickRematch(db, joined.matchId!, host.id);
+  const quickAccepted = acceptQuickRematch(db, quick.token, guest.id);
+  expect(quickAccepted.matchId).not.toBe(joined.matchId);
+  expect(acceptQuickRematch(db, quick.token, guest.id)).toEqual(quickAccepted);
+
+  for (const uid of ['a', 'b']) {
+    db.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)').run(uid, uid, uid, now);
+  }
+  const challenge = createRankedChallenge(db, 'a');
+  const shell = acceptRankedChallenge(db, challenge.token, 'b');
+  for (const uid of ['a', 'b']) markRankedReadyPresence(db, shell.matchId, uid, true);
+  for (const uid of ['a', 'b']) acknowledgeRankedReady(db, shell.matchId, uid);
+  resignMatch(db, shell.matchId, { ...host, uid: 'a' });
+  settleRankedMatch(db, shell.matchId);
+  const ranked = requestRankedRematch(db, shell.matchId, 'a');
+  const rankedAccepted = acceptRankedRematch(db, ranked.token, 'b');
+  expect(rankedAccepted.matchId).not.toBe(shell.matchId);
+  expect(acceptRankedRematch(db, ranked.token, 'b')).toEqual(rankedAccepted);
+});
+
+it.each(['get', 'all', 'run', 'exec', 'pragma'] as const)('counts final cursor reads and writes for %s', (operation) => {
+  const sql = {
+    exec(statement: string) {
+      let consumed = false;
+      const changes = statement === 'SELECT changes() AS changes';
+      const rows = changes ? [{ changes: 10 }] : [{ value: 1 }, { value: 2 }];
+      return {
+        get rowsRead() { return consumed ? changes ? 1 : 100 : 0; },
+        get rowsWritten() { return consumed && !changes ? 10 : 0; },
+        next() { return { done: false as const, value: rows[0] }; },
+        toArray() { consumed = true; return rows; },
+      };
+    },
+  };
+  const adapter = new WorkerSqliteDatabase(sql, { transactionSync: (callback) => callback() });
+  if (operation === 'exec') adapter.exec('statement');
+  else if (operation === 'pragma') adapter.pragma('page_count');
+  else adapter.prepare('statement')[operation]();
+  expect(adapter.takeUsage()).toEqual({ rowsRead: operation === 'run' ? 101 : 100, rowsWritten: 10 });
+  expect(adapter.takeUsage()).toEqual({ rowsRead: 0, rowsWritten: 0 });
 });
 
 function workerDatabase() {

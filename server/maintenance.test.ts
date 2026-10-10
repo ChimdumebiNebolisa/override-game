@@ -69,3 +69,26 @@ test('retention removes old Ranked invitation tokens without deleting match or s
     db.close();
   }
 });
+
+test('retention preserves a restart across the cutoff and later prunes mixed dependency chains', () => {
+  const db = openDatabase(':memory:');
+  try {
+    const now = Date.now();
+    const cutoff = now - 30 * 24 * 60 * 60_000;
+    const session: Session = { id: 'restart-guest', uid: null, createdAt: now, expiresAt: now + 86_400_000 };
+    db.prepare('INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)').run(session.id, now, session.expiresAt);
+    const original = createBotMatch(db, session, 'Player', 'practice', 'easy');
+    const replacement = createBotMatch(db, session, 'Player', 'practice', 'easy', undefined, undefined, original);
+    db.prepare("UPDATE matches SET ended_at = ? WHERE id = ?").run(cutoff - 1, original);
+    db.prepare("UPDATE matches SET status = 'finished', ended_at = ? WHERE id = ?").run(cutoff + 1, replacement);
+    db.prepare('INSERT INTO telemetry_events (session_id, name, created_at) VALUES (?, ?, ?)').run(session.id, 'homepage_opened', cutoff - 1);
+    assert.equal(pruneExpiredGuestData(db, now).matches, 0);
+    assert.equal((db.prepare('SELECT COUNT(*) AS count FROM telemetry_events').get() as { count: number }).count, 0);
+    assert.equal(pruneExpiredGuestData(db, now).matches, 0);
+    const rematch = createBotMatch(db, session, 'Player', 'practice', 'easy', replacement);
+    db.prepare("UPDATE matches SET status = 'finished', ended_at = ? WHERE id IN (?, ?)").run(cutoff - 1, replacement, rematch);
+    assert.equal(pruneExpiredGuestData(db, now).matches, 3);
+    assert.equal(pruneExpiredGuestData(db, now).matches, 0);
+    assert.deepEqual(db.pragma('foreign_key_check'), []);
+  } finally { db.close(); }
+});

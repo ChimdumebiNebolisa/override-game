@@ -9,7 +9,6 @@
   "vars": {
     "FIREBASE_WEB_CONFIG": "{\"apiKey\":\"AIzaSyDizuv0BrCmJ2Ci_elWdIGLgYbtXLP-pVQ\",\"authDomain\":\"override-game.firebaseapp.com\",\"projectId\":\"override-game\",\"appId\":\"1:505857880522:web:0d0856445f5b645626df33\"}"
   },
-  "limits": { "cpu_ms": 100 },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -20,5 +19,17 @@
     "bindings": [{ "name": "GAME", "class_name": "GameDurableObject" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GameDurableObject"] }],
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  "env": {
+    "staging": {
+      "name": "override-game-staging",
+      "vars": {
+        "PUBLIC_ORIGIN": "https://override-game-staging.cnebolisa.workers.dev",
+        "FIREBASE_WEB_CONFIG": "{\"apiKey\":\"AIzaSyDizuv0BrCmJ2Ci_elWdIGLgYbtXLP-pVQ\",\"authDomain\":\"override-game.firebaseapp.com\",\"projectId\":\"override-game\",\"appId\":\"1:505857880522:web:0d0856445f5b645626df33\"}"
+      },
+      "durable_objects": {
+        "bindings": [{ "name": "GAME", "class_name": "GameDurableObject" }]
+      }
+    }
+  }
 }

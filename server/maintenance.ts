@@ -15,7 +15,7 @@ export function pruneExpiredGuestData(db: Database.Database, now = Date.now()) {
     for (;;) {
       const leaves = db.prepare(`SELECT m.id FROM matches m WHERE m.mode <> 'ranked'
         AND m.status IN ('finished', 'voided') AND m.ended_at < ?
-        AND NOT EXISTS (SELECT 1 FROM matches child WHERE child.parent_match_id = m.id)
+        AND NOT EXISTS (SELECT 1 FROM matches child WHERE child.parent_match_id = m.id OR child.restart_match_id = m.id)
         LIMIT 100`).all(cutoff) as { id: string }[];
       if (!leaves.length) break;
       for (const { id } of leaves) {

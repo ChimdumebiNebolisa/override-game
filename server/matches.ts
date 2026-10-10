@@ -141,7 +141,7 @@ export function parseAction(value: unknown): Action {
   throw new HttpError(400, 'Unknown action');
 }
 
-export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy', parentMatchId?: string, creationKey?: string, restartMatchId?: string) {
+export function createBotMatch(db: Database.Database, session: Session, name: string, mode: 'quick' | 'practice' = 'quick', difficulty: BotDifficulty = 'easy', parentMatchId?: string, creationKey?: string, restartMatchId?: string, admitNewWork?: () => void) {
   return db.transaction(() => {
     if (creationKey) {
       const existing = db.prepare(`SELECT * FROM matches WHERE (player_a_key = ? OR player_b_key = ?) AND creation_key = ?
@@ -178,6 +178,7 @@ export function createBotMatch(db: Database.Database, session: Session, name: st
       AND bot_difficulty IS NOT NULL AND status IN ('decision', 'transition', 'grace') AND id <> ?`)
       .get(session.id, session.id, restartMatchId ?? '') as { count: number };
     if (recent.count >= 10 || active.count >= 3) throw new HttpError(429, 'Finish an existing bot match before starting another');
+    admitNewWork?.();
     const id = randomUUID();
     db.prepare(`INSERT INTO matches
       (id, room_id, creation_key, parent_match_id, restart_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status, deadline, started_at, revision)
