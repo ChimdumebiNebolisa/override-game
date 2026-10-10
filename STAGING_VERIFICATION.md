@@ -45,16 +45,17 @@ Local mocked storage tests verify marker consumption, serialization, rejection p
 
 | Gate | Record |
 | --- | --- |
-| Tested commit and working-tree state | Remediation commit `9330943ddd21a5c1fc5a08248b80a9c2be9c4785`; local verification and remote CI passed. |
+| Tested commit and working-tree state | `70dbce0458b07105418568e1901da28b1b41e118`; remediation code is from `9330943ddd21a5c1fc5a08248b80a9c2be9c4785`, and the documentation follow-up passed main CI. |
 | Workers Paid / Firebase Spark, date checked | 2026-10-10: Workers Paid selected for staging by owner; Firebase Spark confirmed. Wrangler login restored and whoami succeeded. |
-| Staging Worker URL and namespace | Planned `https://override-game-staging.cnebolisa.workers.dev`; not deployed, namespace uncreated. |
-| Local tests, audits, builds, dry-runs, Linux smoke, container | Windows/Linux: clean installs, 209 tests/25 files, builds passed. Both audits zero vulnerabilities; both dry-runs and Linux workerd smoke passed. Node backup/replay and the local container backup/restore job passed. Remote CI passed after push. |
+| Staging Worker URL and namespace | Deployed `https://override-game-staging.cnebolisa.workers.dev`, version `e4222950-ec24-43b1-8350-d8e489354483`; staging environment uses its own `GAME` Durable Object binding. |
+| Staging secrets and smoke | Both dedicated staging secrets uploaded. `/`, `/api/health`, `/api/config` returned 200; health was `ok: true`, config reported project `override-game` and staging auth domain. Firebase OAuth allowlists remain pending. |
+| Local tests, audits, builds, dry-runs, Linux smoke, container | Windows/Linux: clean installs, 209 tests/25 files, builds passed. Both audits zero vulnerabilities; both dry-runs and Linux workerd smoke passed. Node backup/replay and the local container backup/restore job passed. Main CI passed after push. |
 | Desktop/mobile identity and Ranked journey | Unverified in staging. |
 | Four-account placement and leaderboard | Unverified; four real accounts required. |
 | Restore and undo snapshots / healthy restart | Mock regressions passed; live PITR and Data Studio checks unverified. |
 | CPU, SQL usage, and runtime errors | Local smoke ledger: 531 estimated reads / 354 estimated writes. Paid staging CPU and platform SQL metrics unverified. |
 | Two-device interruption / mobile screen reader | Unverified; physical devices and human checks required. |
 | Human playtest go / tune / stop | No human sessions or decision collected. Dedicated Node metrics command verified with a synthetic backup fixture. |
-| Unverified checks and required access | Staging deployment/configuration, real accounts/devices, and playtest participants. Separate secrets are in ignored `.dev.vars.staging`, not uploaded. |
+| Unverified checks and required access | Firebase Authorized domains and Google OAuth callback, real accounts/devices, and playtest participants. Secret values remain only in ignored local `.dev.vars.staging` and the staging Worker secret store. |
 
 Missing external evidence remains unverified even when all local checks pass. Public rollout is a subsequent action.
