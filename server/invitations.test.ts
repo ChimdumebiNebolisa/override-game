@@ -227,7 +227,7 @@ test('rematch invitation expires after 30 seconds and can be accepted only by th
 
 test('accepted rematch creates a fresh shell with sides swapped and fresh credit assessment', () => {
   const db = makeDb();
-  db.prepare('UPDATE profiles SET placement_progress = 5, rated_match_count = 5 WHERE uid IN (?, ?)').run('a', 'b');
+  db.prepare('UPDATE profiles SET placement_progress = 2, rated_match_count = 2 WHERE uid IN (?, ?)').run('a', 'b');
   const previous = makeSettledMatch(db, 4_000_000);
   const invite = requestRankedRematch(db, previous.id, previous.playerA, 4_020_000);
   const accepted = acceptRankedRematch(db, invite.token, previous.playerB, 4_020_001);

@@ -2,6 +2,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import type Database from 'better-sqlite3';
 import { firebaseWebConfig } from './config.js';
 import { HttpError } from './http.js';
+import { PLACEMENT_MATCHES } from '../src/shared/rating.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HANDLE_COOLDOWN_MS = 30 * DAY_MS;
@@ -175,7 +176,7 @@ export function getPublicProfile(db: Database.Database, uid: string): PublicProf
     handle: row.handle,
     placementProgress: row.placement_progress,
   };
-  if (row.placement_progress >= 5) {
+  if (row.placement_progress >= PLACEMENT_MATCHES) {
     profile.rating = row.rating;
     profile.peakRating = row.peak_rating;
     profile.ratedMatchCount = row.rated_match_count;

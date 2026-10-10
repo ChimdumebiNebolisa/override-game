@@ -3,19 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { LeaderboardList, ProfileStats, RankedSettlementDetails, RivalsPanel } from './App';
 
 describe('Ranked progression displays', () => {
-  it('shows only placement progress before the fifth qualifying match', () => {
-    const profile = renderToStaticMarkup(<ProfileStats profile={{ handle: 'Placing', placementProgress: 4 }} />);
-    expect(profile).toContain('4/5');
+  it('shows only placement progress before the second qualifying match', () => {
+    const profile = renderToStaticMarkup(<ProfileStats profile={{ handle: 'Placing', placementProgress: 1 }} />);
+    expect(profile).toContain('1/2');
     expect(profile).not.toContain('Peak RP');
     expect(profile).not.toContain('Global rank');
     expect(profile).not.toContain('W-L-D');
 
     const result = renderToStaticMarkup(<RankedSettlementDetails
-      settlement={{ multiplier: 1, player: { outcome: 'win', placementProgress: 4 } }}
-      profile={{ handle: 'Placing', placementProgress: 4 }}
+      settlement={{ multiplier: 1, player: { outcome: 'win', placementProgress: 1 } }}
+      profile={{ handle: 'Placing', placementProgress: 1 }}
     />);
     expect(result).toContain('Placement');
-    expect(result).toContain('4/5');
+    expect(result).toContain('1/2');
     expect(result).toContain('Full competitive credit');
     expect(result).not.toContain('RP change');
     expect(result).not.toContain('Rating');
@@ -25,8 +25,8 @@ describe('Ranked progression displays', () => {
 
   it('reveals the new rating on placement completion without exposing the prior provisional value', () => {
     const result = renderToStaticMarkup(<RankedSettlementDetails
-      settlement={{ multiplier: 1, player: { outcome: 'win', placementProgress: 5, ratingAfter: 1032 } }}
-      profile={{ handle: 'Placed', placementProgress: 5, rating: 1032, peakRating: 1032, ratedMatchCount: 5,
+      settlement={{ multiplier: 1, player: { outcome: 'win', placementProgress: 2, ratingAfter: 1032 } }}
+      profile={{ handle: 'Placed', placementProgress: 2, rating: 1032, peakRating: 1032, ratedMatchCount: 2,
         wins: 5, losses: 0, draws: 0, streak: 5, tier: 'Silver', rank: 12 }}
     />);
     expect(result).toContain('Rating');

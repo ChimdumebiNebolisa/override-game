@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { PLACEMENT_MATCHES } from '../src/shared/rating.js';
 import { getPublicProfile } from './auth';
 import { HttpError } from './http';
 
@@ -23,9 +24,9 @@ export function tierFor(rating: number): string {
 
 function placedPlayers(db: Database.Database): PlacedRow[] {
   return db.prepare(`SELECT uid, handle, rating, wins, losses, draws, streak FROM profiles
-    WHERE placement_progress >= 5 AND handle IS NOT NULL
+    WHERE placement_progress >= ? AND handle IS NOT NULL
     ORDER BY rating DESC, normalized_handle ASC`)
-    .all() as PlacedRow[];
+    .all(PLACEMENT_MATCHES) as PlacedRow[];
 }
 
 function withRanks(rows: PlacedRow[]) {
@@ -41,7 +42,7 @@ function withRanks(rows: PlacedRow[]) {
 export function profileView(db: Database.Database, uid: string) {
   const profile = getPublicProfile(db, uid);
   if (!profile) throw new HttpError(404, 'Profile not found');
-  if (profile.placementProgress < 5 || profile.rating === undefined) return profile;
+  if (profile.placementProgress < PLACEMENT_MATCHES || profile.rating === undefined) return profile;
   const ranked = withRanks(placedPlayers(db));
   return {
     ...profile,

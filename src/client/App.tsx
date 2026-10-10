@@ -10,6 +10,7 @@ import {
   type MatchState,
   type Player,
 } from "../shared/rules";
+import { PLACEMENT_MATCHES } from "../shared/rating";
 import { api, snapshotIsCurrent, type LeaderboardEntry, type PublicMatch, type QuickRematchInvitation, type RankedInvitation, type RankedProfile, type RankedQueue, type RankedSettlement, type Room } from "./api";
 import {
   beginGoogleFirebaseSignIn,
@@ -696,8 +697,8 @@ export function RankedSettlementDetails({ settlement, profile }: { settlement: R
       {mine.delta !== undefined && <div><span>RP change</span><strong className={mine.delta >= 0 ? "positive" : "negative"}>{mine.delta >= 0 ? "+" : ""}{mine.delta}</strong></div>}
       {mine.ratingAfter !== undefined && <div><span>Rating</span><strong>{mine.ratingBefore === undefined ? mine.ratingAfter : `${mine.ratingBefore} → ${mine.ratingAfter}`}</strong></div>}
       <div><span>Credit</span><strong>{Math.round(settlement.multiplier * 100)}%</strong></div>
-      {mine.placementProgress >= 5 && <div><span>Tier</span><strong>{profile?.tier ?? "Updating"}</strong></div>}
-      <div><span>{mine.placementProgress < 5 ? "Placement" : "Global rank"}</span><strong>{mine.placementProgress < 5 ? `${mine.placementProgress}/5` : profile?.rank ? `#${profile.rank}` : "Updating"}</strong></div>
+      {mine.placementProgress >= PLACEMENT_MATCHES && <div><span>Tier</span><strong>{profile?.tier ?? "Updating"}</strong></div>}
+      <div><span>{mine.placementProgress < PLACEMENT_MATCHES ? "Placement" : "Global rank"}</span><strong>{mine.placementProgress < PLACEMENT_MATCHES ? `${mine.placementProgress}/${PLACEMENT_MATCHES}` : profile?.rank ? `#${profile.rank}` : "Updating"}</strong></div>
     </section>
     <p className="status-note">{creditExplanation(settlement.multiplier)}</p>
     {profile?.rating !== undefined && <p className="next-rival">{nextRivalText(profile.rating)}</p>}
@@ -1114,7 +1115,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { 
     <main className="panel-page ranked-page">
       <button className="back-link" onClick={() => navigate("home")}>← Home</button>
       <div className="ranked-badge">R</div>
-      <div className="panel-heading"><p className="eyebrow">Human opponents · Rated</p><h1>Ranked Duel</h1><p>Sign in with Google to enter matchmaking, complete five placement matches, and earn an official human leaderboard rank.</p></div>
+      <div className="panel-heading"><p className="eyebrow">Human opponents · Rated</p><h1>Ranked Duel</h1><p>Sign in with Google to enter matchmaking, complete two placement matches, and earn an official human leaderboard rank.</p></div>
       {!signedIn && <button className="google-button" disabled={!firebaseConfig || busy} onClick={() => void signInWithGoogle()}><span>G</span> {busy ? "Signing in…" : firebaseConfig ? "Continue with Google" : "Google sign-in is not configured"}</button>}
       {signedIn && !profile?.handle && <section className="room-form ranked-setup"><label>Choose a public handle<input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><button className="primary-cta full" disabled={busy || !/^[A-Za-z0-9_]{3,16}$/.test(handle)} onClick={claim}>Claim handle <span>→</span></button></section>}
       {profile?.handle && !queue && (!inviteIntent || inviteDismissed) && <section className="ranked-console"><p>Signed in as <strong>{profile.handle}</strong></p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Find opponent <span>→</span></button><button className="secondary-cta full challenge-button" disabled={busy} onClick={challenge}>Challenge friend</button>{inviteUrl && <div className="invite-output"><span>Waiting for friend to accept</span>{inviteCode && <p>Challenge code <strong>{inviteCode}</strong></p>}<div className="invite-actions">{inviteCode && <button onClick={() => navigator.clipboard.writeText(inviteCode)}>Copy code</button>}<button onClick={() => navigator.clipboard.writeText(inviteUrl)}>Copy invite link</button></div></div>}<form className="ranked-code-form" onSubmit={(event) => { event.preventDefault(); void acceptChallengeCode(); }}><label>Join a Ranked challenge<input value={challengeCode} onChange={(event) => setChallengeCode(event.target.value.toUpperCase())} placeholder="10-character code" maxLength={12} autoCapitalize="characters" /></label><button className="secondary-cta full" disabled={busy || !challengeCode.trim()}>Join challenge</button></form></section>}
@@ -1125,7 +1126,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { 
       {queue?.state === "readying" && <section className="ranked-console"><p className="eyebrow">Opponent found</p><strong>{queue.competitiveMultiplier === 1 ? "Full competitive credit" : `${Math.round((queue.competitiveMultiplier ?? 0) * 100)}% RP credit`}</strong><p>{creditExplanation(queue.competitiveMultiplier ?? 0)}</p><p>{arenaConnected ? "Opponent identity appears after both players commit." : "Connecting to the arena…"}</p><button className="primary-cta full" disabled={busy || !arenaConnected} onClick={ready}>Ready <span>→</span></button></section>}
       {queue?.state === "cooldown" && <section className="ranked-console"><strong>Ranked cooldown</strong><p>Matchmaking is temporarily unavailable after repeated disconnect incidents.</p></section>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="ranked-facts"><p><strong>1000</strong><span>Starting RP</span></p><p><strong>5</strong><span>Placements</span></p><p><strong>Human</strong><span>Opponents only</span></p></div>
+      <div className="ranked-facts"><p><strong>1000</strong><span>Starting RP</span></p><p><strong>{PLACEMENT_MATCHES}</strong><span>Placements</span></p><p><strong>Human</strong><span>Opponents only</span></p></div>
       {!profile?.handle && <p className="status-note">Your Google email is never shown as your public game identity.</p>}
     </main>
   );
@@ -1194,7 +1195,7 @@ function InfoScreen({ screen, navigate, authRedirectError }: { screen: "leaderbo
       <div className="panel-heading">
         <p className="eyebrow">{screen === "profile" ? "Player profile" : "Human Ranked"}</p>
         <h1>{screen === "profile" ? profile?.handle ?? (signedIn ? "Signed in." : "Playing as guest.") : "Leaderboard"}</h1>
-        <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/5 · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Global standings are shared by every player. Official ranks include eligible human Ranked players only."}</p>
+        <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/${PLACEMENT_MATCHES} · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Global standings are shared by every player. Official ranks include eligible human Ranked players only."}</p>
       </div>
       {infoLoading && <p className="status-note" role="status">Loading {screen === "profile" ? "profile" : "leaderboard"}…</p>}
       {screen === "profile" && !infoLoading && !signedIn && <button className="google-button" disabled={!firebaseConfig || signInBusy} onClick={() => void signInWithGoogle()}><span>G</span> {signInBusy ? "Signing in…" : firebaseConfig ? "Sign in with Google for Ranked" : "Google sign-in is not configured"}</button>}
@@ -1214,7 +1215,7 @@ export function ProfileStats({ profile }: { profile: RankedProfile }) {
   return <div className="profile-stats">
     {profile.rating !== undefined && <p><strong>{profile.rating}</strong><span>RP</span></p>}
     {profile.peakRating !== undefined && <p><strong>{profile.peakRating}</strong><span>Peak RP</span></p>}
-    <p><strong>{profile.placementProgress ?? 0}/5</strong><span>Placement</span></p>
+    <p><strong>{profile.placementProgress ?? 0}/{PLACEMENT_MATCHES}</strong><span>Placement</span></p>
     {profile.rating !== undefined && <>
       <p><strong>{profile.rank ? `#${profile.rank}` : "Updating"}</strong><span>Global rank</span></p>
       <p><strong>{profile.ratedMatchCount}</strong><span>Rated matches</span></p>

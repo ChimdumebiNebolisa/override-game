@@ -64,6 +64,6 @@ Durable Object recovery uses the operator-only `POST /__ops/recovery/bookmark` a
 - Guest and bot games never affect Ranked ratings.
 - Ranked requires two distinct Google accounts and public handles.
 - Pending moves remain private until the fixed server deadline; the server resolves rounds and ratings.
-- The human leaderboard includes players after five qualifying placement matches. Static Rivals are benchmark labels, not human ranks.
+- The human leaderboard includes players after two qualifying placement matches. Static bot standings are shared by everyone and remain separate from human ranks.
 
 Before public launch, complete the staging checks, structured human playtest, device interruption checks, and mobile screen-reader review in the implementation plan.

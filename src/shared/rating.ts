@@ -1,4 +1,4 @@
-const PLACEMENT_MATCHES = 5;
+export const PLACEMENT_MATCHES = 2;
 
 type MatchOutcome = "win" | "loss" | "draw";
 type SettlementKind = "result" | "resignation" | "forfeit" | "no-contest";

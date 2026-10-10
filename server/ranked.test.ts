@@ -53,41 +53,32 @@ function assertHttpError(error: unknown, status: number): void {
   assert.equal(error.status, status);
 }
 
-test('settlement response exposes only the requester and reveals RP on the fifth placement', () => {
+test('settlement response reveals RP after the second qualifying placement match', () => {
   const ratingProfile = (placementProgress: number) => ({
     rating: 1000, peakRating: 1000, placementProgress, ratedMatchCount: placementProgress,
     wins: 0, losses: 0, draws: 0, streak: 0,
   });
-  const beforeFifth = settleRatedMatch({
-    playerA: { id: 'private-a', profile: ratingProfile(3) },
-    playerB: { id: 'private-b', profile: ratingProfile(3) },
+  const beforeSecond = settleRatedMatch({
+    playerA: { id: 'private-a', profile: ratingProfile(1) },
+    playerB: { id: 'private-b', profile: ratingProfile(1) },
     outcomeA: 'win', outcomeB: 'loss', multiplier: 1,
   });
-  assert.deepEqual(publicRankedSettlement(beforeFifth, 'A'), {
+  assert.deepEqual(publicRankedSettlement(beforeSecond, 'A'), {
     multiplier: 1,
-    player: { outcome: 'win', placementProgress: 4 },
+    player: { outcome: 'win', placementProgress: 2, ratingAfter: 1032 },
   });
 
-  const fifth = settleRatedMatch({
-    playerA: { id: 'private-a', profile: ratingProfile(4) },
-    playerB: { id: 'private-b', profile: ratingProfile(4) },
-    outcomeA: 'win', outcomeB: 'loss', multiplier: 1,
-  });
-  assert.deepEqual(publicRankedSettlement(fifth, 'A'), {
-    multiplier: 1,
-    player: { outcome: 'win', placementProgress: 5, ratingAfter: 1032 },
-  });
   const afterPlacement = settleRatedMatch({
-    playerA: { id: 'private-a', profile: ratingProfile(5) },
-    playerB: { id: 'private-b', profile: ratingProfile(5) },
+    playerA: { id: 'private-a', profile: ratingProfile(2) },
+    playerB: { id: 'private-b', profile: ratingProfile(2) },
     outcomeA: 'win', outcomeB: 'loss', multiplier: 1,
   });
   assert.deepEqual(publicRankedSettlement(afterPlacement, 'A'), {
     multiplier: 1,
-    player: { outcome: 'win', placementProgress: 5, delta: 16, ratingBefore: 1000, ratingAfter: 1016 },
+    player: { outcome: 'win', placementProgress: 2, delta: 16, ratingBefore: 1000, ratingAfter: 1016 },
   });
-  assert.equal('playerA' in publicRankedSettlement(fifth, 'B'), false);
-  assert.equal('playerB' in publicRankedSettlement(fifth, 'B'), false);
+  assert.equal('playerA' in publicRankedSettlement(afterPlacement, 'B'), false);
+  assert.equal('playerB' in publicRankedSettlement(afterPlacement, 'B'), false);
 });
 
 function bindBoth(db: ReturnType<typeof openDatabase>, matchId: string, now: number): void {
@@ -246,7 +237,7 @@ test('ready acknowledgement at the deadline commits expiry before rejecting the 
 
 test('D1 placement-ineligible repeat gives both players zero and D6 credit remains frozen', () => {
   const db = makeDb();
-  db.prepare('UPDATE profiles SET placement_progress = 4 WHERE uid = ?').run('a');
+  db.prepare('UPDATE profiles SET placement_progress = 1 WHERE uid = ?').run('a');
   db.prepare(`INSERT INTO matches (id, mode, player_a_key, player_b_key, player_a_name, player_b_name,
       state_json, status, started_at) VALUES ('old-1', 'ranked', 'a', 'b', '', '', '{}', 'finished', ?),
       ('old-2', 'ranked', 'b', 'a', '', '', '{}', 'finished', ?)`)
@@ -390,7 +381,7 @@ test('transient profile write failure retries settlement without voiding the mat
 
 test('no contest creates only the audit ledger and disconnect incidents, with no competitive changes', () => {
   const db = makeDb();
-  db.prepare('UPDATE profiles SET wins = 2, streak = 2, placement_progress = 3 WHERE uid = ?').run('a');
+  db.prepare('UPDATE profiles SET wins = 2, streak = 2, placement_progress = 2 WHERE uid = ?').run('a');
   const shell = createRankedShell(db, 'a', 'b', 700_000);
   bindBoth(db, shell.matchId, 700_100);
   const match = row<{ state_json: string }>(db, 'SELECT state_json FROM matches WHERE id = ?', shell.matchId);
@@ -412,7 +403,7 @@ test('no contest creates only the audit ledger and disconnect incidents, with no
 
 test('settled no-contests do not consume same-pair anti-farming credit', () => {
   const db = makeDb();
-  db.prepare('UPDATE profiles SET placement_progress = 5, rated_match_count = 5 WHERE uid IN (?, ?)').run('a', 'b');
+  db.prepare('UPDATE profiles SET placement_progress = 2, rated_match_count = 2 WHERE uid IN (?, ?)').run('a', 'b');
   const noContests = Array.from({ length: 5 }, (_, index) => `('nc-${index}', 'ranked', 'a', 'b', '', '', '{}', 'finished', ?, 'no-contest')`).join(',');
   db.prepare(`INSERT INTO matches (id, mode, player_a_key, player_b_key, player_a_name, player_b_name,
       state_json, status, started_at, result_type) VALUES ${noContests}`)

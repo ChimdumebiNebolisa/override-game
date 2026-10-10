@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { assessCompetitiveCredit, settleRatedMatch, type RatingProfile, type RatingSettlement } from '../src/shared/rating.js';
+import { assessCompetitiveCredit, PLACEMENT_MATCHES, settleRatedMatch, type RatingProfile, type RatingSettlement } from '../src/shared/rating.js';
 import { createInitialState, type MatchState, type Player } from '../src/shared/rules.js';
 import { HttpError } from './http.js';
 import { initializeHumanPresence } from './matches.js';
@@ -522,9 +522,9 @@ export function publicRankedSettlement(settlement: RatingSettlement, player: Pla
       placementProgress: own.updatedProfile.placementProgress,
     },
   };
-  if (own.updatedProfile.placementProgress >= 5) {
+  if (own.updatedProfile.placementProgress >= PLACEMENT_MATCHES) {
     visible.player.ratingAfter = own.updatedProfile.rating;
-    if (own.profile.placementProgress >= 5) {
+    if (own.profile.placementProgress >= PLACEMENT_MATCHES) {
       visible.player.delta = own.delta;
       visible.player.ratingBefore = own.profile.rating;
     }

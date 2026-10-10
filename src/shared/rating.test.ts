@@ -14,7 +14,7 @@ import {
 const profile = (overrides: Partial<RatingProfile> = {}): RatingProfile => ({
   rating: 1000,
   peakRating: 1000,
-  placementProgress: 5,
+  placementProgress: 2,
   ratedMatchCount: 5,
   wins: 0,
   losses: 0,
@@ -61,7 +61,7 @@ test("window excludes the exact 24-hour boundary, voids, cancellations, and futu
 test("an exhausted placement repeat gives both players zero credit, including established opponent", () => {
   const assessment = assessCompetitiveCredit({
     assessedAt: at,
-    playerA: player("placing", { placementProgress: 4 }),
+    playerA: player("placing", { placementProgress: 1 }),
     playerB: player("established"),
     pairHistory: matches(2),
   });
@@ -69,20 +69,20 @@ test("an exhausted placement repeat gives both players zero credit, including es
   assert.equal(assessment.multiplier, 0);
 
   const settled = settleRatedMatch({
-    playerA: player("placing", { placementProgress: 4 }),
+    playerA: player("placing", { placementProgress: 1 }),
     playerB: player("established"),
     outcomeA: "win",
     outcomeB: "loss",
     multiplier: assessment.multiplier,
   });
-  assert.deepEqual(settled.playerA.updatedProfile, profile({ placementProgress: 4 }));
+  assert.deepEqual(settled.playerA.updatedProfile, profile({ placementProgress: 1 }));
   assert.deepEqual(settled.playerB.updatedProfile, profile());
 });
 
 test("K stages use placement status and the next rated-match number", () => {
-  assert.equal(kFactor(profile({ placementProgress: 4, ratedMatchCount: 99 })), 64);
-  assert.equal(kFactor(profile({ placementProgress: 5, ratedMatchCount: 19 })), 32);
-  assert.equal(kFactor(profile({ placementProgress: 5, ratedMatchCount: 20 })), 24);
+  assert.equal(kFactor(profile({ placementProgress: 1, ratedMatchCount: 99 })), 64);
+  assert.equal(kFactor(profile({ placementProgress: 2, ratedMatchCount: 19 })), 32);
+  assert.equal(kFactor(profile({ placementProgress: 2, ratedMatchCount: 20 })), 24);
 });
 
 test("signed exact halves round away from zero", () => {
@@ -94,8 +94,8 @@ test("signed exact halves round away from zero", () => {
 
 test("Elo applies each player's K and floors RP at zero", () => {
   const settled = settleRatedMatch({
-    playerA: player("a", { rating: 1000, placementProgress: 4, ratedMatchCount: 4 }),
-    playerB: player("b", { rating: 1000, placementProgress: 5, ratedMatchCount: 20 }),
+    playerA: player("a", { rating: 1000, placementProgress: 1, ratedMatchCount: 1 }),
+    playerB: player("b", { rating: 1000, placementProgress: 2, ratedMatchCount: 20 }),
     outcomeA: "win",
     outcomeB: "loss",
     multiplier: 1,
@@ -121,14 +121,14 @@ test("Elo applies each player's K and floors RP at zero", () => {
 
 test("full-credit stats and placement update; reduced credit changes RP only", () => {
   const placement = settleRatedMatch({
-    playerA: player("a", { placementProgress: 4, ratedMatchCount: 4, streak: 2 }),
+    playerA: player("a", { placementProgress: 1, ratedMatchCount: 1, streak: 2 }),
     playerB: player("b"),
     outcomeA: "win",
     outcomeB: "loss",
     multiplier: 1,
   });
-  assert.equal(placement.playerA.updatedProfile.placementProgress, 5);
-  assert.equal(placement.playerA.updatedProfile.ratedMatchCount, 5);
+  assert.equal(placement.playerA.updatedProfile.placementProgress, 2);
+  assert.equal(placement.playerA.updatedProfile.ratedMatchCount, 2);
   assert.equal(placement.playerA.updatedProfile.wins, 1);
   assert.equal(placement.playerA.updatedProfile.streak, 3);
   assert.equal(placement.playerB.updatedProfile.losses, 1);
@@ -187,10 +187,10 @@ test("a qualifying draw resets streak and no-contest changes no competitive fiel
 test("official ranks hide unplaced players and share rank on ties", () => {
   assert.deepEqual(
     officialRanks([
-      { id: "a", rating: 1400, placementProgress: 5 },
-      { id: "b", rating: 1400, placementProgress: 5 },
-      { id: "c", rating: 1380, placementProgress: 5 },
-      { id: "d", rating: 2000, placementProgress: 4 },
+      { id: "a", rating: 1400, placementProgress: 2 },
+      { id: "b", rating: 1400, placementProgress: 2 },
+      { id: "c", rating: 1380, placementProgress: 2 },
+      { id: "d", rating: 2000, placementProgress: 1 },
     ]),
     [
       { id: "a", rank: 1 },
