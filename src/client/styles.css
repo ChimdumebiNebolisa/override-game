@@ -483,6 +483,7 @@ dialog:not([open]) { display:none; }
 .leaderboard-list li > strong { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font:700 18px var(--display); }
 .leaderboard-list li > span { display:flex; flex-direction:column; gap:2px; color:var(--muted); font-size:12px; }
 .leaderboard-list li > span small { font:9px/1.35 var(--mono); }
+.leaderboard-list li > span .leaderboard-record, .leaderboard-list li > span .leaderboard-streak { overflow-wrap:anywhere; }
 .leaderboard-list li > em { text-align:end; font:700 12px var(--mono); font-style:normal; }
 .bot-tag { padding:3px 5px; border:1px solid var(--line); color:var(--muted); font:700 8px/1 var(--mono); letter-spacing:.08em; }
 .rivals-panel { margin:34px 0 24px; padding-block-start:25px; border-block-start:4px solid var(--amber); }

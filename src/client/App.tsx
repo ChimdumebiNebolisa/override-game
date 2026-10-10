@@ -1236,7 +1236,10 @@ export function ProfileStats({ profile }: { profile: RankedProfile }) {
 export function LeaderboardList({ entries }: { entries: LeaderboardEntry[] }) {
   return <ol className="leaderboard-list">{entries.map((entry) => <li key={entry.handle}>
     <b>#{entry.rank}</b><strong>{entry.handle}{entry.bot && <small className="bot-tag">BOT</small>}</strong>
-    <span>{entry.tier}<small>W-L-D {entry.wins}-{entry.losses}-{entry.draws} · Streak {entry.streak}</small></span>
+    <span>{entry.tier}
+      <small className="leaderboard-record">{entry.wins} {entry.wins === 1 ? "win" : "wins"} · {entry.losses} {entry.losses === 1 ? "loss" : "losses"} · {entry.draws} {entry.draws === 1 ? "draw" : "draws"}</small>
+      <small className="leaderboard-streak">{entry.streak > 0 ? `${entry.streak} ${entry.streak === 1 ? "win" : "wins"} in a row` : "No current win streak"}</small>
+    </span>
     <em>{entry.rating} RP</em>
   </li>)}</ol>;
 }

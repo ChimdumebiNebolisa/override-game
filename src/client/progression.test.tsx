@@ -42,8 +42,14 @@ describe('Ranked progression displays', () => {
     const board = renderToStaticMarkup(<LeaderboardList entries={[{
       handle: 'Alpha', rating: 1400, rank: 1, tier: 'Platinum', wins: 7, losses: 2, draws: 1, streak: 3,
     }]} />);
-    expect(board).toContain('W-L-D 7-2-1');
-    expect(board).toContain('Streak 3');
+    expect(board).toContain('7 wins · 2 losses · 1 draw');
+    expect(board).toContain('3 wins in a row');
+
+    const withoutStreak = renderToStaticMarkup(<LeaderboardList entries={[{
+      handle: 'Rookie', rating: 900, rank: 2, tier: 'Bronze', wins: 1, losses: 0, draws: 0, streak: 0,
+    }]} />);
+    expect(withoutStreak).toContain('1 win · 0 losses · 0 draws');
+    expect(withoutStreak).toContain('No current win streak');
 
     const anonymous = renderToStaticMarkup(<RivalsPanel />);
     expect(anonymous).toContain('Shared practice standings');
