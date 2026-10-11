@@ -113,7 +113,7 @@ button:not(:disabled) { cursor: pointer; }
 .demo-cell:active:not(:disabled), .demo-commit:active:not(:disabled) { filter: brightness(1.15); }
 .demo-cell.move-you { border: 3px solid var(--white); }
 .demo-cell.move-rival { border: 3px solid var(--amber); }
-.demo-marker { position: absolute; inset-block-end: 3px; inset-inline: 2px; padding-block: 2px; background: var(--ink); color: var(--white); font: 9px var(--mono); text-align: center; }
+.demo-marker { position: absolute; inset-block-start: 3px; inset-inline: 2px; padding-block: 2px; background: var(--ink); color: var(--white); font: 9px var(--mono); text-align: center; }
 .demo-feedback { min-block-size: 68px; display: grid; align-content: center; gap: 5px; }
 .demo-feedback p { margin: 0; font-size: 11px; line-height: 1.35; }
 .demo-feedback .demo-secret { color: var(--demo-muted); font-size: 10px; }
@@ -245,6 +245,8 @@ button:not(:disabled) { cursor: pointer; }
 .board-cell.owner-A, .board-cell.owner-B { color: white; font-size: clamp(18px, 3vw, 32px); }
 .board-cell.owner-A { background: var(--blue); border-color: var(--blue-dark); }
 .board-cell.owner-B { background-color: var(--coral); border-color: oklch(0.5322 0.1633 29.5); background-image: repeating-linear-gradient(-45deg, transparent 0 8px, color-mix(in oklch, var(--white) 11%, transparent) 8px 10px); }
+.board-cell .board-piece { position: absolute; inset-block-start: 20%; inset-inline: 0; line-height: 1; }
+.board-cell .territory-label, .demo-cell .territory-label { position: absolute; inset-inline: 2px; inset-block-end: 2px; z-index: 2; padding: 2px 1px; background: var(--ink); color: var(--white); font: 700 9px/1 var(--mono); text-align: center; letter-spacing: 0; }
 .board-cell.legal { border: 3px solid var(--amber); }
 .board-cell.legal::before { content:"+"; position:absolute; inset-block-start: 3px; inset-inline-end: 6px; color: var(--ink); font: 800 13px var(--mono); z-index: 2; }
 @media (hover: hover) and (pointer: fine) {

@@ -70,6 +70,7 @@ export function HeroDemo() {
             return <button key={index} className={`demo-cell ${owner} ${legal ? "legal" : ""} ${isSelected ? "selected" : ""} ${mine ? "move-you" : ""} ${theirs ? "move-rival" : ""} ${changed ? "changed" : ""}`}
               disabled={!legal} aria-label={`${coordinate(index)}, ${ownerText}${legal ? `, choose ${action.label}` : ""}`}
               aria-pressed={isSelected} onClick={() => dispatch({ type: "target", target: index })}>
+              {owner !== "neutral" && <span className="territory-label" aria-hidden="true">{owner === "A" ? "You" : "Rival"}</span>}
               <span className="demo-node" aria-hidden="true" />
               {(mine || theirs) && <span className="demo-marker" aria-hidden="true">{mine && theirs ? "Both" : mine ? "You" : "Rival"}</span>}
             </button>;

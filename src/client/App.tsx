@@ -535,7 +535,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       <div className="game-layout">
         <section className="board-panel" aria-labelledby="board-title">
           <div className="board-label"><span id="board-title">Territory grid</span><span>{locked ? "MOVE LOCKED" : reveal && !canAct ? "ROUND REVEALED" : "CHOOSE A TARGET"}</span></div>
-          <GameBoard board={match.board} legal={legal} target={target} secondTarget={selectedTargets[1] ?? null} disabled={!canAct}
+          <GameBoard board={match.board} legal={legal} target={target} secondTarget={selectedTargets[1] ?? null} disabled={!canAct} you={me}
             onTarget={(cell) => setSelectedTargets((current) => actionType === "surge" ? toggleSurgeTarget(current, cell) : [cell])} />
           <div className="energy-bar" aria-label={`Your Energy ${match.energy[me]} of 3. Rival Energy ${match.energy[rival]} of 3.`}>
             <span>ENERGY</span>

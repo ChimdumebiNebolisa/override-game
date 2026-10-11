@@ -65,6 +65,7 @@ describe("hero selection, commitment and replay", () => {
     expect(html).toContain("Rival’s move is locked and hidden.");
     expect(html).not.toContain("Rival: Expand");
     expect(html).not.toContain("demo-marker");
+    expect((html.match(/class="territory-label"/g) ?? [])).toHaveLength(20);
     expect(html).toContain('role="status"');
     expect(demoReducer(createDemoState(), { type: "commit" })).toEqual(createDemoState());
   });
