@@ -4,13 +4,37 @@ import { DEMO_HISTORY } from "./hero-demo";
 import { GUIDE_LESSONS, guideScenario, resolveGuideScenario, SURGE_EXAMPLES } from "./guide-scenarios";
 
 describe("How to play lesson positions", () => {
+  it("offers suggestions without restricting engine-valid targets or Surge target counts", () => {
+    const scenarios = [
+      ...GUIDE_LESSONS.map((lesson) => guideScenario(lesson.id)),
+      ...SURGE_EXAMPLES.map((example) => guideScenario("surge", example.id)),
+      ...(["standard-win", "sudden-lead", "draw"] as const).map((example) => guideScenario("finish", "single", example)),
+    ];
+    for (const scenario of scenarios) {
+      expect(scenario).not.toHaveProperty("allowedTargets");
+      expect(scenario).not.toHaveProperty("targetCount");
+    }
+    const single = guideScenario("surge", "single");
+    expect(single).toHaveProperty("suggestedTargets", [12]);
+    expect(legalTargets(single.start, "A", "surge")).toEqual([1, 5, 6, 7, 10, 12, 13, 15, 16, 17, 21]);
+  });
+
+  it("allows turning Surge paths but rejects direct diagonal Expand and Override", () => {
+    const surge = guideScenario("surge").start;
+    expect(validateAction(surge, "A", { type: "surge", target: 7 })).toEqual({ ok: true });
+    expect(validateAction(surge, "A", { type: "expand", target: 7 })).toEqual({ ok: false, reason: "not-adjacent" });
+    const override = guideScenario("override").start;
+    expect(validateAction(override, "A", { type: "override", target: 7 })).toEqual({ ok: false, reason: "not-adjacent" });
+    expect(validateAction(surge, "A", { type: "surge", target: 13, secondTarget: 14 })).toEqual({ ok: false, reason: "out-of-range" });
+    expect(validateAction(surge, "A", { type: "surge", target: 12, secondTarget: 12 })).toEqual({ ok: false, reason: "invalid-target" });
+  });
   it("starts every lesson from an active position and uses legal fixed rival moves", () => {
     for (const lesson of GUIDE_LESSONS) {
       const scenario = guideScenario(lesson.id);
       expect(scenario.start.status, lesson.id).toBe("active");
       expect(validateAction(scenario.start, "B", scenario.rivalMove), lesson.id).toEqual({ ok: true });
       if (lesson.action === "pass") continue;
-      for (const target of scenario.allowedTargets ?? legalTargets(scenario.start, "A", lesson.action)) {
+      for (const target of scenario.suggestedTargets ?? []) {
         expect(legalTargets(scenario.start, "A", lesson.action), `${lesson.id} target ${target}`).toContain(target);
       }
     }

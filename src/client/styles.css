@@ -336,11 +336,9 @@ dialog:not([open]) { display:none; }
 /* Keep the active board and its controls visible together on desktop. */
 @media (min-width: 901px) and (min-height: 640px) {
   .game-page {
-    block-size: 100dvh;
-    min-block-size: 0;
+    min-block-size: 100dvh;
     display: flex;
     flex-direction: column;
-    overflow: clip;
     padding-block: 8px 12px;
   }
 
@@ -613,7 +611,7 @@ dialog:not([open]) { display:none; }
 .lesson-copy progress { inline-size:100%; block-size:4px; margin:10px 0 12px; accent-color:var(--blue); }
 .lesson-copy h3 { margin:0 0 7px; font:800 clamp(22px,3vw,30px)/1 var(--display); text-transform:uppercase; }
 .lesson-instruction { min-block-size:40px; margin:0; color:var(--ink); font-size:13px; line-height:1.45; }
-.lesson-hint { margin:8px 0; color:var(--muted); font-size:10px; line-height:1.45; }
+.lesson-hint { margin:8px 0; color:var(--muted); font-size:12px; line-height:1.5; }
 .lesson-controls { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
 .lesson-controls button { min-inline-size:100px; min-block-size:47px; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:2px; padding:6px 10px; border:1px solid var(--line); background:white; font-weight:750; }
 .lesson-controls button.selected { border-color:var(--blue); box-shadow:inset 0 -3px var(--blue); }
@@ -638,6 +636,10 @@ dialog:not([open]) { display:none; }
 .lesson-board-panel .board-grid { max-inline-size:620px; margin-inline:auto; }
 .lesson-board-panel .board-cell { cursor:pointer; }
 .lesson-board-panel .board-cell:disabled { cursor:default; }
+.board-cell .suggested-target { position:absolute; inset-block-start:3px; inset-inline-start:3px; z-index:3; display:grid; place-items:center; inline-size:18px; block-size:18px; border-radius:50%; background:var(--ink); color:var(--white); font:700 10px/1 var(--mono); }
+.lesson-board-panel .distance-example { flex-wrap:wrap; margin-block-start:12px; }
+.lesson-board-panel .distance-example p { flex:1 1 auto; min-inline-size:min(100%,180px); font-size:12px; line-height:1.5; }
+.lesson-instruction + .lesson-instruction { margin-block-start:8px; }
 .lesson-board-status { margin-block-start:9px; padding:8px 10px; background:var(--ink); color:white; }
 .lesson-board-status strong { color:var(--amber); }
 .guide-practice-note { color:var(--muted); font-size:10px; line-height:1.45; }
@@ -654,8 +656,8 @@ dialog:not([open]) { display:none; }
 .rule-action p { margin:0; }
 .distance-example { display:flex; align-items:center; gap:14px; }
 .distance-example p { max-inline-size:230px; }
-.distance-grid { inline-size:min(45vw,180px); aspect-ratio:1; display:grid; grid-template-columns:repeat(5,1fr); gap:3px; }
-.distance-grid span { display:grid; place-items:center; background:white; color:var(--muted); font:700 11px var(--mono); }
+.distance-grid { inline-size:min(45vw,180px); flex:none; aspect-ratio:1; display:grid; grid-template-columns:repeat(5,1fr); gap:3px; }
+.distance-grid span { display:grid; place-items:center; background:white; color:var(--muted); font:700 9px var(--mono); }
 .distance-grid .source { background:var(--blue); color:white; }
 .distance-grid .step { outline:2px solid var(--amber); outline-offset:-2px; }
 .distance-grid .target { background:color-mix(in oklch,var(--amber) 35%,white); color:var(--ink); }

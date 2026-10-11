@@ -162,9 +162,10 @@ async function smoke() {
 
   const matchResult = await request('/api/bot-matches', {
     method: 'POST', cookie: hostCookie,
-    body: { mode: 'practice', difficulty: 'easy', displayName: 'Runtime host', creationKey: crypto.randomUUID() },
+    body: { mode: 'practice', timed: true, difficulty: 'easy', displayName: 'Runtime host', creationKey: crypto.randomUUID() },
   });
   if (matchResult.response.status !== 201) throw new Error(`Match creation failed: ${JSON.stringify(matchResult.data)}`);
+  if (!matchResult.data.match.timed || matchResult.data.match.deadline === null) throw new Error('Alarm fixture requires a timed match');
   const matchId = matchResult.data.match.id;
   hostSocket.close();
   guestSocket.close();

@@ -363,7 +363,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       setActionType("expand");
       setSelectedTargets([]);
     }
-    if (acknowledgeRound !== undefined) acknowledgedRoundRef.current = acknowledgeRound;
+    if (acknowledgeRound !== undefined) acknowledgedRoundRef.current = Math.max(acknowledgedRoundRef.current, acknowledgeRound);
     setMatch(snapshot.state);
     setServerStatus(snapshot.status);
     setReveal(snapshot.status === "finished" || (snapshot.lastResult && snapshot.lastResult.state.round > acknowledgedRoundRef.current)
@@ -449,9 +449,6 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       const acknowledgedRound = reveal?.state.round;
       focusRoundAfterReveal.current = snapshot.status !== "finished";
       if (!receiveSnapshot(snapshot, acknowledgedRound)) return;
-      setActionType("expand");
-      setSelectedTargets([]);
-      setTimeLeft(Math.max(0, Math.ceil(((snapshot.deadline ?? snapshot.serverNow) - snapshot.serverNow) / 1000)));
     } catch (reason) {
       setNetworkError(reason instanceof Error ? reason.message : "The next round could not be loaded.");
     }

@@ -2,11 +2,12 @@ import type { MatchState, Player } from "../shared/rules";
 
 const coordinate = (index: number) => `${String.fromCharCode(65 + (index % 5))}${Math.floor(index / 5) + 1}`;
 
-export function GameBoard({ board, legal, target, secondTarget = null, disabled, onTarget, label = "5 by 5 territory grid", you = "A" }: {
+export function GameBoard({ board, legal, target, secondTarget = null, suggested = [], disabled, onTarget, label = "5 by 5 territory grid", you = "A" }: {
   board: MatchState["board"];
   legal: number[];
   target: number | null;
   secondTarget?: number | null;
+  suggested?: readonly number[];
   disabled: boolean;
   onTarget: (target: number) => void;
   label?: string;
@@ -19,6 +20,7 @@ export function GameBoard({ board, legal, target, secondTarget = null, disabled,
       {board.map((cell, index) => {
         const row = Math.floor(index / 5);
         const isLegal = legal.includes(index);
+        const suggestion = isLegal ? suggested.indexOf(index) + 1 : 0;
         const ownership = cell === "neutral" ? "open" : cell === you ? "your territory" : "rival territory";
         return (
           <span className="cell-slot" key={index}>
@@ -27,9 +29,10 @@ export function GameBoard({ board, legal, target, secondTarget = null, disabled,
               className={`board-cell owner-${cell} ${isLegal ? "legal" : ""} ${target === index || secondTarget === index ? "targeted" : ""}`}
               onClick={() => isLegal && onTarget(index)}
               disabled={disabled || !isLegal}
-              aria-label={`${coordinate(index)}, ${ownership}${isLegal ? ", legal target" : ""}`}
+              aria-label={`${coordinate(index)}, ${ownership}${isLegal ? ", legal target" : ""}${suggestion ? `, suggested step ${suggestion}` : ""}`}
               aria-pressed={target === index || secondTarget === index}
             >
+              {suggestion > 0 && <span className="suggested-target" aria-hidden="true">{suggestion}</span>}
               {cell !== "neutral" && <span className="territory-label" aria-hidden="true">{cell === you ? "You" : "Rival"}</span>}
               {cell === "A" ? <span className="board-piece" aria-hidden="true">●</span> : cell === "B" ? <span className="board-piece" aria-hidden="true">◆</span> : <span className="node-dot" />}
             </button>

@@ -1,5 +1,5 @@
 import { useRef, useState, type KeyboardEvent } from "react";
-import { actionTargets, legalTargets, score, validateAction, type Action } from "../shared/rules";
+import { actionTargets, legalTargets, score, validateAction, type Action, type Board } from "../shared/rules";
 import { GameBoard } from "./GameBoard";
 import { GUIDE_LESSONS, guideScenario, resolveGuideScenario, SURGE_EXAMPLES, type FinishExampleId, type GuideLessonId, type SurgeExampleId } from "./guide-scenarios";
 import { toggleSurgeTarget } from "./move-selection";
@@ -14,22 +14,40 @@ function moveLabel(action: Action) {
   return action.type === "pass" ? "Pass" : `${ACTION_LABEL[action.type]} ${actionTargets(action).map(XY).join(" + ")}`;
 }
 
-function summary(action: Action, result: ReturnType<typeof resolveGuideScenario>): string {
+export function guideSummary(action: Action, result: ReturnType<typeof resolveGuideScenario>): string {
   const outcome = result.outcomes.A;
   if (action.type === "surge") {
     const captured = outcome.cells?.filter((cell) => cell.success).length ?? 0;
     const stolen = outcome.cells?.filter((cell) => cell.reason === "stolen").length ?? 0;
     const collided = outcome.cells?.filter((cell) => cell.reason === "collision").length ?? 0;
-    return `Surge captured ${captured} ${captured === 1 ? "space" : "spaces"}${stolen ? `, stealing ${stolen} from the rival` : ""}${collided ? `; ${collided} target collided` : ""}. It spent 3 Energy.`;
+    const cells = outcome.cells?.map((cell) => `${XY(cell.target)} ${cell.reason === "collision" ? "stays empty because both players claimed it" : cell.reason === "stolen" ? "was stolen from the rival" : "was empty and is now yours"}`).join(". ");
+    return `${cells}. Surge gained you ${captured} ${captured === 1 ? "space" : "spaces"}${stolen ? ` (+${stolen} from stealing; rival −${stolen})` : ""}. It spent ${outcome.energySpent} Energy total${collided ? "; collisions do not refund Energy or stop other targets" : ""}.`;
   }
-  if (outcome.reason === "ambush-hit") return `Your Ambush blocked Expand and earned ${outcome.energyEarned} Energy.`;
-  if (outcome.reason === "ambush-missed") return "Your Ambush missed. The rival’s Expand claimed its target.";
-  if (outcome.reason === "collision") return "Both Expands chose C3. It stays open, so neither score changes.";
-  if (action.type === "override") return "You took one neighboring enemy space for 2 Energy.";
-  if (action.type === "expand") return "You claimed an open neighboring space. Your territory score increased by one.";
-  return result.state.phase === "sudden-death"
-    ? "The score is tied after round 12. Sudden death starts; a lead ends the match."
-    : `The match is tied at ${result.score.A}–${result.score.B}.`;
+  if (outcome.reason === "ambush-hit") return `You predicted ${actionTargets(action).map(XY).join("")}, the rival’s exact Expand target. Their Expand failed. You earned ${outcome.energyEarned} Energy${outcome.energyEarned === 0 ? " because Energy was already at the cap of 3" : " (capped at 3)"}. Ambush does not capture the target; it stays empty.`;
+  if (outcome.reason === "ambush-missed") return `Your prediction ${actionTargets(action).map(XY).join("")} missed the rival’s move (${moveLabel(result.outcomes.B.action)}). You earned 0 Energy and captured no space. Ambush blocks only an Expand to the exact target.`;
+  if (outcome.reason === "collision") return `Both players claimed ${actionTargets(action).map(XY).join("")}. It stays empty, so neither gains territory or earns Energy.`;
+  if (action.type === "override") return `${XY(action.target)} was rival-owned and one step up, down, left, or right from your territory. Override stole it for ${outcome.energySpent} Energy: you +1 territory, rival −1.`;
+  if (action.type === "expand") return `${XY(action.target)} was empty and one step up, down, left, or right from your territory. Expand claimed it: you +1 territory.`;
+  return "You passed: your move took no territory and spent no Energy.";
+}
+
+function targetExplanation(board: Board, type: Action["type"], target: number) {
+  const owner = type === "ambush" ? "B" : "A";
+  const sources = board.flatMap((cell, index) => cell === owner ? [index] : []);
+  const distance = (source: number) => Math.abs(source % 5 - target % 5) + Math.abs(Math.floor(source / 5) - Math.floor(target / 5));
+  const source = sources.sort((a, b) => distance(a) - distance(b))[0];
+  const path = [source];
+  const directions: string[] = [];
+  let current = source;
+  while (current % 5 !== target % 5) {
+    const right = current % 5 < target % 5;
+    current += right ? 1 : -1; path.push(current); directions.push(right ? "right" : "left");
+  }
+  while (Math.floor(current / 5) !== Math.floor(target / 5)) {
+    const down = current < target;
+    current += down ? 5 : -5; path.push(current); directions.push(down ? "down" : "up");
+  }
+  return `${path.map(XY).join(" → ")}: ${directions.map((direction) => `${direction} once`).join(" and ")} from ${owner === "B" ? "rival" : "your"} pre-round territory. ${XY(target)} is ${board[target] === "neutral" ? "empty" : "rival-owned"}.`;
 }
 
 export function HowTo({ navigate, onStartPractice }: {
@@ -96,7 +114,7 @@ export function HowTo({ navigate, onStartPractice }: {
   );
 }
 
-function LessonExperience({ lesson, lessonIndex, surgeExample, finishExample, onBack, onNext }: {
+export function LessonExperience({ lesson, lessonIndex, surgeExample, finishExample, onBack, onNext }: {
   lesson: GuideLessonId;
   lessonIndex: number;
   surgeExample: SurgeExampleId;
@@ -112,24 +130,27 @@ function LessonExperience({ lesson, lessonIndex, surgeExample, finishExample, on
   const [phase, setPhase] = useState<"choose" | "locked" | "revealed">("choose");
   const [result, setResult] = useState<ReturnType<typeof resolveGuideScenario> | null>(null);
   const resolving = useRef(false);
-  const available = actionType === "pass" ? [] : legalTargets(scenario.start, "A", actionType)
-    .filter((target) => !scenario.allowedTargets || scenario.allowedTargets.includes(target));
+  const available = actionType === "pass" ? [] : legalTargets(scenario.start, "A", actionType);
   const move: Action | null = actionType === "pass" ? { type: "pass" }
     : targets.length === 0 ? null
       : actionType === "surge" && targets.length === 2 ? { type: "surge", target: targets[0], secondTarget: targets[1] }
         : { type: actionType, target: targets[0] };
-  const enoughTargets = !scenario.targetCount || targets.length === scenario.targetCount;
-  const canLock = phase === "choose" && Boolean(move) && enoughTargets && validateAction(scenario.start, "A", move!).ok;
+  const canLock = phase === "choose" && Boolean(move) && validateAction(scenario.start, "A", move!).ok;
   const totals = score(result?.state.board ?? scenario.start.board);
   const howMany = lesson === "surge" ? SURGE_EXAMPLES.findIndex((item) => item.id === surgeExample) + 1 : null;
-  const instruction = lesson === "expand" ? "Choose one glowing open space to claim."
+  const rule = actionType === "expand" ? "Expand takes one empty space directly above, below, left, or right of a space you own."
+    : actionType === "ambush" ? "Predict the empty space your rival will Expand into. If you pick their exact target, their Expand fails and you gain 1 Energy."
+      : actionType === "surge" ? "Surge takes one or two distinct spaces, empty or rival-owned, one or two steps up, down, left, or right from territory you owned at the start of the round. It costs 3 Energy total for either one or two targets."
+        : actionType === "override" ? "Override steals one rival-owned space one step up, down, left, or right from your territory. It costs 2 Energy: you +1 territory, rival −1."
+          : "Pass skips your move without spending Energy or taking territory.";
+  const instruction = lesson === "expand" ? "Choose one highlighted space."
     : lesson === "collision" ? "C3 is the only open space. Lock your Expand to reveal what happens."
-      : lesson === "ambush" ? "Choose C3 as your prediction. Lock to see whether it hits; retry with another legal target to compare."
-        : lesson === "surge" ? surgeExample === "single" ? "Take one space, then lock Surge without choosing a second."
-          : surgeExample === "mixed" ? "Take the open A3 and the rival’s D3. Both must be in range before reveal."
-            : surgeExample === "collision" ? "Choose A3 and C3. Lock to reveal both moves; one collision can’t stop the other capture."
-              : "Take both rival spaces, C3 and D3, with one 3-Energy move."
-          : lesson === "override" ? "C3 touches you orthogonally. C2 is diagonal and stays illegal; A3 is empty."
+      : lesson === "ambush" ? "Choose an empty space directly beside rival territory, then lock and reveal. Try the suggestion first, then retry another legal prediction."
+        : lesson === "surge" ? surgeExample === "single" ? "Choose one legal space, then choose a second if you want. Both stay selected until you lock your move. One or two targets cost the same 3 Energy total."
+          : surgeExample === "mixed" ? "Try one empty space and one rival space, or any other legal pair."
+            : surgeExample === "collision" ? "Try the suggested pair to see a partial collision, then retry other legal targets."
+              : "Try both suggested rival spaces to steal two: you +2 territory, rival −2. You can also choose other legal targets."
+          : lesson === "override" ? "Choose C3 to steal it. It is directly right of B3. Diagonal C2 and empty A3 cannot be stolen with Override."
             : finishExample === "standard-win" ? "It’s round 12. Expand an open space to take the lead and win on territory."
               : finishExample === "sudden-lead" ? "The score tied after round 12. Expand to take a lead; sudden death ends immediately."
                 : "The score is tied entering round 15. Pass; if no one leads after this extra round, it’s a draw.";
@@ -157,7 +178,13 @@ function LessonExperience({ lesson, lessonIndex, surgeExample, finishExample, on
         <div className="lesson-progress"><span>Lesson {lessonIndex + 1} of {GUIDE_LESSONS.length}</span><span>{scenario.note}</span></div>
         <progress aria-label="Lesson progress" value={lessonIndex + 1} max={GUIDE_LESSONS.length} />
         <h3 id="lesson-title">{title}</h3>
+        <p className="lesson-instruction">{rule}</p>
+        {lesson === "collision" && <p className="lesson-hint">Both moves resolve together from the board at the start of the round. If both players claim the same empty space, it stays empty.</p>}
+        {lesson === "ambush" && <p className="lesson-hint">An Expand collision leaves the space empty and earns no Energy. A successful Ambush also leaves it empty, but earns 1 Energy unless you already have 3. If the rival chooses elsewhere, Expand can still capture your target; Ambush captures nothing. At 3 Energy, a successful Ambush and an Expand collision can have the same immediate result.</p>}
+        {lesson === "surge" && surgeExample === "collision" && <p className="lesson-hint">If both players claim one empty target, that target stays empty. Your other Surge target still resolves, and all 3 Energy are spent.</p>}
+        {lesson === "finish" && <p className="lesson-hint">After round 12, the higher territory score wins. A tie starts up to three sudden-death rounds: a lead ends the match, or three tied rounds make a draw.</p>}
         <p className="lesson-instruction">{instruction}</p>
+        {scenario.suggestedTargets && <p className="lesson-hint"><strong>Suggested sequence:</strong> {scenario.suggestedTargets.map((target, index) => `${index + 1}. ${XY(target)}`).join(" → ")} → Lock move → Reveal both moves. Numbered badges are suggestions; all highlighted spaces are legal. You may choose any legal alternative{actionType === "surge" ? ", including one or two targets" : ""}. Use Reset example to start again.</p>}
         <p className="lesson-hint">{actionType === "pass" ? "Pass needs no target. Lock it, then reveal." : `Select the action, choose ${actionType === "surge" ? "one or two" : "a legal"} target${actionType === "surge" ? "s" : ""}, lock your move, then reveal.`}</p>
         <div className="lesson-controls" role="group" aria-label="Choose an action">
           {allowedActions.map((type) => <button key={type} type="button" className={actionType === type ? "selected" : ""}
@@ -165,24 +192,26 @@ function LessonExperience({ lesson, lessonIndex, surgeExample, finishExample, on
             <span>{ACTION_LABEL[type]}</span><small>{cost(type) ? `${cost(type)} Energy` : "Free"}</small>
           </button>)}
         </div>
-        {lesson === "surge" && <p className="lesson-hint">Each target must be within two grid steps of territory you owned before reveal; the first capture never extends the second’s range. Tap a selected space to remove it; a third choice replaces the second.</p>}
-        {lesson === "ambush" && <p className="lesson-hint">Ambush blocks Expand only. It never stops Surge or Override.</p>}
-        <div className="lesson-selection"><span>{actionType === "surge" ? `Selected · ${targets.length}/2` : "Your choice"}</span><strong>{move ? moveLabel(move) : `${ACTION_LABEL[actionType]} · choose a glowing space`}</strong></div>
+        {lesson === "surge" && <p className="lesson-hint">Select a second legal space before locking to include both targets in your Surge. Each target must be within two grid steps of territory you owned at the start of the round; the first capture never extends the second’s range. Tap a selected space to remove it; a third choice replaces the second.</p>}
+        {lesson === "ambush" && <p className="lesson-hint">The target must be one step up, down, left, or right from rival territory. A miss earns no Energy. Ambush does not capture the target and blocks Expand only; it never stops Surge or Override. A hit earns 1 Energy, capped at 3.</p>}
+        {available.length > 0 && <p className="lesson-hint">Legal targets: {available.map(XY).join(", ")}. {actionType === "ambush" ? "Each is empty and directly beside rival territory." : actionType === "expand" ? "Each is empty and directly beside your territory." : actionType === "override" ? "Each is rival-owned and directly beside your territory." : "Each is empty or rival-owned and within two steps of your pre-round territory."}</p>}
+        <div className="lesson-selection"><span>{actionType === "surge" ? `Selected · ${targets.length}/2` : "Your choice"}</span><strong>{move ? moveLabel(move) : `${ACTION_LABEL[actionType]} · choose a legal target`}</strong></div>
+        {targets.map((target) => <p className="lesson-hint" key={target}>{targetExplanation(scenario.start.board, actionType, target)}</p>)}
         {phase === "choose" && <button className="primary-cta lesson-lock" disabled={!canLock} onClick={() => setPhase("locked")}>Lock move <span>→</span></button>}
         {phase === "locked" && <div className="lesson-lock-state"><p role="status">Your move is locked. The rival’s move is still hidden.</p><button className="primary-cta lesson-lock" onClick={() => { if (resolving.current) return; resolving.current = true; const resolved = resolveGuideScenario(scenario, move!); setResult(resolved); setPhase("revealed"); }}>Reveal both moves <span>→</span></button></div>}
         {result && <div className="lesson-outcome" role="status" aria-live="polite" aria-atomic="true">
           <strong>{moveLabel(result.outcomes.A.action)} / {rivalDescription}</strong>
-          <span>{lesson === "finish" ? result.state.winner
+          <span>{guideSummary(result.outcomes.A.action, result)}</span>
+          {lesson === "finish" && <span>{result.state.winner
             ? `${result.state.winner === "A" ? "You win" : "Rival wins"} on territory${finishExample === "standard-win" ? " after round 12" : " after taking a sudden-death lead"}.`
-            : "Scores stayed tied through all three sudden-death rounds. The match is a draw."
-            : summary(result.outcomes.A.action, result)}</span>
+            : "Scores stayed tied through all three sudden-death rounds. The match is a draw."}</span>}
           <span>Score · You {result.score.A} — Rival {result.score.B}</span>
-          {lesson === "ambush" && result.outcomes.A.reason === "ambush-hit" && <span>Energy · {scenario.start.energy.A} → {result.state.energy.A} / 3</span>}
+          <span>Energy · {scenario.start.energy.A} → {result.state.energy.A} / 3</span>
           {lesson === "finish" && <span>{result.state.endingReason === "standard" ? "The higher territory score after 12 rounds wins." : result.state.endingReason === "sudden-death" ? result.state.winner ? "A lead ends sudden death immediately." : "The score stayed tied for all 3 extra rounds." : "The score remains tied after round 12; sudden death begins."}</span>}
         </div>}
         <div className="lesson-navigation">
           <button className="secondary-cta" disabled={lessonIndex === 0} onClick={onBack}>Back</button>
-          <button className="secondary-cta" onClick={restart}>Retry</button>
+          <button className="secondary-cta" onClick={restart}>{phase === "revealed" ? "Retry" : "Reset example"}</button>
           <button className="primary-cta" disabled={!result} onClick={onNext}>{lessonIndex === GUIDE_LESSONS.length - 1 ? "Begin Practice" : "Next"}<span>→</span></button>
         </div>
       </div>
@@ -190,10 +219,12 @@ function LessonExperience({ lesson, lessonIndex, surgeExample, finishExample, on
         <div className="lesson-board-heading"><span>{scenario.note}</span><span>{phase === "choose" ? "YOUR TURN" : phase === "locked" ? "LOCKED" : "REVEALED"}</span></div>
         <div className="lesson-scores"><span><i className="guide-piece you" aria-hidden="true">●</i>You <strong>{totals.A}</strong></span><span>Territory</span><span><strong>{totals.B}</strong>Rival <i className="guide-piece rival" aria-hidden="true">◆</i></span></div>
         <GameBoard board={result?.state.board ?? scenario.start.board} legal={phase === "choose" ? available : []}
+          suggested={scenario.suggestedTargets}
           target={targets[0] ?? null} secondTarget={targets[1] ?? null} disabled={phase !== "choose"}
-          label={`Lesson board · you Player A blue, rival Player B coral · ${phase === "revealed" ? "moves revealed" : "legal spaces highlighted"}`} onTarget={chooseTarget} />
+          label={`Lesson board · you Player A blue, rival Player B coral · ${phase === "revealed" ? "moves revealed" : phase === "locked" ? "move locked" : "legal spaces highlighted; numbered suggestions optional"}`} onTarget={chooseTarget} />
         <div className="lesson-board-status"><span>Your Energy</span><strong>{result?.state.energy.A ?? scenario.start.energy.A} / 3</strong><span>Rival move</span><strong>{rivalDescription}</strong></div>
-        {lesson === "override" && <p className="lesson-hint">Only C3 glows: it holds rival territory and touches your B3. Diagonal C2 and empty A3 cannot be stolen.</p>}
+        {lesson === "surge" && <DistanceDiagram action="surge" />}
+        {lesson === "override" && <DistanceDiagram action="override" />}
       </div>
     </section>
   );
@@ -210,15 +241,18 @@ function RulesReference() {
       <section className="rules-section"><h3>Goal and board</h3><p>Finish with more spaces than your rival. The blue circle is Player A; the coral diamond is Player B. The guide keeps you as Player A so the pieces stay familiar.</p><p>The 5×5 board starts with four spaces for each player. Open spaces are still neutral and can be claimed.</p></section>
       <section className="rules-section"><h3>Round sequence</h3><ol><li>Choose an action and its target or targets.</li><li>Lock your move. Your rival cannot see it.</li><li>Both moves reveal together, then the board and score update.</li></ol><p>In the real match, every action uses your actual side. Ranked and friend matches keep their timed rounds.</p></section>
       <section className="rules-section"><h3>Actions</h3>
-        <div className="rule-action"><h4>Expand · free</h4><p>Claim one open space beside your territory. Ambush can block it if the rival predicts the same target.</p></div>
-        <div className="rule-action"><h4>Ambush · free</h4><p>Name one open space beside the rival’s territory. It blocks their Expand only when they choose that exact space. A hit earns 1 Energy, up to 3. A miss does not earn Energy.</p></div>
-        <div className="rule-action"><h4>Surge · 3 Energy</h4><p>Claim or steal one or two distinct spaces. Each target must be one or two orthogonal steps from territory you owned before this round resolved. Targets can be open, rival-owned, or one of each. Capturing one does not extend the other’s range.</p></div>
-        <div className="rule-action"><h4>Override · 2 Energy</h4><p>Steal one rival-owned space directly above, below, left, or right of your territory. Empty spaces and diagonal rivals are illegal.</p></div>
+        <div className="rule-action"><h4>Expand · free</h4><p>Expand takes one empty space directly above, below, left, or right of a space you own. Ambush can block it if the rival predicts the same target.</p></div>
+        <div className="rule-action"><h4>Ambush · free</h4><p>Predict the empty space your rival will Expand into. The target must be one step up, down, left, or right from rival territory. If you pick their exact target, their Expand fails and you gain 1 Energy, capped at 3. A miss earns no Energy. Ambush does not capture the target and never blocks Surge or Override.</p></div>
+        <p>An Expand collision leaves the space empty and earns no Energy. A successful Ambush also leaves it empty, but earns 1 Energy unless you already have 3. If the rival chooses elsewhere, Expand can still capture your target; Ambush captures nothing. At 3 Energy, a successful Ambush and an Expand collision can have the same immediate result.</p>
+        <div className="rule-action"><h4>Surge · 3 Energy total</h4><p>Claim or steal one or two distinct spaces for 3 Energy total. Select one space, then optionally select a second before locking; both are part of the same move. Tap a selected space to remove it; a third choice replaces the second. Each target must be one or two steps up, down, left, or right from territory you owned before the round. Targets can be empty, rival-owned, or one of each. Capturing one does not extend the other’s range. Stealing one gives you +1 territory and your rival −1; stealing two gives you +2 and your rival −2.</p></div>
+        <div className="rule-action"><h4>Override · 2 Energy</h4><p>Steal one rival-owned space directly above, below, left, or right of your territory. Empty spaces are illegal. A diagonal position alone does not qualify; the target must be directly beside at least one space you own. Stealing gives you +1 territory and your rival −1.</p></div>
         <div className="rule-action"><h4>Pass · free</h4><p>Give up your move this round. No space or Energy is needed.</p></div>
       </section>
       <section className="rules-section"><h3>Energy</h3><p>You start with 0 Energy. A successful Ambush adds 1, up to the cap of 3. Surge spends 3 once, whether you choose one space or two. Override spends 2. A collision does not refund Energy.</p></section>
-      <section className="rules-section"><h3>Grid distance</h3><p>Count steps up, down, left, and right from space you owned before reveal. Diagonal movement has no shortcut. From B3, C3 is one step away and D3 is two.</p>
-        <DistanceDiagram />
+      <section className="rules-section"><h3>Grid distance</h3><p>Count steps up, down, left, or right from territory owned before the round. A path may turn: a diagonally positioned space can be two steps away. Both moves resolve together from this pre-round board.</p>
+        <DistanceDiagram action="expand" />
+        <DistanceDiagram action="override" />
+        <DistanceDiagram action="surge" />
       </section>
       <section className="rules-section"><h3>Move conflicts</h3><p>If both players claim the same open space with Expand or Surge, neither captures that space. Other targets in a two-target Surge still resolve. A hit by Ambush blocks only Expand, never Surge or Override. Actions resolve from the same pre-round board.</p>
         <div className="rule-examples"><figure><figcaption>Before · You Surge A3 + D3</figcaption><GameBoard board={facing.board} legal={[]} target={null} disabled label="Surge example before · you Player A at B3, rival Player B at D3" onTarget={() => undefined} /></figure>
@@ -229,15 +263,19 @@ function RulesReference() {
         </div>
       </section>
       <section className="rules-section"><h3>Match endings</h3><p>After 12 rounds, the higher territory score wins. A tie starts sudden death. A new lead ends the match; if scores stay tied for all 3 sudden-death rounds, the match is a draw.</p>
-        <details><summary>Other endings</summary><p>The board can end early when no open spaces or legal Surge or Override captures remain. An abandoned timed match can also end by forfeit. A finished score counts spaces owned by each player.</p></details>
+        <details><summary>Other endings</summary><p>The board can end early when there are no empty spaces and neither player has a legal Surge or Override capture. An abandoned timed match can also end by forfeit. A finished score counts spaces owned by each player.</p></details>
       </section>
     </article>
   );
 }
 
-function DistanceDiagram() {
-  const steps: Record<number, string> = { 11: "You", 12: "1", 13: "2" };
-  return <div className="distance-example"><div className="distance-grid" role="img" aria-label="From your territory at B3, C3 is one step and D3 is two steps away.">
-    {Array.from({ length: 25 }, (_, index) => <span key={index} className={index === 11 ? "source" : index === 12 ? "step" : index === 13 ? "target" : ""}>{steps[index] ?? ""}</span>)}
-  </div><p>B3 → C3 → D3 is two orthogonal steps. A Surge can reach D3 from B3.</p></div>;
+function DistanceDiagram({ action }: { action: "expand" | "override" | "surge" }) {
+  const surge = action === "surge";
+  const caption = surge ? "Surge can reach C2 because moving right once and up once takes two steps. B3 → C3 → C2 turns; B3 → C3 → D3 goes straight. Both are in range."
+    : action === "expand" ? "Expand: B3 → C3 is one step right to an empty space. Diagonal C2 cannot be taken directly from B3."
+      : "Override: B3 → C3 is one step right to a rival-owned space. Diagonal C2 cannot be stolen directly from B3.";
+  const steps: Record<number, string> = { 11: "B3 ●", 12: action === "override" ? "C3 ◆" : surge ? "C3 ↑" : "C3 →", 7: surge ? "C2 ②" : "C2 ×", 13: surge ? "D3 ②" : "" };
+  return <div className="distance-example"><div className="distance-grid" role="img" aria-label={caption}>
+    {Array.from({ length: 25 }, (_, index) => <span key={index} className={index === 11 ? "source" : index === 12 ? "step" : surge && (index === 7 || index === 13) ? "target" : ""}>{steps[index] ?? ""}</span>)}
+  </div><p>{caption}</p></div>;
 }

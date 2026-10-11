@@ -15,7 +15,7 @@ export type SurgeExampleId = "single" | "mixed" | "collision" | "steal";
 export type FinishExampleId = "standard-win" | "sudden-lead" | "draw";
 
 export const SURGE_EXAMPLES: ReadonlyArray<{ id: SurgeExampleId; title: string }> = [
-  { id: "single", title: "Take one" },
+  { id: "single", title: "One or two" },
   { id: "mixed", title: "Open + rival" },
   { id: "collision", title: "Partial collision" },
   { id: "steal", title: "Steal two" },
@@ -24,8 +24,7 @@ export const SURGE_EXAMPLES: ReadonlyArray<{ id: SurgeExampleId; title: string }
 export interface GuideScenario {
   start: MatchState;
   rivalMove: Action;
-  allowedTargets?: readonly number[];
-  targetCount?: number;
+  suggestedTargets?: readonly number[];
   note: string;
 }
 
@@ -52,29 +51,29 @@ export function guideScenario(
   finishExample: FinishExampleId = "standard-win",
 ): GuideScenario {
   if (lesson === "expand") {
-    return { start: createInitialState(), rivalMove: { type: "expand", target: 22 }, note: "Staged opening · 0 starting Energy" };
+    return { start: createInitialState(), rivalMove: { type: "expand", target: 22 }, suggestedTargets: [2], note: "Staged opening · 0 starting Energy" };
   }
   if (lesson === "collision") {
     const cells = Array<string>(25).fill("A");
     cells[7] = "B"; cells[12] = ".";
     return { start: position([0, 1, 2, 3, 4].map((row) => cells.slice(row * 5, row * 5 + 5).join(""))),
-      rivalMove: { type: "expand", target: 12 }, allowedTargets: [12], note: "Staged example · C3 is the only open space" };
+      rivalMove: { type: "expand", target: 12 }, suggestedTargets: [12], note: "Staged example · C3 is the only open space" };
   }
   if (lesson === "ambush") {
-    return { start: position(facing), rivalMove: { type: "expand", target: 12 }, note: "Staged example · Rival’s move stays hidden until reveal" };
+    return { start: position(facing), rivalMove: { type: "expand", target: 12 }, suggestedTargets: [12], note: "Staged example · Rival’s move stays hidden until reveal" };
   }
   if (lesson === "surge") {
     const start = surgeExample === "steal"
       ? position([".....", ".....", ".ABB.", ".....", "....."], 3)
       : position(facing, 3);
-    if (surgeExample === "single") return { start, rivalMove: { type: "pass" }, allowedTargets: [12], targetCount: 1, note: "Staged example · You start with 3 Energy" };
-    if (surgeExample === "mixed") return { start, rivalMove: { type: "pass" }, allowedTargets: [10, 13], targetCount: 2, note: "Staged example · You start with 3 Energy" };
-    if (surgeExample === "collision") return { start, rivalMove: { type: "expand", target: 12 }, allowedTargets: [10, 12], targetCount: 2, note: "Staged example · You start with 3 Energy" };
-    return { start, rivalMove: { type: "pass" }, allowedTargets: [12, 13], targetCount: 2, note: "Staged example · You start with 3 Energy" };
+    if (surgeExample === "single") return { start, rivalMove: { type: "pass" }, suggestedTargets: [12], note: "Staged example · You start with 3 Energy" };
+    if (surgeExample === "mixed") return { start, rivalMove: { type: "pass" }, suggestedTargets: [10, 13], note: "Staged example · You start with 3 Energy" };
+    if (surgeExample === "collision") return { start, rivalMove: { type: "expand", target: 12 }, suggestedTargets: [10, 12], note: "Staged example · You start with 3 Energy" };
+    return { start, rivalMove: { type: "pass" }, suggestedTargets: [12, 13], note: "Staged example · You start with 3 Energy" };
   }
   if (lesson === "override") {
     return { start: position([".....", "..B..", ".AB..", ".....", "....."], 2), rivalMove: { type: "pass" },
-      allowedTargets: [12], targetCount: 1, note: "Staged example · You start with 2 Energy" };
+      suggestedTargets: [12], note: "Staged example · You start with 2 Energy" };
   }
   const tiedAfter12State = tiedAfterRound12();
   if (finishExample === "standard-win") {
@@ -86,7 +85,7 @@ export function guideScenario(
   }
   const start = resolveRound(tiedAfter12State, { A: { type: "pass" }, B: { type: "pass" } }).state;
   const beforeFinalExtraRound = resolveRound(start, { A: { type: "pass" }, B: { type: "pass" } }).state;
-  return { start: beforeFinalExtraRound, rivalMove: { type: "pass" }, allowedTargets: [], targetCount: 0,
+  return { start: beforeFinalExtraRound, rivalMove: { type: "pass" },
     note: "Staged tie · Round 15 of legal play" };
 }
 
