@@ -44,6 +44,9 @@ export interface ActionOutcome {
 }
 
 export interface RoundResult {
+  round?: number;
+  beforeScore?: Readonly<Record<Player, number>>;
+  beforeEnergy?: Readonly<Record<Player, number>>;
   state: MatchState;
   outcomes: Readonly<Record<Player, ActionOutcome>>;
   score: Readonly<Record<Player, number>>;
@@ -245,5 +248,5 @@ export function resolveRound(
     ...next, round: state.round, status: "finished",
     winner: forfeitPlayer ? opponent(forfeitPlayer) : leader, endingReason,
   };
-  return { state: next, outcomes, score: totals };
+  return { state: next, outcomes, score: totals, round: state.round, beforeScore: score(state.board), beforeEnergy: { ...state.energy } };
 }

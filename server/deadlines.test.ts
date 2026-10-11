@@ -20,6 +20,7 @@ describe('deadline failure recovery', () => {
     const guest: Session = { ...host, id: `${label}-guest` };
     const room = createQuickRoom(db, host, 'Host');
     const id = joinQuickRoom(db, guest, { code: room.code }, 'Guest').matchId!;
+    db.prepare('UPDATE matches SET deadline = 105000 WHERE id = ?').run(id);
     markConnected(db, id, 'A');
     markConnected(db, id, 'B');
     return { id, host, guest, roomId: room.id };

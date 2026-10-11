@@ -66,6 +66,9 @@ export const initialSchema = `    CREATE TABLE IF NOT EXISTS sessions (
       player_b_name TEXT NOT NULL,
       state_json TEXT NOT NULL,
       decision_duration_ms INTEGER NOT NULL DEFAULT 5000,
+      policy_version INTEGER NOT NULL DEFAULT 1,
+      reveal_duration_ms INTEGER NOT NULL DEFAULT 1000,
+      progression TEXT NOT NULL DEFAULT 'automatic',
       timed INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL,
       deadline INTEGER,
@@ -92,6 +95,13 @@ export const initialSchema = `    CREATE TABLE IF NOT EXISTS sessions (
       FOREIGN KEY (room_id) REFERENCES rooms(id)
     );
     CREATE INDEX IF NOT EXISTS matches_due ON matches(status, deadline, transition_at);
+    CREATE TABLE IF NOT EXISTS round_acknowledgements (
+      match_id TEXT NOT NULL REFERENCES matches(id),
+      round INTEGER NOT NULL,
+      acknowledgement_key TEXT NOT NULL,
+      PRIMARY KEY (match_id, round),
+      UNIQUE (match_id, acknowledgement_key)
+    );
     CREATE TABLE IF NOT EXISTS pending_actions (
       match_id TEXT NOT NULL,
       round INTEGER NOT NULL,

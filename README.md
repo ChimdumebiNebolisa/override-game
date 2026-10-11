@@ -1,6 +1,6 @@
 # OVERRIDE
 
-A 5×5 simultaneous-turn territory game with Practice, Quick Duel, friend rooms, and human Ranked matches. Product requirements live in [OVERRIDE_PRD_v0.3.docx](OVERRIDE_PRD_v0.3.docx); delivery decisions and acceptance gates are in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+A 5×5 simultaneous-turn territory game with Practice, Quick Duel, friend rooms, and human Ranked matches. The frozen prototype requirements live in [OVERRIDE_PRD_v0.3.docx](OVERRIDE_PRD_v0.3.docx), with current learning and timing requirements in [LEARNING_PACING_REQUIREMENTS.md](LEARNING_PACING_REQUIREMENTS.md); delivery decisions and acceptance gates are in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 The production architecture uses Cloudflare Workers and a SQLite-backed Durable Object. The Node server remains available for local development and tests. Staging uses a separate Worker and Durable Object namespace on the existing Workers Paid account; usage beyond included allowances may incur charges, and this setup does not guarantee zero spend.
 
@@ -34,6 +34,8 @@ Enable Google in Firebase Authentication. Add each deployed host to Firebase Aut
 
 `wrangler.jsonc` builds the client, serves the SPA assets, and routes API and WebSocket requests to the Durable Object. The `staging` environment deploys as `override-game-staging`, uses its own `GAME` namespace, and reuses the Firebase project. The current staging URL, version, and smoke results are recorded in [STAGING_VERIFICATION.md](STAGING_VERIFICATION.md).
 
+This learning/pacing change has not been deployed. After separate production authorization, run `npm run deploy:worker` from the reviewed commit; this builds and deploys the default `override-game` configuration. Follow [LEARNING_PACING_VERIFICATION.md](LEARNING_PACING_VERIFICATION.md) for asset checks and real-production verification.
+
 Deploy staging with `npx wrangler deploy --env staging`. Use separate secrets for each environment; staging uses `INVITATION_ENCRYPTION_KEY` and `RECOVERY_CONTROL_TOKEN`. For example:
 
 ```powershell
@@ -63,7 +65,9 @@ Durable Object recovery uses the operator-only `POST /__ops/recovery/bookmark` a
 
 - Guest and bot games never affect Ranked ratings.
 - Ranked requires two distinct Google accounts and public handles.
-- Pending moves remain private until the fixed server deadline; the server resolves rounds and ratings.
+- Pending contents remain secret until resolution. New human matches reveal when both players lock or the shared ten-second deadline expires; early reveal communicates that both committed, without a rival-ready indicator. Migrated matches retain their fixed-deadline policy.
+- New bot games resolve on accepted Lock or a timed deadline, then persist in review until the human chooses Next round. Default Practice and explicit learning are untimed; timed Practice and Quick bot use ten seconds. New human matches have a shared three-second reveal.
+- Home and How to play offer untimed learning inside a normal Easy Practice game. The separate staged lessons have been removed; the static rules reference remains available.
 - The global leaderboard combines players after two qualifying placement matches with shared practice bots. BOT tags identify bots, and all entries use the same RP order; bot practice does not change human records.
 
 Before public launch, complete the staging checks, structured human playtest, device interruption checks, and mobile screen-reader review in the implementation plan.

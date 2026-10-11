@@ -1,0 +1,124 @@
+[
+  {
+    "name": "welcome-dismiss-and-return",
+    "passed": true,
+    "focusTrap": true,
+    "focusRestoration": true,
+    "firstClickOnly": true
+  },
+  {
+    "name": "welcome-jump-to-duel",
+    "passed": true
+  },
+  {
+    "name": "welcome-learn-and-rules-entry",
+    "passed": true
+  },
+  {
+    "name": "normal-learning-core-1440",
+    "passed": true,
+    "matchId": "fb8a7c0d-a56f-48b3-a5d2-71ac2edfee83",
+    "legal": [
+      2,
+      7,
+      10,
+      11
+    ],
+    "manualPassCompletion": true,
+    "resumeReview": true,
+    "keyboardBoard": true,
+    "touchBoard": false
+  },
+  {
+    "name": "normal-learning-core-720",
+    "passed": true,
+    "matchId": "ba0a9ebb-b04d-444d-b75a-cf84cbe450f2",
+    "legal": [
+      13,
+      14,
+      17,
+      22
+    ],
+    "manualPassCompletion": true,
+    "resumeReview": true,
+    "keyboardBoard": true,
+    "touchBoard": false
+  },
+  {
+    "name": "normal-learning-core-390",
+    "passed": true,
+    "matchId": "1be347c4-3cd7-4b45-a6f3-0226238c5ec8",
+    "legal": [
+      2,
+      7,
+      10,
+      11
+    ],
+    "manualPassCompletion": true,
+    "resumeReview": true,
+    "keyboardBoard": false,
+    "touchBoard": true
+  },
+  {
+    "name": "normal-learning-core-320",
+    "passed": true,
+    "matchId": "7c35a0a7-0329-4796-930b-2f68ec4dc8a3",
+    "legal": [
+      2,
+      7,
+      10,
+      11
+    ],
+    "manualPassCompletion": true,
+    "resumeReview": true,
+    "keyboardBoard": true,
+    "touchBoard": false
+  },
+  {
+    "name": "accepted-lock-and-next-lost-responses",
+    "passed": true
+  },
+  {
+    "name": "skip-and-replay-learning",
+    "passed": true
+  },
+  {
+    "name": "storage-unavailable-learning",
+    "passed": true
+  },
+  {
+    "name": "complete-bot-match",
+    "passed": true
+  },
+  {
+    "name": "timed-practice",
+    "passed": true
+  },
+  {
+    "name": "quick-bot",
+    "passed": true
+  },
+  {
+    "name": "rules-reference-and-zoom",
+    "passed": true
+  },
+  {
+    "name": "two-independent-human-clients",
+    "passed": true,
+    "sharedDeadline": 1791756705774,
+    "revealDuration": 2942,
+    "reloadLock": true
+  },
+  {
+    "name": "terminal-fixture-12",
+    "passed": true
+  },
+  {
+    "name": "terminal-fixture-13",
+    "passed": true
+  },
+  {
+    "name": "terminal-fixture-15",
+    "passed": true
+  }
+]

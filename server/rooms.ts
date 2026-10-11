@@ -1,3 +1,4 @@
+import { NEW_MATCH_POLICY } from './match-policy.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { createInitialState } from '../src/shared/rules';
@@ -148,12 +149,12 @@ export function joinQuickRoom(db: Database.Database, session: Session, lookup: {
     const matchId = randomUUID();
     const state = createInitialState();
     db.prepare(`INSERT INTO matches
-      (id, room_id, mode, player_a_key, player_b_key, player_a_name, player_b_name, state_json, status, deadline, started_at, revision)
-      VALUES (?, ?, 'quick', ?, ?, ?, ?, ?, 'decision', ?, ?, 1)`)
+      (id, room_id, mode, player_a_key, player_b_key, player_a_name, player_b_name, state_json, policy_version, decision_duration_ms, reveal_duration_ms, status, deadline, started_at, revision)
+      VALUES (?, ?, 'quick', ?, ?, ?, ?, ?, ?, ?, ?, 'decision', ?, ?, 1)`)
       .run(matchId, row.id,
         hostIsA ? row.host_key : session.id, hostIsA ? session.id : row.host_key,
         hostIsA ? row.host_name : name, hostIsA ? name : row.host_name,
-        JSON.stringify(state), now + 5_000, now);
+        JSON.stringify(state), NEW_MATCH_POLICY.version, NEW_MATCH_POLICY.decisionMs, NEW_MATCH_POLICY.revealMs, now + NEW_MATCH_POLICY.decisionMs, now);
     initializeHumanPresence(db, matchId, now);
     db.prepare("UPDATE rooms SET match_id = ?, status = 'active' WHERE id = ?").run(matchId, row.id);
     const updated = getRoom(db, row.id);

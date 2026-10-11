@@ -461,7 +461,7 @@ export class GameDurableObject {
     const daily = this.database.prepare('SELECT request_units, active_ms, rows_read, rows_written FROM worker_daily_usage WHERE day = ?')
       .get(day) as { request_units: number; active_ms: number; rows_read: number; rows_written: number } | undefined;
     const live = this.database.prepare(`SELECT
-      (SELECT COUNT(*) FROM matches WHERE status IN ('readying', 'decision', 'transition', 'grace')) +
+      (SELECT COUNT(*) FROM matches WHERE status IN ('readying', 'decision', 'transition', 'review', 'grace')) +
       (SELECT COUNT(*) FROM rooms WHERE status = 'open') +
       (SELECT COUNT(*) FROM ranked_ownership WHERE state = 'searching') +
       (SELECT COUNT(*) FROM ranked_invitations WHERE status = 'open') +

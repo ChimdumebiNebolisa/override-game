@@ -7,6 +7,7 @@ import { existingSession, type Session } from './http';
 import { openDatabase } from './db';
 import { invitationTokenHash, revealInvitationSecret, sessionTokenId } from './invitation-secrets';
 import { createQuickRoom } from './rooms';
+import { createInitialState } from '../src/shared/rules';
 
 const directories: string[] = [];
 const legacySessionToken = 'a'.repeat(64);
@@ -52,6 +53,32 @@ function columns(db: Database.Database, table: string): string[] {
 }
 
 describe('database schema migration', () => {
+  it('adds legacy policy defaults without rewriting existing phases, boards, deadlines or pending moves', () => {
+    const path = oldDatabasePath();
+    const old = new Database(path);
+    const state = JSON.stringify(createInitialState());
+    for (const status of ['decision', 'transition', 'grace', 'readying']) {
+      old.prepare(`INSERT INTO matches (id, mode, player_a_key, player_b_key, player_a_name,
+        player_b_name, state_json, status, deadline, transition_at) VALUES (?, 'quick', 'a', 'b', 'A', 'B', ?, ?, 105000, 101000)`)
+        .run(status, state, status);
+    }
+    old.exec(`CREATE TABLE pending_actions (match_id TEXT NOT NULL, round INTEGER NOT NULL,
+      player TEXT NOT NULL, action_json TEXT NOT NULL, locked_at INTEGER NOT NULL, PRIMARY KEY (match_id, round, player));
+      INSERT INTO pending_actions VALUES ('decision', 1, 'A', '{"type":"pass"}', 100001);`);
+    old.close();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const db = openDatabase(path);
+      for (const status of ['decision', 'transition', 'grace', 'readying']) {
+        expect(db.prepare(`SELECT state_json, status, deadline, transition_at, policy_version,
+          decision_duration_ms, reveal_duration_ms, progression FROM matches WHERE id = ?`).get(status))
+          .toEqual({ state_json: state, status, deadline: 105000, transition_at: 101000,
+            policy_version: 1, decision_duration_ms: 5000, reveal_duration_ms: 1000, progression: 'automatic' });
+      }
+      expect(db.prepare('SELECT action_json, locked_at FROM pending_actions').get())
+        .toEqual({ action_json: '{"type":"pass"}', locked_at: 100001 });
+      db.close();
+    }
+  });
   it('upgrades an old file once and preserves existing data', () => {
     const path = oldDatabasePath();
     const old = new Database(path);
@@ -82,12 +109,12 @@ describe('database schema migration', () => {
     expect(legacyRoom.invite_token_hash).toBe(invitationTokenHash('legacy-room-token'));
     expect(revealInvitationSecret(legacyRoom.invite_token)).toBe('legacy-room-token');
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
-      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 },
+      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 },
     ]);
     db.close();
 
     db = openDatabase(path);
-    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 6 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 7 });
     expect(db.prepare('SELECT id FROM sessions').get()).toEqual({ id: sessionTokenId(legacySessionToken) });
     db.close();
   });
@@ -113,7 +140,7 @@ describe('database schema migration', () => {
     expect(columns(recovered, 'ranked_invitations')).toContain('code');
     expect(columns(recovered, 'matches')).toContain('timed');
     expect(recovered.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
-      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 },
+      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 },
     ]);
     recovered.close();
   });

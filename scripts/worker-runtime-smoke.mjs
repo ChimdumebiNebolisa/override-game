@@ -167,6 +167,19 @@ async function smoke() {
   if (matchResult.response.status !== 201) throw new Error(`Match creation failed: ${JSON.stringify(matchResult.data)}`);
   if (!matchResult.data.match.timed || matchResult.data.match.deadline === null) throw new Error('Alarm fixture requires a timed match');
   const matchId = matchResult.data.match.id;
+  if (matchResult.data.match.policyVersion !== 2 || matchResult.data.match.deadline - matchResult.data.match.serverNow > 10_000) {
+    throw new Error('Timed bot did not persist the new policy');
+  }
+  const learning = await request('/api/bot-matches', {
+    method: 'POST', cookie: hostCookie,
+    body: { mode: 'practice', timed: false, difficulty: 'easy', displayName: 'Runtime learner', creationKey: crypto.randomUUID() },
+  });
+  if (learning.response.status !== 201) throw new Error('Learning fixture creation failed');
+  const learningId = learning.data.match.id;
+  const locked = await request(`/api/matches/${learningId}/actions`, {
+    method: 'POST', cookie: hostCookie, body: { action: { type: 'pass' }, round: 1, revision: learning.data.match.revision },
+  });
+  if (locked.data.match?.status !== 'review' || locked.data.match.deadline !== null) throw new Error('Human bot lock did not resolve into persisted review');
   hostSocket.close();
   guestSocket.close();
 
@@ -188,6 +201,21 @@ async function smoke() {
     await delay(500);
   }
   if (resumedMatch?.state.round < 2) throw new Error('Worker alarm did not advance the persisted match deadline');
+  if (resumedMatch.status !== 'review' || resumedMatch.deadline !== null) throw new Error('Deadline bot result did not pause in review');
+  const reviewed = await request(`/api/matches/${learningId}`, { cookie: hostCookie });
+  if (reviewed.data.match?.status !== 'review' || reviewed.data.match.state.round !== 2 || reviewed.data.match.afkMisses !== 0) {
+    throw new Error('Untimed review failed to survive Worker restart and idle time');
+  }
+  const acknowledgement = { round: 1, revision: reviewed.data.match.revision, acknowledgementKey: crypto.randomUUID() };
+  const next = await request(`/api/matches/${learningId}/next`, { method: 'POST', cookie: hostCookie, body: acknowledgement });
+  if (next.data.match?.status !== 'decision' || next.data.match.deadline !== null) throw new Error('Authenticated Next failed');
+  const duplicate = await request(`/api/matches/${learningId}/next`, { method: 'POST', cookie: hostCookie, body: acknowledgement });
+  if (duplicate.data.match?.revision !== next.data.match.revision) throw new Error('Duplicate Next changed state');
+  await request(`/api/matches/${learningId}/actions`, { method: 'POST', cookie: hostCookie, body: { action: { type: 'pass' }, round: 2, revision: next.data.match.revision } });
+  const laterDuplicate = await request(`/api/matches/${learningId}/next`, { method: 'POST', cookie: hostCookie, body: acknowledgement });
+  if (laterDuplicate.data.match?.status !== 'review' || laterDuplicate.data.match.state.round !== 3) throw new Error('Old acknowledgement advanced a later review');
+  const stranger = await request(`/api/matches/${learningId}/next`, { method: 'POST', cookie: guestCookie, body: { ...acknowledgement, round: 2 } });
+  if (stranger.response.status !== 404) throw new Error('Next allowed another participant');
   await stopWorker();
   const files = readdirSync(persistPath, { recursive: true }).filter((name) => String(name).endsWith('.sqlite'));
   let usage;
@@ -202,7 +230,7 @@ async function smoke() {
   }
   if (!usage || usage.reads <= 0 || usage.writes <= 0) throw new Error('Worker SQL usage ledger did not record real-runtime reads and writes');
   console.log(`Worker SQL ledger: ${usage.reads} estimated reads, ${usage.writes} estimated writes (includes safety multipliers).`);
-  console.log('Wrangler Worker runtime smoke passed: session restart, SQLite migrations, alarm deadline, room sockets, Quick rematch/retry/side swap, usage ledger, and match persistence.');
+  console.log('Wrangler Worker runtime smoke passed: session restart, migrations, alarm deadline, room sockets, Quick rematch/retry/side swap, SQL ledger, persistent bot review, authorized Next, and retries across later reviews.');
 }
 
 try {

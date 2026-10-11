@@ -21,6 +21,7 @@ export function pruneExpiredGuestData(db: Database.Database, now = Date.now()) {
       for (const { id } of leaves) {
         db.prepare('DELETE FROM pending_actions WHERE match_id = ?').run(id);
         db.prepare('DELETE FROM round_results WHERE match_id = ?').run(id);
+        db.prepare('DELETE FROM round_acknowledgements WHERE match_id = ?').run(id);
         db.prepare('DELETE FROM presence_events WHERE match_id = ?').run(id);
         matches += db.prepare('DELETE FROM matches WHERE id = ?').run(id).changes;
       }

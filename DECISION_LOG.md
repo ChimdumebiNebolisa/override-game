@@ -23,3 +23,11 @@ The implementation plan remains the detailed source for exact behavior, mileston
 **Decision:** Keep Firebase on Spark. Use the existing Workers Paid account for the isolated staging Worker and its SQLite-backed Durable Object. The owner selected Paid rather than Free for staging. Do not provision Render, add paid products, or configure a custom domain.
 **Reason:** Workers Paid is the selected staging tier. Usage beyond included allowances may be billed; budget alerts and application guardrails do not impose an account-level spend cap. This staging decision does not guarantee zero spend. Production cost requirements remain subject to review before launch.
 **Implementation consequence:** Worker assets/API, SQLite storage, WebSockets, alarms, and Firebase public-certificate token verification are implemented. The isolated staging environment is deployed. Complete Firebase/Google allowlisting, real-account journeys, cloud recovery, device checks, and the human playtest before public release.
+
+## D13 — Learning and round pacing
+
+**Recorded:** 2026-10-11
+**Authorization:** The owner directed implementation and isolated verification in the supplied learning/pacing brief. Production deployment was not authorized.
+**Decision:** Teach the core loop inside an ordinary Easy untimed Practice match; use one optional first-start welcome and a static rules reference. New timed decisions last ten seconds. Bot results wait for participant-authorized Next; human rounds resolve after both accepted locks or the deadline and share a three-second reveal. Early human reveal communicates both commitments; pending contents and rival readiness remain private.
+**Compatibility:** Migration 7 preserves all existing records as policy 1 (five-second decisions, one-second automatic transition and fixed-deadline human resolution). Fresh records, restarts and rematches explicitly select policy 2. Existing Ranked shells activate using their stored policy.
+**Evidence limit:** Ten seconds and contextual coaching are product choices to evaluate in a future novice test, not proven improvements. See [requirements](LEARNING_PACING_REQUIREMENTS.md) and [verification/handoff](LEARNING_PACING_VERIFICATION.md).

@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { initializeDatabase } from './schema-initializer.js';
 import { WorkerSqliteDatabase, asDomainDatabase } from './worker-sqlite.js';
 import { createQuickRoom, joinQuickRoom } from './rooms.js';
-import { resignMatch } from './matches.js';
+import { createBotMatch, resignMatch } from './matches.js';
 import { requestQuickRematch, acceptQuickRematch } from './quick-rematch.js';
 import { createRankedChallenge, acceptRankedChallenge, requestRankedRematch, acceptRankedRematch } from './invitations.js';
 import { acknowledgeRankedReady, markRankedReadyPresence, settleRankedMatch } from './ranked.js';
@@ -123,5 +123,33 @@ it('initializes the current Worker schema without unsupported table_info pragmas
 
   expect(() => initializeDatabase(db, { workerBaseline: true })).not.toThrow();
   expect(adapter.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-    .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }]);
+    .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }]);
+});
+
+it('migrates pre-policy Worker records without changing their phases or pending commitments', () => {
+  process.env.NODE_ENV = 'test';
+  process.env.INVITATION_ENCRYPTION_KEY = 'worker-adapter-test-key';
+  const { db } = workerDatabase();
+  initializeDatabase(db, { workerBaseline: true });
+  const actor = { id: 'legacy-human', uid: null, createdAt: 1, expiresAt: 999999 };
+  const ids = ['decision', 'transition', 'grace', 'readying'].map((status) => {
+    const id = createBotMatch(db, { ...actor, id: actor.id + status }, 'Human', 'quick');
+    db.prepare('UPDATE matches SET status = ?, decision_duration_ms = 5000, deadline = 105000, transition_at = 101000, grace_until = 120000 WHERE id = ?')
+      .run(status, id);
+    return id;
+  });
+  db.prepare("INSERT INTO pending_actions VALUES (?, 1, 'A', ?, 100001)").run(ids[0], '{"type":"pass"}');
+  db.exec(`ALTER TABLE matches DROP COLUMN policy_version;
+    ALTER TABLE matches DROP COLUMN reveal_duration_ms;
+    ALTER TABLE matches DROP COLUMN progression;
+    DELETE FROM schema_migrations WHERE version = 7;`);
+  const before = ids.map((id) => db.prepare('SELECT status, state_json, deadline, transition_at, grace_until FROM matches WHERE id = ?').get(id));
+  initializeDatabase(db, { workerBaseline: true });
+  initializeDatabase(db, { workerBaseline: true });
+  ids.forEach((id, index) => {
+    expect(db.prepare('SELECT status, state_json, deadline, transition_at, grace_until FROM matches WHERE id = ?').get(id)).toEqual(before[index]);
+    expect(db.prepare('SELECT policy_version, decision_duration_ms, reveal_duration_ms, progression FROM matches WHERE id = ?').get(id))
+      .toEqual({ policy_version: 1, decision_duration_ms: 5000, reveal_duration_ms: 1000, progression: 'automatic' });
+  });
+  expect(db.prepare('SELECT action_json, locked_at FROM pending_actions').get()).toEqual({ action_json: '{"type":"pass"}', locked_at: 100001 });
 });

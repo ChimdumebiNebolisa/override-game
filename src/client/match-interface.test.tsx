@@ -52,6 +52,16 @@ describe('in-match round feedback', () => {
     expect(html).toContain('Territory score: you 11, rival 13');
     expect(html).toContain('<small>You</small>');
     expect(html).toContain('<small>Rival</small>');
+    expect(html).not.toContain('Next round');
+    expect(html).not.toContain('See result');
+  });
+
+  it('does not call a previous round or a no-contest a terminal draw', () => {
+    for (const state of [result.state, { ...result.state, status: 'finished' as const, winner: null, endingReason: null }]) {
+      const html = renderToStaticMarkup(<RevealPanel result={{ ...result, state }} player="A" finalRound
+        activeRoundOpen={false} onContinue={() => undefined} />);
+      expect(html).not.toContain('The match is tied');
+    }
   });
 
   it('keeps board actions available as soon as the authoritative next decision opens', () => {

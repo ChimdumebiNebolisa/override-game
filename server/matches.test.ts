@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { openDatabase } from './db';
 import { createQuickRoom, joinQuickRoom, openRoomForSession } from './rooms';
 import {
-  activeMatchForSession, createBotMatch, dueMatches, expireGrace, getMatch, lockAction as serviceLockAction, markConnected, markDisconnected, reconcilePresenceOnStartup,
+  acknowledgeBotRound, activeMatchForSession, createBotMatch, dueMatches, expireGrace, getMatch, lockAction as serviceLockAction, markConnected, markDisconnected, reconcilePresenceOnStartup,
   matchForSession, parseAction, resignMatch, resolveMatch, startNextRound,
 } from './matches';
 import { createInitialState, validateAction, type Action, type MatchState, type RoundResult } from '../src/shared/rules';
@@ -55,6 +55,8 @@ describe('guest matches', () => {
     const room = createQuickRoom(db, host, 'Host');
     const joined = joinQuickRoom(db, guest, { code: room.code }, 'Guest');
     const id = joined.matchId!;
+    // These existing fixed-deadline regressions also protect migrated legacy human matches.
+    db.prepare("UPDATE matches SET policy_version = 1, decision_duration_ms = 5000, reveal_duration_ms = 1000, deadline = started_at + 5000 WHERE id = ?").run(id);
     const row = getMatch(db, id)!;
     if (connected) {
       markConnected(db, id, 'A');
@@ -224,13 +226,13 @@ describe('guest matches', () => {
     lockAction(db, practiceId, guest, move('expand', 2));
     expect(matchForSession(db, practiceId, guest).lastResult?.state.round).toBe(2);
     const transition = getMatch(db, practiceId)!;
-    expect(transition).toMatchObject({ timed: 0, status: 'transition', deadline: null });
-    expect(startNextRound(db, practiceId, transition.transition_at!)).toBe(true);
+    expect(transition).toMatchObject({ timed: 0, status: 'review', deadline: null });
+    acknowledgeBotRound(db, practiceId, guest, 1, '11111111-1111-4111-8111-111111111111', transition.revision);
     expect(matchForSession(db, practiceId, guest)).toMatchObject({ timed: false, deadline: null, state: { round: 2 } });
 
     const quickGuest = session('timed-quick');
     const quickId = createBotMatch(db, quickGuest, 'Guest', 'quick', 'easy');
-    expect(getMatch(db, quickId)).toMatchObject({ timed: 1, deadline: 105_000 });
+    expect(getMatch(db, quickId)).toMatchObject({ timed: 1, deadline: 110_000 });
   });
 
   it.each([
@@ -408,7 +410,7 @@ describe('guest matches', () => {
     const opening = JSON.parse(getMatch(db, id)!.state_json) as MatchState;
     lockAction(db, id, human, action);
     const row = getMatch(db, id)!;
-    expect(row.status).toBe('transition');
+    expect(row.status).toBe('review');
     expect(row.last_result_json).toBeTruthy();
     const result = JSON.parse(row.last_result_json!) as RoundResult;
     expect(validateAction(opening, bot, result.outcomes[bot].action)).toEqual({ ok: true });
@@ -433,7 +435,7 @@ describe('guest matches', () => {
     expect(validateAction(opening, bot, result.outcomes[bot].action)).toEqual({ ok: true });
     expect(side === 'A' ? row.afk_a : row.afk_b).toBe(1);
     expect(side === 'A' ? row.afk_b : row.afk_a).toBe(0);
-    expect(row.status).toBe('transition');
+    expect(row.status).toBe('review');
     expect(resolveMatch(db, id, before.deadline!)).toBe(false);
   });
 

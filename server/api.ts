@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { firebaseWebConfig as configuredFirebaseWebConfig, publicOrigin as configuredPublicOrigin } from './config.js';
 import { attachFirebaseIdentity, claimHandle, renameHandle } from './auth.js';
 import { HttpError, assertMutationOrigin, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http.js';
-import { activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, resignMatch } from './matches.js';
+import { acknowledgeBotRound, activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, resignMatch } from './matches.js';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms.js';
 import { acknowledgeRankedReady, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, markRankedReadyPresence, publicRankedSettlement, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked.js';
 import { leaderboard, profileView } from './progression.js';
@@ -222,9 +222,19 @@ export function createApiHandler(context: ApiContext) {
       const body = await readJson(req);
       lockAction(db, actionMatch[1], session, parseAction(body.action), body.round as number, body.revision as number);
       const match = matchForSession(db, actionMatch[1], session);
+      if (match.mode === 'ranked' && match.status === 'finished') settleRankedMatch(db, actionMatch[1]);
       if (match.roomId && match.status !== 'decision') notifyRoom(match.roomId);
       if (match.status !== 'decision') notifyMatch(actionMatch[1]);
       return json(res, 200, { match });
+    }
+    const nextMatch = path.match(/^\/api\/matches\/([a-f0-9-]{36})\/next$/);
+    if (nextMatch && method === 'POST') {
+      const session = requireSession(req, res, db);
+      const body = await readJson(req);
+      acknowledgeBotRound(db, nextMatch[1], session, body.round as number,
+        body.acknowledgementKey as string, body.revision as number);
+      notifyMatch(nextMatch[1]);
+      return json(res, 200, { match: matchForSession(db, nextMatch[1], session) });
     }
     const resign = path.match(/^\/api\/matches\/([a-f0-9-]{36})\/resign$/);
     if (resign && method === 'POST') {

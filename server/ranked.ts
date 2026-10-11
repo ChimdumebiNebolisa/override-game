@@ -1,3 +1,4 @@
+import { NEW_MATCH_POLICY } from './match-policy.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { assessCompetitiveCredit, PLACEMENT_MATCHES, settleRatedMatch, type RatingProfile, type RatingSettlement } from '../src/shared/rating.js';
@@ -32,6 +33,7 @@ interface QueueRow {
 }
 
 interface MatchShellRow {
+  decision_duration_ms: number;
   id: string;
   mode: string;
   player_a_key: string;
@@ -95,7 +97,7 @@ function ownership(db: Database.Database, uid: string): OwnershipRow | undefined
 
 function rankedMatch(db: Database.Database, id: string): MatchShellRow | undefined {
   return db.prepare(`SELECT id, mode, player_a_key, player_b_key, status, ready_deadline, ready_a, ready_b,
-      ready_connected_a, ready_connected_b,
+      ready_connected_a, ready_connected_b, decision_duration_ms,
       started_at, competitive_multiplier, credit_assessed_at, state_json, result_type,
       disconnected_a_at, disconnected_b_at
     FROM matches WHERE id = ?`).get(id) as MatchShellRow | undefined;
@@ -181,9 +183,9 @@ function createShellInTransaction(db: Database.Database, uidA: string, uidB: str
 
   db.prepare(`INSERT INTO matches (id, room_id, mode, player_a_key, player_b_key, player_a_name, player_b_name,
       state_json, status, deadline, transition_at, ready_deadline, ready_a, ready_b, started_at, credit_assessed_at,
-      competitive_multiplier, revision)
-    VALUES (?, NULL, 'ranked', ?, ?, 'Ranked Player', 'Ranked Player', ?, 'readying', NULL, NULL, ?, 0, 0, NULL, ?, ?, 0)`)
-    .run(matchId, playerA.uid, playerB.uid, JSON.stringify(createInitialState()), readyDeadline, now, assessment.multiplier);
+      competitive_multiplier, revision, policy_version, decision_duration_ms, reveal_duration_ms)
+    VALUES (?, NULL, 'ranked', ?, ?, 'Ranked Player', 'Ranked Player', ?, 'readying', NULL, NULL, ?, 0, 0, NULL, ?, ?, 0, ?, ?, ?)`)
+    .run(matchId, playerA.uid, playerB.uid, JSON.stringify(createInitialState()), readyDeadline, now, assessment.multiplier, NEW_MATCH_POLICY.version, NEW_MATCH_POLICY.decisionMs, NEW_MATCH_POLICY.revealMs);
 
   for (const participant of [playerA, playerB]) {
     db.prepare(`INSERT INTO ranked_ownership (uid, state, match_id, lease_expires_at) VALUES (?, 'match_shell', ?, ?)
@@ -327,7 +329,7 @@ function bindReadyMatchInTransaction(db: Database.Database, match: MatchShellRow
       player_a_name = ?, player_b_name = ?, revision = revision + 1
     WHERE id = ? AND status = 'readying' AND started_at IS NULL AND ready_a = 1 AND ready_b = 1
       AND ready_connected_a = 1 AND ready_connected_b = 1 AND ready_deadline > ?`)
-    .run(now, now + 5_000, a.handle, b.handle, match.id, now);
+    .run(now, now + match.decision_duration_ms, a.handle, b.handle, match.id, now);
   if (bound.changes !== 1) return false;
   initializeHumanPresence(db, match.id, now);
   db.prepare(`UPDATE ranked_ownership SET state = 'active_match', lease_expires_at = NULL

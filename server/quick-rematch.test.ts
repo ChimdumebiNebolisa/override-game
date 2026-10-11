@@ -96,7 +96,7 @@ test('opponent acceptance starts one authoritative fresh match with sides swappe
   assert.deepEqual([created.player_a_name, created.player_b_name], ['Guest', 'Host']);
   assert.equal(created.status, 'decision');
   assert.equal(created.started_at, now + 2);
-  assert.equal(created.deadline, now + 2 + 5_000);
+  assert.equal(created.deadline, now + 2 + 10_000);
   assert.equal(created.revision, 1);
   assert.deepEqual(JSON.parse(created.state_json), createInitialState());
   assert.deepEqual(row<{ disconnected_a_at: number | null; disconnected_b_at: number | null }>(db,

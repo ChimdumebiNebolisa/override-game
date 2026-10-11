@@ -1,3 +1,4 @@
+import { NEW_MATCH_POLICY } from './match-policy.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { createInitialState } from '../src/shared/rules.js';
@@ -7,7 +8,7 @@ import { initializeHumanPresence } from './matches.js';
 import { invitationTokenHash, protectInvitationSecret, revealInvitationSecret } from './invitation-secrets.js';
 
 const OFFER_LIFETIME_MS = 30_000;
-const DECISION_DURATION_MS = 5_000;
+const DECISION_DURATION_MS = NEW_MATCH_POLICY.decisionMs;
 
 interface ParentMatch {
   id: string;
@@ -203,10 +204,10 @@ export function acceptQuickRematch(
 
     const matchId = randomUUID();
     db.prepare(`INSERT INTO matches (id, room_id, mode, player_a_key, player_b_key, player_a_name, player_b_name,
-        state_json, decision_duration_ms, status, deadline, started_at, revision)
-      VALUES (?, ?, 'quick', ?, ?, ?, ?, ?, ?, 'decision', ?, ?, 1)`)
+        state_json, decision_duration_ms, policy_version, reveal_duration_ms, status, deadline, started_at, revision)
+      VALUES (?, ?, 'quick', ?, ?, ?, ?, ?, ?, ?, ?, 'decision', ?, ?, 1)`)
       .run(matchId, room.id, parent.player_b_key, parent.player_a_key, parent.player_b_name, parent.player_a_name,
-        JSON.stringify(createInitialState()), DECISION_DURATION_MS, now + DECISION_DURATION_MS, now);
+        JSON.stringify(createInitialState()), DECISION_DURATION_MS, NEW_MATCH_POLICY.version, NEW_MATCH_POLICY.revealMs, now + DECISION_DURATION_MS, now);
     initializeHumanPresence(db, matchId, now);
 
     const roomChanged = db.prepare(`UPDATE rooms SET match_id = ?, status = 'active'

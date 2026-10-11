@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import worker, { GameDurableObject } from './worker.js';
 import { createWorkerTestStorage } from './worker-test-storage.js';
 import { createInitialState } from '../src/shared/rules.js';
-import { createRankedShell } from './ranked.js';
+import { acknowledgeRankedReady, createRankedShell, markRankedReadyPresence } from './ranked.js';
+import { sessionTokenId } from './invitation-secrets.js';
 import { createQuickRoom, joinQuickRoom } from './rooms.js';
 import { getMatch, markConnected } from './matches.js';
 
@@ -30,6 +31,37 @@ function fixture() {
   const ctx = { blockConcurrencyWhile, storage: store.storage, acceptWebSocket() {}, getWebSockets() { return sockets; } };
   return { store, sockets, env, ctx };
 }
+
+it('serializes concurrent final Ranked locks and a duplicate request into one result and settlement', async () => {
+  const { store, env, ctx } = fixture();
+  const durable = new GameDurableObject(ctx, env);
+  await durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/config`));
+  const now = Date.now();
+  const tokens = ['a'.repeat(64), 'b'.repeat(64)];
+  const uids = ['rank-a', 'rank-b'];
+  uids.forEach((uid, index) => {
+    store.sqlite.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)').run(uid, uid, uid, now);
+    store.sqlite.prepare('INSERT INTO sessions (id, uid, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sessionTokenId(tokens[index]), uid, now, now + 86400000);
+  });
+  const shell = createRankedShell(store.sqlite, ...uids as [string, string]);
+  uids.forEach((uid) => markRankedReadyPresence(store.sqlite, shell.matchId, uid, true));
+  uids.forEach((uid) => acknowledgeRankedReady(store.sqlite, shell.matchId, uid));
+  const state = { ...createInitialState(), round: 12,
+    board: createInitialState().board.map((cell, index) => index === 2 ? 'A' as const : cell) };
+  store.sqlite.prepare('UPDATE matches SET state_json = ?, revision = revision + 1 WHERE id = ?').run(JSON.stringify(state), shell.matchId);
+  const revision = getMatch(store.sqlite, shell.matchId)!.revision;
+  const lock = (index: number) => durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/matches/${shell.matchId}/actions`, {
+    method: 'POST', headers: { origin: env.PUBLIC_ORIGIN, 'x-requested-with': 'override-game', 'content-type': 'application/json', cookie: `override_session=${tokens[index]}` },
+    body: JSON.stringify({ action: { type: 'pass' }, round: 12, revision }),
+  }));
+  const responses = await Promise.all([lock(0), lock(1), lock(1)]);
+  expect(responses.map((response) => response.status).sort()).toEqual([200, 200, 409]);
+  expect(getMatch(store.sqlite, shell.matchId)).toMatchObject({ status: 'finished', deadline: null, transition_at: null });
+  await durable.alarm();
+  expect(store.sqlite.prepare('SELECT COUNT(*) AS count FROM round_results WHERE match_id = ?').get(shell.matchId)).toEqual({ count: 1 });
+  expect(store.sqlite.prepare('SELECT COUNT(*) AS count FROM rating_settlements WHERE match_id = ?').get(shell.matchId)).toEqual({ count: 1 });
+  expect(store.sqlite.prepare('SELECT rated_match_count FROM profiles ORDER BY uid').all()).toEqual([{ rated_match_count: 1 }, { rated_match_count: 1 }]);
+});
 
 it.each(['unrelated-room', 'same-room', 'same-match', 'room-to-match', 'other-player'] as const)(
   'checks effective socket identity for %s during disconnect debounce', async (replacement) => {
@@ -414,8 +446,13 @@ it('pauses new games at the safety threshold while accepted match actions and al
     method: 'POST', headers, body: JSON.stringify({ action: { type: 'pass' }, round: 1, revision: match.revision }),
   }), env);
   expect(action.status).toBe(200);
-  store.sqlite.prepare('UPDATE matches SET transition_at = ? WHERE id = ?').run(Date.now() - 1, match.id);
   await durable.alarm();
+  expect(store.sqlite.prepare('SELECT status, deadline, transition_at FROM matches WHERE id = ?').get(match.id))
+    .toEqual({ status: 'review', deadline: null, transition_at: null });
+  const next = await worker.fetch(new Request(`${origin}/api/matches/${match.id}/next`, {
+    method: 'POST', headers, body: JSON.stringify({ round: 1, revision: match.revision, acknowledgementKey: '44444444-4444-4444-8444-444444444444' }),
+  }), env);
+  expect(next.status).toBe(200);
   const resumed = await worker.fetch(new Request(`${origin}/api/matches/${match.id}`, { headers: { cookie } }), env);
   expect(resumed.status).toBe(200);
   expect((await resumed.json()).match).toMatchObject({ status: 'decision', state: { round: 2 } });

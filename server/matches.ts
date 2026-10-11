@@ -6,6 +6,7 @@ import {
 } from '../src/shared/rules';
 import { chooseBotAction, type BotDifficulty } from '../src/shared/bots';
 import { HttpError, type Session } from './http';
+import { NEW_MATCH_POLICY, usesReview } from './match-policy';
 
 export interface MatchRow {
   id: string;
@@ -21,8 +22,11 @@ export interface MatchRow {
   player_b_name: string;
   state_json: string;
   decision_duration_ms: number;
+  policy_version: number;
+  reveal_duration_ms: number;
+  progression: 'automatic' | 'review';
   timed: number;
-  status: 'readying' | 'decision' | 'transition' | 'grace' | 'finished' | 'voided';
+  status: 'readying' | 'decision' | 'transition' | 'review' | 'grace' | 'finished' | 'voided';
   deadline: number | null;
   transition_at: number | null;
   ready_deadline: number | null;
@@ -90,6 +94,9 @@ export function matchForSession(db: Database.Database, id: string, session: Sess
     return {
       id: row.id, roomId: row.room_id, mode: row.mode, botDifficulty: row.bot_difficulty, status: row.status,
       player: null, playerNames: null, state: null, score: null,
+      timed: Boolean(row.timed), policyVersion: row.policy_version ?? 1,
+      decisionDurationMs: row.decision_duration_ms, revealDurationMs: row.reveal_duration_ms ?? 1_000,
+      progression: row.progression ?? 'automatic', transitionAt: row.transition_at,
       deadline: row.ready_deadline, serverNow: Date.now(), revision: row.revision,
       locked: false, lastResult: null, resultType: null,
       competitiveMultiplier: row.competitive_multiplier,
@@ -105,6 +112,11 @@ export function matchForSession(db: Database.Database, id: string, session: Sess
     mode: row.mode,
     botDifficulty: row.bot_difficulty,
     timed: Boolean(row.timed),
+    policyVersion: row.policy_version ?? 1,
+    decisionDurationMs: row.decision_duration_ms,
+    revealDurationMs: row.reveal_duration_ms ?? 1_000,
+    progression: row.progression ?? 'automatic',
+    transitionAt: row.transition_at,
     player,
     playerNames: { A: row.player_a_name, B: row.player_b_name },
     state,
@@ -124,7 +136,7 @@ export function matchForSession(db: Database.Database, id: string, session: Sess
 
 /** Find the most recent match this browser can safely resume. */
 export function activeMatchForSession(db: Database.Database, session: Session) {
-  const row = db.prepare(`SELECT id FROM matches WHERE status IN ('decision', 'transition', 'grace')
+  const row = db.prepare(`SELECT id FROM matches WHERE status IN ('decision', 'transition', 'review', 'grace')
     AND ((mode = 'ranked' AND ? IS NOT NULL AND (player_a_key = ? OR player_b_key = ?))
       OR (mode <> 'ranked' AND (player_a_key = ? OR player_b_key = ?)))
     ORDER BY started_at DESC, id DESC LIMIT 1`)
@@ -168,7 +180,7 @@ export function createBotMatch(db: Database.Database, session: Session, name: st
     const restarted = restartMatchId ? getMatch(db, restartMatchId) : null;
     if (restartMatchId && (!restarted || mode !== 'practice' || parentMatchId || restarted.mode !== 'practice' ||
         restarted.bot_difficulty !== difficulty || !playerFor(restarted, session) || !botSide(restarted) ||
-        !['decision', 'transition', 'grace'].includes(restarted.status))) {
+        !['decision', 'transition', 'review', 'grace'].includes(restarted.status))) {
       throw new HttpError(404, 'Active Practice match not found');
     }
     let humanSide: Player;
@@ -184,23 +196,24 @@ export function createBotMatch(db: Database.Database, session: Session, name: st
     const recent = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE (player_a_key = ? OR player_b_key = ?)
       AND bot_difficulty IS NOT NULL AND started_at > ?`).get(session.id, session.id, now - 5 * 60_000) as { count: number };
     const active = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE (player_a_key = ? OR player_b_key = ?)
-      AND bot_difficulty IS NOT NULL AND status IN ('decision', 'transition', 'grace') AND id <> ?`)
+      AND bot_difficulty IS NOT NULL AND status IN ('decision', 'transition', 'review', 'grace') AND id <> ?`)
       .get(session.id, session.id, restartMatchId ?? '') as { count: number };
     if (recent.count >= 10 || active.count >= 3) throw new HttpError(429, 'Finish an existing bot match before starting another');
     admitNewWork?.();
     const id = randomUUID();
     db.prepare(`INSERT INTO matches
-      (id, room_id, creation_key, parent_match_id, restart_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, timed, status, deadline, started_at, revision)
-      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'decision', ?, ?, 1)`)
+      (id, room_id, creation_key, parent_match_id, restart_match_id, mode, bot_difficulty, player_a_key, player_b_key, player_a_name, player_b_name, state_json, timed, policy_version, decision_duration_ms, reveal_duration_ms, progression, status, deadline, started_at, revision)
+      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'review', 'decision', ?, ?, 1)`)
       .run(id, creationKey ?? null, parentMatchId ?? null, restartMatchId ?? null, mode, difficulty,
         humanSide === 'A' ? session.id : `bot:${id}`, humanSide === 'B' ? session.id : `bot:${id}`,
         humanSide === 'A' ? name : 'Bot', humanSide === 'B' ? name : 'Bot',
-        JSON.stringify(createInitialState()), timed ? 1 : 0, timed ? now + 5_000 : null, now);
+        JSON.stringify(createInitialState()), timed ? 1 : 0, NEW_MATCH_POLICY.version, NEW_MATCH_POLICY.decisionMs,
+        NEW_MATCH_POLICY.revealMs, timed ? now + NEW_MATCH_POLICY.decisionMs : null, now);
     if (restarted) {
       const finalState: MatchState = { ...stateOf(restarted), status: 'finished', winner: null, endingReason: null };
       const stopped = db.prepare(`UPDATE matches SET state_json = ?, status = 'voided', deadline = NULL,
         transition_at = NULL, grace_until = NULL, ended_at = ?, result_type = 'practice-restarted', revision = revision + 1
-        WHERE id = ? AND status IN ('decision', 'transition', 'grace')`).run(JSON.stringify(finalState), now, restarted.id);
+        WHERE id = ? AND status IN ('decision', 'transition', 'review', 'grace')`).run(JSON.stringify(finalState), now, restarted.id);
       if (stopped.changes !== 1) throw new Error('Could not stop the restarted Practice match');
     }
     return id;
@@ -224,12 +237,16 @@ function chooseCommittedBotAction(db: Database.Database, row: MatchRow, state: M
 }
 
 export function lockAction(db: Database.Database, id: string, session: Session, action: Action, expectedRound: number, expectedRevision: number): void {
-  db.transaction(() => {
+  const late = db.transaction(() => {
     const row = getMatch(db, id);
     if (!row) throw new HttpError(404, 'Match not found');
     const player = playerFor(row, session);
     if (!player) throw new HttpError(404, 'Match not found');
     const now = Date.now();
+    if (row.status === 'decision' && row.deadline !== null && now >= row.deadline) {
+      resolveMatch(db, id, now);
+      return true;
+    }
     if (row.status !== 'decision' || (row.deadline === null && row.timed) || (row.deadline !== null && now >= row.deadline)) {
       throw new HttpError(409, 'This round is no longer accepting moves');
     }
@@ -251,8 +268,14 @@ export function lockAction(db: Database.Database, id: string, session: Session, 
     if (botSide(row) && player !== botSide(row)) {
       chooseCommittedBotAction(db, row, state, now);
       resolveMatch(db, id, now, true);
+    } else if (row.policy_version === NEW_MATCH_POLICY.version &&
+        pendingAction(db, id, state.round, 'A') && pendingAction(db, id, state.round, 'B')) {
+      resolveMatch(db, id, now, true);
     }
+    return false;
   }).immediate();
+  // Throw after committing the due resolution, rather than rolling it back with the late move.
+  if (late) throw new HttpError(409, 'This round is no longer accepting moves');
 }
 
 function pendingAction(db: Database.Database, id: string, round: number, player: Player): Action | null {
@@ -282,14 +305,16 @@ function disconnectsAtDeadline(db: Database.Database, id: string, player: Player
   return Math.max(0, total - later.count);
 }
 
-export function resolveMatch(db: Database.Database, id: string, now = Date.now(), allowEarlyBot = false): boolean {
+export function resolveMatch(db: Database.Database, id: string, now = Date.now(), allowEarly = false): boolean {
   return db.transaction(() => {
     const row = getMatch(db, id);
     if (!row || row.status !== 'decision') return false;
-    if (!allowEarlyBot && (row.deadline === null || now < row.deadline)) return false;
     const state = stateOf(row);
     if (state.status !== 'active') throw new UntrustworthyMatchData('Saved active match is terminal');
     const bot = botSide(row);
+    const early = allowEarly && (Boolean(bot) || row.policy_version === NEW_MATCH_POLICY.version) &&
+      Boolean(pendingAction(db, id, state.round, 'A')) && Boolean(pendingAction(db, id, state.round, 'B'));
+    if (!early && (row.deadline === null || now < row.deadline)) return false;
     if (bot && !pendingAction(db, id, state.round, bot)) {
       chooseCommittedBotAction(db, row, state, now);
     }
@@ -303,15 +328,15 @@ export function resolveMatch(db: Database.Database, id: string, now = Date.now()
       }
     }
     const offline = {
-      A: offlineAtDeadline(db, id, 'A', row.deadline!),
-      B: offlineAtDeadline(db, id, 'B', row.deadline!),
+      A: !early && offlineAtDeadline(db, id, 'A', row.deadline!),
+      B: !early && offlineAtDeadline(db, id, 'B', row.deadline!),
     };
     const misses = {
       A: actions.A || offline.A || bot === 'A' ? 0 : row.afk_a + 1,
       B: actions.B || offline.B || bot === 'B' ? 0 : row.afk_b + 1,
     };
-    const aForfeit = misses.A >= 3 || disconnectsAtDeadline(db, id, 'A', row.disconnect_a, row.deadline!) >= 3;
-    const bForfeit = misses.B >= 3 || disconnectsAtDeadline(db, id, 'B', row.disconnect_b, row.deadline!) >= 3;
+    const aForfeit = !early && (misses.A >= 3 || disconnectsAtDeadline(db, id, 'A', row.disconnect_a, row.deadline!) >= 3);
+    const bForfeit = !early && (misses.B >= 3 || disconnectsAtDeadline(db, id, 'B', row.disconnect_b, row.deadline!) >= 3);
     const noContest = aForfeit && bForfeit || offline.A && offline.B && (aForfeit || bForfeit);
     const forfeiting = noContest ? null : aForfeit ? 'A' : bForfeit ? 'B' : null;
     const afkForfeiting = forfeiting && misses[forfeiting] >= 3 ? forfeiting : null;
@@ -321,10 +346,10 @@ export function resolveMatch(db: Database.Database, id: string, now = Date.now()
       winner: forfeiting === 'A' ? 'B' : 'A', endingReason: 'forfeit',
     };
     if (noContest) result.state = { ...result.state, status: 'finished', winner: null, endingReason: null };
-    let status: MatchRow['status'] = result.state.status === 'finished' ? 'finished' : 'transition';
+    let status: MatchRow['status'] = result.state.status === 'finished' ? 'finished' : usesReview(row) ? 'review' : 'transition';
     let graceUntil: number | null = null;
-    let transitionAt: number | null = status === 'transition' ? now + 1_000 : null;
-    if (status !== 'finished' && (row.disconnected_a_at !== null || row.disconnected_b_at !== null)) {
+    let transitionAt: number | null = status === 'transition' ? now + (row.reveal_duration_ms ?? 1_000) : null;
+    if (status !== 'finished' && status !== 'review' && (row.disconnected_a_at !== null || row.disconnected_b_at !== null)) {
       status = 'grace';
       transitionAt = null;
       const shortest = Math.min(...[
@@ -345,6 +370,34 @@ export function resolveMatch(db: Database.Database, id: string, now = Date.now()
     if (status === 'finished' && row.room_id) db.prepare("UPDATE rooms SET status = 'finished' WHERE id = ?").run(row.room_id);
     return true;
   })();
+}
+
+/** One authenticated acknowledgement per resolved bot round; retries cannot acknowledge a later review. */
+export function acknowledgeBotRound(db: Database.Database, id: string, session: Session, reviewedRound: number,
+    acknowledgementKey: string, expectedRevision: number, now = Date.now()): void {
+  db.transaction(() => {
+    const row = getMatch(db, id);
+    if (!row || !playerFor(row, session)) throw new HttpError(404, 'Match not found');
+    if (!botSide(row) || !usesReview(row)) throw new HttpError(409, 'This match advances automatically');
+    if (!Number.isInteger(reviewedRound) || reviewedRound < 1 || !Number.isInteger(expectedRevision) ||
+        expectedRevision < 1 || expectedRevision > row.revision ||
+        typeof acknowledgementKey !== 'string' || !/^[a-f0-9-]{36}$/i.test(acknowledgementKey)) {
+      throw new HttpError(400, 'Invalid round acknowledgement');
+    }
+    const previous = db.prepare('SELECT acknowledgement_key FROM round_acknowledgements WHERE match_id = ? AND round = ?')
+      .get(id, reviewedRound) as { acknowledgement_key: string } | undefined;
+    if (previous?.acknowledgement_key === acknowledgementKey) return;
+    const state = stateOf(row);
+    if (previous || row.status !== 'review' || state.status !== 'active' || state.round !== reviewedRound + 1 ||
+        db.prepare('SELECT 1 FROM round_acknowledgements WHERE match_id = ? AND acknowledgement_key = ?').get(id, acknowledgementKey)) {
+      throw new HttpError(409, 'This result is no longer awaiting acknowledgement');
+    }
+    db.prepare('INSERT INTO round_acknowledgements (match_id, round, acknowledgement_key) VALUES (?, ?, ?)')
+      .run(id, reviewedRound, acknowledgementKey);
+    db.prepare(`UPDATE matches SET status = 'decision', deadline = ?, transition_at = NULL, grace_until = NULL,
+      revision = revision + 1 WHERE id = ? AND status = 'review'`)
+      .run(row.timed ? now + row.decision_duration_ms : null, id);
+  }).immediate();
 }
 
 export function startNextRound(db: Database.Database, id: string, now = Date.now()): boolean {
@@ -370,8 +423,8 @@ export function startNextRound(db: Database.Database, id: string, now = Date.now
 export function markDisconnected(db: Database.Database, id: string, player: Player, now = Date.now()): void {
   db.transaction(() => {
     const column = player === 'A' ? 'a' : 'b';
-    const changed = db.prepare(`UPDATE matches SET disconnected_${column}_at = ?, disconnect_${column} = disconnect_${column} + 1,
-      revision = revision + 1 WHERE id = ? AND disconnected_${column}_at IS NULL AND status IN ('decision', 'transition', 'grace')`)
+    const changed = db.prepare(`UPDATE matches SET disconnected_${column}_at = ?, disconnect_${column} = disconnect_${column} + CASE WHEN status = 'review' THEN 0 ELSE 1 END,
+      revision = revision + 1 WHERE id = ? AND disconnected_${column}_at IS NULL AND status IN ('decision', 'transition', 'review', 'grace')`)
       .run(now, id);
     if (changed.changes === 1) db.prepare('INSERT INTO presence_events (match_id, player, changed_at, offline) VALUES (?, ?, ?, 1)')
       .run(id, player, now);
@@ -396,7 +449,7 @@ export function markConnected(db: Database.Database, id: string, player: Player,
     const before = getMatch(db, id);
     if (before?.status === 'grace' && before.grace_until !== null && now >= before.grace_until) return;
     const column = player === 'A' ? 'a' : 'b';
-    const changed = db.prepare(`UPDATE matches SET disconnected_${column}_at = NULL, revision = revision + 1 WHERE id = ? AND disconnected_${column}_at IS NOT NULL AND status IN ('decision', 'transition', 'grace')`)
+    const changed = db.prepare(`UPDATE matches SET disconnected_${column}_at = NULL, revision = revision + 1 WHERE id = ? AND disconnected_${column}_at IS NOT NULL AND status IN ('decision', 'transition', 'review', 'grace')`)
       .run(id);
     if (changed.changes === 1) db.prepare('INSERT INTO presence_events (match_id, player, changed_at, offline) VALUES (?, ?, ?, 0)')
       .run(id, player, now);
@@ -412,7 +465,7 @@ export function markConnected(db: Database.Database, id: string, player: Player,
 export function reconcilePresenceOnStartup(db: Database.Database, now = Date.now()): void {
   db.transaction(() => {
     const matches = db.prepare(`SELECT id, player_a_key, player_b_key, status, deadline, disconnected_a_at, disconnected_b_at
-      FROM matches WHERE status IN ('decision', 'transition', 'grace') AND started_at IS NOT NULL`)
+      FROM matches WHERE status IN ('decision', 'transition', 'review', 'grace') AND started_at IS NOT NULL`)
       .all() as Pick<MatchRow, 'id' | 'player_a_key' | 'player_b_key' | 'status' | 'deadline' | 'disconnected_a_at' | 'disconnected_b_at'>[];
     for (const match of matches) {
       for (const player of (['A', 'B'] as const)) {
@@ -457,7 +510,7 @@ export function resignMatch(db: Database.Database, id: string, session: Session,
     if (!row) throw new HttpError(404, 'Match not found');
     const player = playerFor(row, session);
     if (!player) throw new HttpError(404, 'Match not found');
-    if (row.status !== 'decision' && row.status !== 'transition' && row.status !== 'grace') {
+    if (row.status !== 'decision' && row.status !== 'transition' && row.status !== 'review' && row.status !== 'grace') {
       throw new HttpError(409, 'This match is not active');
     }
     const state = stateOf(row);
@@ -479,7 +532,7 @@ export function resignMatch(db: Database.Database, id: string, session: Session,
 function voidUntrustworthyMatch(db: Database.Database, id: string, now: number): boolean {
   return db.transaction(() => {
     const row = getMatch(db, id);
-    if (!row || !['decision', 'transition', 'grace'].includes(row.status)) return false;
+    if (!row || !['decision', 'transition', 'review', 'grace'].includes(row.status)) return false;
     let state: MatchState;
     try { state = stateOf(row); }
     catch (error) {

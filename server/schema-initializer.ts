@@ -246,6 +246,22 @@ export function initializeDatabase(db: Database.Database, options: { workerBasel
     db.close();
     throw error;
   }
+  try {
+    db.transaction(() => {
+      if (db.prepare('SELECT 1 FROM schema_migrations WHERE version = 7').get()) return;
+      for (const [name, definition] of [
+        ['policy_version', 'INTEGER NOT NULL DEFAULT 1'],
+        ['reveal_duration_ms', 'INTEGER NOT NULL DEFAULT 1000'],
+        ['progression', "TEXT NOT NULL DEFAULT 'automatic'"],
+      ]) {
+        try { db.exec(`ALTER TABLE matches ADD COLUMN ${name} ${definition}`); }
+        catch (error) {
+          if (!(error instanceof Error) || !error.message.includes(`duplicate column name: ${name}`)) throw error;
+        }
+      }
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (7, ?)').run(Date.now());
+    }).immediate();
+  } catch (error) { db.close(); throw error; }
   let keyCheck = db.prepare('SELECT value FROM secret_key_verification WHERE id = 1').get() as { value: string } | undefined;
   try {
     if (!keyCheck || revealInvitationSecret(keyCheck.value) !== 'override invitation key verification v1') {

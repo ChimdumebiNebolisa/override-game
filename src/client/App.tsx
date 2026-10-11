@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { HeroDemo } from "./HeroDemo";
 import { GameBoard } from "./GameBoard";
 import { HowTo } from "./HowTo";
+import { acknowledgeLearning, beginLearning, loadLearning, observeLearning, readFlag, resolvedRound, saveLearning, WELCOME_KEY, writeFlag, type LearningRun } from "./learning";
 import { toggleSurgeTarget } from "./move-selection";
 import {
   legalActions,
@@ -123,6 +124,36 @@ function energyEffect(outcome: ActionOutcome): string {
   return effects.length ? effects.join(" · ") : "No Energy change";
 }
 
+const signed = (value: number) => value >= 0 ? `+${value}` : `−${Math.abs(value)}`;
+
+function ActionDetails({ energy, timed }: { energy: number; timed: boolean }) {
+  return <details className="action-details"><summary>Action costs and rules{timed ? " · clock keeps running" : ""}</summary>
+    <p>Expand · free: claim one open space beside your pre-round territory.</p>
+    <p>Ambush · free: predict an open space beside rival territory. An exact Expand hit earns 1 Energy, capped at 3; no capture.</p>
+    <p>Override · 2 Energy: steal one rival space beside your pre-round territory.{energy < 2 ? ` Need ${2 - energy} more Energy.` : ""}</p>
+    <p>Surge · 3 Energy total: claim or steal one or two distinct spaces within two grid steps of your pre-round territory.{energy < 3 ? ` Need ${3 - energy} more Energy.` : ""} Each target needs its own reach; collisions do not refund Energy or stop the other target.</p>
+    <p>Pass · free: lock without a target. A missing timed commitment becomes an automatic Pass.</p>
+    <p>Unavailable actions need enough Energy and a legal target. Help never pauses a timed decision.</p>
+  </details>;
+}
+
+function ContextTip({ run, match, action, onUpdate }: { run: LearningRun; match: PublicMatch; action: Action['type']; onUpdate: (run: LearningRun) => void }) {
+  const [tip, setTip] = useState("");
+  useEffect(() => {
+    const outcomes = match.lastResult?.outcomes;
+    const candidates: [string, string, boolean][] = [
+      ["collision", "Both claimed the same open space. It stays neutral; spent Energy is not refunded.", Boolean(outcomes && Object.values(outcomes).some((item) => item.cells?.some((cell) => cell.reason === "collision")))],
+      ["energy", "Energy changes only through Ambush hits or spending. The cap is three.", Boolean(outcomes && Object.values(outcomes).some((item) => item.energySpent || item.energyEarned))],
+      ["ambush", "Ambush predicts an exact Expand target. A hit earns Energy and captures nothing.", action === "ambush" || Boolean(outcomes && Object.values(outcomes).some((item) => item.action.type === "ambush"))],
+      ["override", "Override spends two Energy to steal an adjacent rival space: you +1, rival −1.", action === "override" || match.state.energy[match.player] >= 2],
+      ["surge", "Surge spends three Energy total. Each target must independently reach pre-round territory.", action === "surge" || match.state.energy[match.player] >= 3],
+    ];
+    const next = candidates.find(([key, , relevant]) => relevant && !run.seenTips.includes(key));
+    if (next) { setTip(next[1]); onUpdate({ ...run, seenTips: [...run.seenTips, next[0]] }); }
+  }, [match.lastResult?.round, match.state.energy[match.player], action]);
+  return tip ? <p className="coach-note" role="status">{tip}</p> : null;
+}
+
 export function roundActionsDisabled(status: PublicMatch["status"], locked: boolean): boolean {
   return status !== "decision" || locked;
 }
@@ -182,7 +213,7 @@ function AppHeader({ navigate }: { navigate: (screen: Screen) => void }) {
   );
 }
 
-function Home({ navigate }: { navigate: (screen: Screen) => void }) {
+function Home({ navigate, onGenericStart, onLearn }: { navigate: (screen: Screen) => void; onGenericStart: () => void; onLearn: () => void }) {
   return (
     <main className="home-shell">
       <section className="hero">
@@ -191,7 +222,8 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
           <p className="hero-intro">
             A territory duel on a 5×5 grid. Choose your move in secret, reveal together, and fight for control.
           </p>
-          <div className="hero-entry"><button className="primary-cta" onClick={() => navigate("quick")}>Start a game <span>→</span></button><p>No account needed.</p></div>
+          <div className="hero-entry"><button className="primary-cta" onClick={onGenericStart}>Start a game <span>→</span></button><p>No account needed.</p></div>
+          <button className="back-link learning-link" onClick={onLearn}>Learn with a bot · untimed</button>
         </div>
         <HeroDemo />
       </section>
@@ -261,7 +293,7 @@ function ModeSelect({
         ))}
       </fieldset>
       {kind === "practice" && <label className="timed-practice"><input type="checkbox" checked={timedPractice} onChange={(event) => setTimedPractice(event.target.checked)} />
-        <span><strong>Use a turn timer</strong><small>Five seconds per round. Off by default while you learn.</small></span>
+        <span><strong>Use a turn timer</strong><small>Ten seconds per round. Off by default while you learn.</small></span>
       </label>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <button className="primary-cta full" disabled={busy} onClick={launch}>{busy ? "Starting match…" : `Play ${difficulty}`} <span>→</span></button>
@@ -275,7 +307,7 @@ function ModeSelect({
   );
 }
 
-function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPractice, onOpenRanked, onOpenLeaderboard, onQuickRematch }: {
+function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPractice, onOpenRanked, onOpenLeaderboard, onQuickRematch, onReplayLearning, onStartDuel }: {
   mode: PlayMode;
   difficulty: Difficulty;
   initialMatch: PublicMatch;
@@ -285,6 +317,8 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   onOpenRanked: () => void;
   onOpenLeaderboard: () => void;
   onQuickRematch: (match: PublicMatch) => void;
+  onReplayLearning: () => void;
+  onStartDuel: () => void;
 }) {
   const [match, setMatch] = useState(initialMatch.state);
   const [actionType, setActionType] = useState<Action["type"]>("expand");
@@ -292,11 +326,20 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   const target = selectedTargets[0] ?? null;
   const [timeLeft, setTimeLeft] = useState(() => Math.max(0, Math.ceil(((initialMatch.deadline ?? initialMatch.serverNow) - initialMatch.serverNow) / 1000)));
   const [locked, setLocked] = useState(initialMatch.locked);
-  const currentRoundRef = useRef(initialMatch.state.round);
+  const currentRoundRef = useRef(initialMatch.status === "review" ? initialMatch.state.round - 1 : initialMatch.state.round);
   const lockedRoundRef = useRef(initialMatch.locked ? initialMatch.state.round : null);
   const [reveal, setReveal] = useState(initialMatch.status === "decision" ? null : initialMatch.lastResult);
-  const acknowledgedRoundRef = useRef(initialMatch.status === "decision" ? initialMatch.state.round : initialMatch.state.round - 1);
-  const [showFinalResult, setShowFinalResult] = useState(initialMatch.status === "finished");
+  const acknowledgedRoundRef = useRef(initialMatch.status === "decision" ? initialMatch.state.round - 1 : 0);
+  const loadedLearning = loadLearning(initialMatch.id);
+  const learningRef = useRef<LearningRun | null>(loadedLearning ? observeLearning(loadedLearning, initialMatch) : null);
+  const [learning, setLearning] = useState(() => learningRef.current ? observeLearning(learningRef.current, initialMatch) : null);
+  const updateLearning = (run: LearningRun) => { learningRef.current = run; setLearning(run); saveLearning(run); };
+  const [submitting, setSubmitting] = useState(false);
+  const [nextPending, setNextPending] = useState(false);
+  const nextRef = useRef<{ round: number; key: string } | null>(null);
+  const nextInFlight = useRef(false);
+  const snapshotRef = useRef(initialMatch);
+  const [leavingForDuel, setLeavingForDuel] = useState(false);
   const [networkError, setNetworkError] = useState("");
   const [connectionError, setConnectionError] = useState("");
   const [revision, setRevision] = useState(initialMatch.revision);
@@ -314,7 +357,6 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   const leaveButtonRef = useRef<HTMLButtonElement>(null);
   const roundLabelRef = useRef<HTMLElement>(null);
   const focusRoundAfterReveal = useRef(false);
-  useEffect(() => { if (reveal) setConfirmResign(false); }, [reveal]);
   useEffect(() => {
     if (reveal || !focusRoundAfterReveal.current) return;
     focusRoundAfterReveal.current = false;
@@ -332,31 +374,34 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       : actionType === "surge" && selectedTargets.length === 2
         ? { type: "surge", target, secondTarget: selectedTargets[1] } : { type: actionType, target };
   const decisionOpen = serverStatus === "decision" && match.status === "active";
-  const canAct = decisionOpen && !roundActionsDisabled(serverStatus, locked);
+  const canAct = decisionOpen && !roundActionsDisabled(serverStatus, locked) && !submitting;
 
   const commit = async (forcedAction?: Action) => {
     if (lockingRef.current || !canAct) return;
     const playerAction = forcedAction ?? selectedAction;
     if (!playerAction) return;
     lockingRef.current = true;
-    setLocked(true);
+    setSubmitting(true);
     setNetworkError("");
     try {
       const response = await api.lockAction(initialMatch.id, playerAction, match.round, revision);
       receiveSnapshot(response.match);
     } catch (reason) {
       setNetworkError(reason instanceof Error ? reason.message : "The move could not be locked.");
+      lockingRef.current = false;
       try {
         receiveSnapshot((await api.getMatch<PublicMatch>(initialMatch.id)).match);
-      } catch { /* The next poll will reconcile the lock state. */ }
+      } catch { setLocked(true); /* Keep uncertain controls closed until an authoritative poll. */ }
     } finally {
       lockingRef.current = false;
+      setSubmitting(false);
     }
   };
 
   const receiveSnapshot = (snapshot: PublicMatch, acknowledgeRound?: number): boolean => {
     if (!snapshotIsCurrent(snapshot, revisionRef.current)) return false;
-    const advancedRound = snapshot.state.round > currentRoundRef.current;
+    snapshotRef.current = snapshot;
+    const advancedRound = snapshot.status === "decision" && snapshot.state.round > currentRoundRef.current;
     if (advancedRound) {
       currentRoundRef.current = snapshot.state.round;
       lockedRoundRef.current = null;
@@ -364,10 +409,16 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       setSelectedTargets([]);
     }
     if (acknowledgeRound !== undefined) acknowledgedRoundRef.current = Math.max(acknowledgedRoundRef.current, acknowledgeRound);
+    const pendingLearningRound = learningRef.current?.pendingAcknowledgement;
+    if (snapshot.status === "decision" && pendingLearningRound != null && resolvedRound(snapshot) === pendingLearningRound) {
+      acknowledgedRoundRef.current = Math.max(acknowledgedRoundRef.current, pendingLearningRound);
+      focusRoundAfterReveal.current = true;
+    }
     setMatch(snapshot.state);
     setServerStatus(snapshot.status);
-    setReveal(snapshot.status === "finished" || (snapshot.lastResult && snapshot.lastResult.state.round > acknowledgedRoundRef.current)
+    setReveal(snapshot.status === "finished" || (snapshot.lastResult && (resolvedRound(snapshot) ?? 0) > acknowledgedRoundRef.current)
       ? snapshot.lastResult : null);
+    if (learningRef.current) updateLearning(observeLearning(learningRef.current, snapshot));
     setRevision(snapshot.revision);
     revisionRef.current = snapshot.revision;
     setResultType(snapshot.resultType);
@@ -422,36 +473,46 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   };
 
   useEffect(() => {
-    if (!initialMatch.timed || !canAct || match.status === "finished") return;
-    const timer = window.setInterval(() => {
-      setTimeLeft((value) => {
-        if (value <= 1) {
-          window.clearInterval(timer);
-          void receiveTimeout();
-          return 0;
-        }
-        return value - 1;
-      });
-    }, 1000);
+    if (!initialMatch.timed || !decisionOpen || deadlineAt === null) return;
+    let requested = false;
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000));
+      setTimeLeft(remaining);
+      if (!remaining && !requested) { requested = true; void receiveTimeout(); }
+    };
+    tick();
+    const timer = window.setInterval(tick, 200);
     return () => window.clearInterval(timer);
-  }, [initialMatch.timed, canAct, match]);
+  }, [initialMatch.timed, decisionOpen, deadlineAt]);
 
   const nextRound = async () => {
+    if (nextInFlight.current || !reveal || match.status === "finished") return;
+    const reviewedRound = resolvedRound(snapshotRef.current);
+    if (reviewedRound === null) return;
+    nextInFlight.current = true;
+    setNextPending(true);
     setNetworkError("");
+    if (learningRef.current) updateLearning({ ...learningRef.current, pendingAcknowledgement: reviewedRound });
     try {
       let snapshot: PublicMatch | null = null;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        if (attempt > 0) await new Promise((resolve) => window.setTimeout(resolve, 350));
-        snapshot = (await api.getMatch<PublicMatch>(initialMatch.id)).match;
-        if (snapshot.status !== "transition") break;
+      if (serverStatus === "review") {
+        if (nextRef.current?.round !== reviewedRound) nextRef.current = { round: reviewedRound, key: crypto.randomUUID() };
+        snapshot = (await api.nextRound(initialMatch.id, reviewedRound, revision, nextRef.current.key)).match;
+      } else {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          if (attempt > 0) await new Promise((resolve) => window.setTimeout(resolve, 350));
+          snapshot = (await api.getMatch<PublicMatch>(initialMatch.id)).match;
+          if (snapshot.status !== "transition") break;
+        }
       }
       if (!snapshot) return;
-      const acknowledgedRound = reveal?.state.round;
       focusRoundAfterReveal.current = snapshot.status !== "finished";
-      if (!receiveSnapshot(snapshot, acknowledgedRound)) return;
+      if (!receiveSnapshot(snapshot, reviewedRound)) return;
     } catch (reason) {
       setNetworkError(reason instanceof Error ? reason.message : "The next round could not be loaded.");
-    }
+      try { receiveSnapshot((await api.getMatch<PublicMatch>(initialMatch.id)).match); }
+      catch { /* Keep the review and retry identity until the next authoritative snapshot. */ }
+    } finally { nextInFlight.current = false; setNextPending(false); }
   };
 
   const chooseAction = (type: Action["type"]) => {
@@ -482,34 +543,53 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
     return first ? `Try ${actionText(first)}. Legal targets are outlined on the grid.` : "No territory move is available. Pass this round.";
   }, [match, me]);
 
-  const finalRoundReveal = match.status === "finished" && reveal &&
-    (resultType === "standard" || resultType === "sudden-death" || resultType === "board-exhaustion");
-  if (serverStatus === "voided" || (match.status === "finished" && (!finalRoundReveal || showFinalResult))) {
-    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={onRestart} onExit={onExit} onOpenRanked={onOpenRanked} onOpenLeaderboard={onOpenLeaderboard} onQuickRematch={onQuickRematch} onSnapshot={receiveSnapshot} />;
+  const acknowledgeReview = () => {
+    const round = resolvedRound(snapshotRef.current);
+    if (learningRef.current && round !== null) updateLearning(acknowledgeLearning(learningRef.current, round));
+  };
+  const exit = () => { if (match.status === "finished") acknowledgeReview(); onExit(); };
+  if (serverStatus === "voided" || match.status === "finished") {
+    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={async (key) => { acknowledgeReview(); await onRestart(key); }} onExit={exit} onOpenRanked={onOpenRanked} onOpenLeaderboard={onOpenLeaderboard} onQuickRematch={onQuickRematch} onSnapshot={receiveSnapshot}
+      lastResult={reveal} learningReady={Boolean(learning && !learning.skipped && learning.independentRound !== null && !learning.completed)} onStartDuel={() => { acknowledgeReview(); onStartDuel(); }} onReplayLearning={onReplayLearning} />;
   }
 
   const resign = async () => {
     setNetworkError("");
-    try { receiveSnapshot((await api.resignMatch(initialMatch.id)).match); setConfirmResign(false); }
+    try { receiveSnapshot((await api.resignMatch(initialMatch.id)).match); setConfirmResign(false); if (leavingForDuel) { acknowledgeReview(); onStartDuel(); } }
     catch (reason) { setNetworkError(reason instanceof Error ? reason.message : "The match could not be resigned."); }
   };
 
   const closeResign = () => {
     setConfirmResign(false);
+    setLeavingForDuel(false);
     window.requestAnimationFrame(() => leaveButtonRef.current?.focus());
   };
 
-  const roundLabel = match.phase === "sudden-death"
+  const upcomingRoundLabel = match.phase === "sudden-death"
     ? `Sudden Death ${Math.max(1, match.round - match.config.standardRounds)}`
     : `Round ${match.round} / ${match.config.standardRounds}`;
+  const roundLabel = (serverStatus === "review" || serverStatus === "transition") && reveal
+    ? `Round ${resolvedRound(snapshotRef.current)} resolved · ${serverStatus === "review" ? "Review" : "Reveal"}` : upcomingRoundLabel;
+  const coaching = learning && !learning.skipped;
+  const independent = Boolean(coaching && learning.expandAcknowledged && learning.independentRound === null);
+  const qualifyingReview = Boolean(coaching && !learning.completed && learning.independentRound !== null && reveal);
+  const instruction = qualifyingReview ? "You practiced the loop. Continue Practice or start a duel."
+    : learning?.completed ? null
+    : reveal ? "Both moves resolved. Review territory and Energy, then choose Next round."
+    : independent ? "Choose your own move, then lock it."
+    : submitting ? "Sending your move. Wait for the server to accept it."
+    : locked ? "Your move is locked. Both moves reveal together."
+    : selectedAction ? "Your choice is editable. Use Lock move when ready."
+    : "Finish with more territory. Try Expand on a highlighted space.";
 
   return (
     <main className="game-page">
       <header className="match-header">
         <button ref={leaveButtonRef} className="icon-button" onClick={() => setConfirmResign(true)} aria-label="Leave match">×</button>
         <div><span>{mode === "practice" ? "Practice" : mode === "ranked" ? "Ranked Duel" : `Quick Duel · ${initialMatch.roomId ? "Friend" : difficulty}`}</span><strong ref={roundLabelRef} tabIndex={-1}>{roundLabel}</strong></div>
-        {initialMatch.timed
-          ? <div className={`timer ${timeLeft <= 2 ? "urgent" : ""}`} aria-label={`${timeLeft} seconds remaining`}><b>0{timeLeft}</b><span>SEC</span></div>
+        {initialMatch.timed && decisionOpen
+          ? <div className={`timer ${timeLeft <= 3 ? "urgent" : ""}`} aria-label={`${timeLeft} seconds remaining`}><b>{timeLeft}</b><span>SEC</span></div>
+          : initialMatch.timed ? <div className="timer untimed"><b>—</b><span>{serverStatus === "review" ? "REVIEW" : "REVEAL"}</span></div>
           : <div className="timer untimed" aria-label="Untimed Practice"><b>—</b><span>NO TIMER</span></div>}
       </header>
 
@@ -519,11 +599,11 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
         <div className={`player-score bot side-${rival}`}><p><small>{mode === "ranked" || initialMatch.roomId ? initialMatch.playerNames[rival] : `${difficulty} bot`} · {rival}</small><strong>{totals[rival].toString().padStart(2, "0")}</strong></p><span className="owner-symbol">{rival === "A" ? "●" : "◆"}</span></div>
       </section>
 
-      {reveal && <RevealPanel result={reveal} player={me} finalRound={Boolean(finalRoundReveal)} activeRoundOpen={decisionOpen}
+      {reveal && <RevealPanel result={reveal} player={me} finalRound={false} activeRoundOpen={decisionOpen}
+        automatic={initialMatch.progression === "automatic" && initialMatch.policyVersion === 2} pending={nextPending}
         onContinue={() => {
-          if (finalRoundReveal) setShowFinalResult(true);
-          else if (decisionOpen) {
-            acknowledgedRoundRef.current = reveal.state.round;
+          if (decisionOpen) {
+            acknowledgedRoundRef.current = resolvedRound(snapshotRef.current) ?? 0;
             setReveal(null);
             focusRoundAfterReveal.current = true;
           } else void nextRound();
@@ -531,7 +611,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
 
       <div className="game-layout">
         <section className="board-panel" aria-labelledby="board-title">
-          <div className="board-label"><span id="board-title">Territory grid</span><span>{locked ? "MOVE LOCKED" : reveal && !canAct ? "ROUND REVEALED" : "CHOOSE A TARGET"}</span></div>
+          <div className="board-label"><span id="board-title">Territory grid</span><span>{!decisionOpen ? "ROUND REVEALED" : submitting ? "SENDING MOVE" : locked ? "MOVE LOCKED" : "CHOOSE A TARGET"}</span></div>
           <GameBoard board={match.board} legal={legal} target={target} secondTarget={selectedTargets[1] ?? null} disabled={!canAct} you={me}
             onTarget={(cell) => setSelectedTargets((current) => actionType === "surge" ? toggleSurgeTarget(current, cell) : [cell])} />
           <div className="energy-bar" aria-label={`Your Energy ${match.energy[me]} of 3. Rival Energy ${match.energy[rival]} of 3.`}>
@@ -540,11 +620,18 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
             <strong>{match.energy[me]} / 3</strong>
             <small className="rival-energy">RIVAL {match.energy[rival]} / 3</small>
           </div>
-          {mode === "practice" && <div className="hint-control"><button type="button" onClick={() => setShowHint((value) => !value)} aria-pressed={showHint}>{showHint ? "Hide hints" : "Show hints"}</button></div>}
-          {mode === "practice" && showHint && canAct && <p className="coach-note"><b>Hint</b>{hint}</p>}
+          {mode === "practice" && !learning && <div className="hint-control"><button type="button" onClick={() => setShowHint((value) => !value)} aria-pressed={showHint}>{showHint ? "Hide hints" : "Show hints"}</button></div>}
+          {mode === "practice" && !learning && showHint && canAct && <p className="coach-note"><b>Hint</b>{hint}</p>}
         </section>
 
         <section className="move-panel" aria-labelledby="move-title">
+          {coaching && <div className="learning-coach">
+            {instruction && <p role="status">{instruction}</p>}
+            <details><summary>Learning details</summary><p>{independent ? "Use any legal action without a recommendation. A manually locked Pass counts too." : "Expand is free. Choose any highlighted empty space beside your territory. Selecting never submits a move; Lock does. All legal alternatives remain available."}</p></details>
+            <button className="back-link" onClick={() => { if (learning) updateLearning({ ...learning, skipped: true }); }}>Skip coaching</button>
+            {qualifyingReview && <button className="secondary-cta" onClick={() => { setLeavingForDuel(true); setConfirmResign(true); }}>Start a duel</button>}
+          </div>}
+          {coaching && learning.completed && <ContextTip run={learning} match={snapshotRef.current} action={actionType} onUpdate={updateLearning} />}
           <div className="move-heading"><div><span>YOUR MOVE</span><h2 id="move-title">Choose an action.</h2></div><small>One move per round</small></div>
           <div className="action-grid">
             {ACTIONS.map((action) => {
@@ -559,7 +646,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
                   aria-pressed={actionType === action.type}
                 >
                   <span className={`action-glyph glyph-${action.type}`} aria-hidden="true" />
-                  <span><strong>{action.label}</strong><small>{action.short}</small></span>
+                  <span><strong>{action.label}</strong><small>{!canAfford ? `Need ${action.cost - match.energy[me]} more Energy` : !hasTargets ? "No legal target · see action rules" : action.short}</small></span>
                   {action.cost > 0 && <b className="cost">{action.cost}ϟ</b>}
                 </button>
               );
@@ -572,17 +659,19 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
           {connectionError && <p className="form-error" role="status">{connectionError}</p>}
           {serverStatus === "grace" && <p className="status-note" role="status">Match paused while a player reconnects. The server will resume or finish it after the grace period.</p>}
           {afkWarning && <p className="afk-warning" role="alert"><b>AFK warning</b> Choose a move this round. A third connected miss ends the match.</p>}
+          <ActionDetails energy={match.energy[me]} timed={initialMatch.timed && decisionOpen} />
           <button className="lock-button" disabled={!selectedAction || !canAct} onClick={() => void commit()}>
-            {locked ? "Move locked" : "Lock move"}<span>{locked ? "✓" : "→"}</span>
+            {submitting ? "Sending move…" : decisionOpen && locked ? "Move locked" : "Lock move"}<span>{decisionOpen && locked ? "✓" : "→"}</span>
           </button>
           {mode === "practice" && <button className="secondary-cta full" disabled={restartingPractice} onClick={() => void restartPractice()}>
             {restartingPractice ? "Restarting Practice…" : "Restart Practice"}
           </button>}
-          <p className="privacy-note">{mode === "ranked" || initialMatch.roomId ? "Your opponent cannot see your move or lock timing before reveal." : "The bot chooses from the same public pre-round state and cannot see your pending move."}</p>
+          {learning && <button className="back-link" onClick={onReplayLearning}>Replay learning</button>}
+          <p className="privacy-note">{mode === "ranked" || initialMatch.roomId ? initialMatch.policyVersion === 2 ? "Moves stay secret until both players lock or time expires. Early reveal means both committed." : "Moves stay secret until the fixed server deadline." : "The bot chooses from the same public pre-round state and cannot see your pending move."}</p>
         </section>
       </div>
 
-      {confirmResign && (!reveal || decisionOpen) && <ResignDialog ranked={mode === "ranked"} onCancel={closeResign} onConfirm={() => void resign()} />}
+      {confirmResign && <ResignDialog ranked={mode === "ranked"} onCancel={closeResign} onConfirm={() => void resign()} />}
     </main>
   );
 }
@@ -602,12 +691,38 @@ function ResignDialog({ ranked, onCancel, onConfirm }: { ranked: boolean; onCanc
   );
 }
 
-export function RevealPanel({ result, player, finalRound, activeRoundOpen, onContinue }: {
+function WelcomeDialog({ onClose, onLearn, onDuel }: { onClose: () => void; onLearn: () => void; onDuel: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    dialogRef.current?.showModal();
+    dialogRef.current?.querySelector<HTMLButtonElement>('.primary-cta')?.focus();
+    return () => dialogRef.current?.close();
+  }, []);
+  return <dialog ref={dialogRef} className="welcome-dialog" aria-labelledby="welcome-title"
+    onKeyDown={(event) => {
+      if (event.key !== 'Tab') return;
+      const buttons = Array.from(dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []);
+      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      if (event.shiftKey && index <= 0 || !event.shiftKey && index === buttons.length - 1) {
+        event.preventDefault(); buttons[event.shiftKey ? buttons.length - 1 : 0]?.focus();
+      }
+    }}
+    onCancel={(event) => { event.preventDefault(); onClose(); }}>
+    <button className="icon-button" aria-label="Close welcome" onClick={onClose}>×</button>
+    <h2 id="welcome-title">Your first move</h2><p>Finish with more territory than your rival.</p>
+    <button className="primary-cta full" autoFocus onClick={onLearn}>Learn with a bot <small>Recommended · untimed</small></button>
+    <button className="secondary-cta full" onClick={onDuel}>Jump into a duel</button>
+  </dialog>;
+}
+
+export function RevealPanel({ result, player, finalRound, activeRoundOpen, onContinue, automatic = false, pending = false }: {
   result: NonNullable<PublicMatch["lastResult"]>;
   player: Player;
   finalRound: boolean;
   activeRoundOpen: boolean;
   onContinue: () => void;
+  automatic?: boolean;
+  pending?: boolean;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(!activeRoundOpen || finalRound);
   useEffect(() => {
@@ -620,7 +735,7 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
     <section className="round-review" role="region" aria-labelledby="reveal-title" aria-live="polite">
       <div className="round-review-heading">
         <p className="eyebrow">Simultaneous reveal</p>
-        <h2 id="reveal-title">Round {result.state.status === "finished" ? result.state.round : result.state.round - 1} resolved.</h2>
+        <h2 id="reveal-title">Round {result.round ?? (result.state.status === "finished" ? result.state.round : result.state.round - 1)} resolved.</h2>
         <button className="reveal-details-toggle" type="button" aria-expanded={detailsOpen} aria-controls="reveal-actions"
           onClick={() => setDetailsOpen((open) => !open)}>
           {detailsOpen ? "Hide details" : "Show details"}
@@ -633,16 +748,21 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
               <strong>{actionText(outcome.action)}</strong>
               <p>{outcomeExplanation(outcome)}.</p>
               <small>{energyEffect(outcome)}</small>
+              {detailsOpen && <>
+                {outcome.cells && <p>{outcome.cells.map((cell) => `${coordinate(cell.target)}: ${OUTCOME_COPY[cell.reason]}`).join(" · ")}</p>}
+                <p>Territory {result.score[side]}{result.beforeScore && ` (${signed(result.score[side] - result.beforeScore[side])})`} · Energy {result.state.energy[side]}{result.beforeEnergy && ` (${signed(result.state.energy[side] - result.beforeEnergy[side])})`}</p>
+              </>}
             </div>
           ))}
         </div>
-        {finalRound && <p className={`reveal-winner ${result.state.winner === player ? "you-win" : result.state.winner === rival ? "rival-wins" : "tied"}`} role="status">{winnerText}</p>}
+        {finalRound && result.state.status === "finished" && (result.state.winner !== null || result.state.endingReason) && <p className={`reveal-winner ${result.state.winner === player ? "you-win" : result.state.winner === rival ? "rival-wins" : "tied"}`} role="status">{winnerText}</p>}
         <div className="reveal-score" aria-label={`Territory score: you ${result.score[player]}, rival ${result.score[rival]}`}>
           <div><small>You</small><strong>{result.score[player]}</strong></div><i aria-hidden="true">—</i><div><small>Rival</small><strong>{result.score[rival]}</strong></div>
         </div>
-        <button className="secondary-cta full" onClick={onContinue}>
-          {finalRound ? "See result" : activeRoundOpen ? "Hide result" : "Next round"} <span>→</span>
-        </button>
+        {!finalRound && (automatic && !activeRoundOpen ? <p role="status">Next round opens automatically after the shared reveal.</p>
+          : <button className="secondary-cta full" disabled={pending} onClick={onContinue}>
+            {pending ? "Opening round…" : activeRoundOpen ? "Hide result" : "Next round"} <span>→</span>
+          </button>)}
       </section>
   );
 }
@@ -662,7 +782,7 @@ export function RankedSettlementDetails({ settlement, profile }: { settlement: R
   </>;
 }
 
-function ResultScreen({ match, totals, player, ranked, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onOpenLeaderboard, onQuickRematch, onSnapshot }: {
+function ResultScreen({ match, totals, player, ranked, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onOpenLeaderboard, onQuickRematch, onSnapshot, lastResult, learningReady, onStartDuel, onReplayLearning }: {
   match: MatchState;
   totals: Readonly<Record<Player, number>>;
   player: Player;
@@ -676,6 +796,10 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   onOpenLeaderboard: () => void;
   onQuickRematch: (match: PublicMatch) => void;
   onSnapshot: (match: PublicMatch) => void;
+  lastResult: PublicMatch['lastResult'];
+  learningReady: boolean;
+  onStartDuel: () => void;
+  onReplayLearning: () => void;
 }) {
   const rival: Player = player === "A" ? "B" : "A";
   const title = resultType === "server-error" ? "Match voided" : resultType === "no-contest" ? "No contest" : match.winner === player ? "Victory" : match.winner === rival ? "Defeat" : "Draw";
@@ -791,6 +915,9 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
         resultType === "resignation" ? "The match ended by resignation." :
           resultType === "forfeit" ? "The match ended by forfeit." :
             match.endingReason === "board-exhaustion" ? "No legal territory-changing moves remained." : "Final territory after the last round."}</p>
+      {lastResult && <RevealPanel result={lastResult} player={player} finalRound activeRoundOpen={false} onContinue={onExit} />}
+      {learningReady && <p role="status">You practiced the loop. Start a duel or leave to acknowledge this result.</p>}
+      {!ranked && !friend && <div className="learning-choices"><button className="secondary-cta" onClick={onStartDuel}>Start a duel</button><button className="back-link" onClick={onReplayLearning}>Replay learning</button></div>}
       {ranked && settlement && <RankedSettlementDetails settlement={settlement} profile={profile} />}
       {ranked && !settlement && resultType !== "server-error" && <p className="status-note" role="status">Rating update pending. This result will refresh automatically.</p>}
       {ranked && invitation && !requested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Sides will swap and credit is recalculated before ready.</p><button className="primary-cta" disabled={busy} onClick={acceptRematch}>Accept rematch <span>→</span></button></div>}
@@ -1207,6 +1334,12 @@ export function App() {
   const [solo, setSolo] = useState<{ mode: PlayMode; difficulty: Difficulty }>({ mode: "practice", difficulty: "Normal" });
   const [botMatch, setBotMatch] = useState<PublicMatch | null>(null);
   const [resumedRoom, setResumedRoom] = useState<Room | null>(null);
+  const [welcome, setWelcome] = useState(false);
+  const welcomeTriggerRef = useRef<HTMLElement | null>(null);
+  const [learningReplacement, setLearningReplacement] = useState<PublicMatch | null>(null);
+  const [entryError, setEntryError] = useState("");
+  const [learningBusy, setLearningBusy] = useState(false);
+  const learningKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -1217,7 +1350,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (screen === "game" && botMatch) window.sessionStorage.setItem(CURRENT_MATCH_KEY, botMatch.id);
+    try { if (screen === "game" && botMatch) window.sessionStorage.setItem(CURRENT_MATCH_KEY, botMatch.id); } catch { /* Resume also uses the server. */ }
   }, [screen, botMatch]);
 
   useEffect(() => {
@@ -1229,13 +1362,14 @@ export function App() {
         const { match, room, rankedQueue, rankedChallenge } = await api.getResume();
         if (!active) return;
         let previous: PublicMatch | null = null;
-        const previousId = window.sessionStorage.getItem(CURRENT_MATCH_KEY);
+        let previousId: string | null = null;
+        try { previousId = window.sessionStorage.getItem(CURRENT_MATCH_KEY); } catch { /* Server resume is sufficient. */ }
         if (!match && previousId) {
           try {
             const response = await api.getMatch<PublicMatch>(previousId);
             previous = response.match.status === "finished" || response.match.status === "voided" ? response.match : null;
           } catch {
-            window.sessionStorage.removeItem(CURRENT_MATCH_KEY);
+            try { window.sessionStorage.removeItem(CURRENT_MATCH_KEY); } catch { /* Storage is optional. */ }
           }
         }
         if (!active) return;
@@ -1262,7 +1396,7 @@ export function App() {
   }, [authLoading]);
 
   const navigate = (next: Screen) => {
-    if (next !== "game") window.sessionStorage.removeItem(CURRENT_MATCH_KEY);
+    try { if (next !== "game") window.sessionStorage.removeItem(CURRENT_MATCH_KEY); } catch { /* Storage is optional. */ }
     if ((inviteIntent && next !== "ranked") || (guestInvite && next !== "room") || (quickRematchToken && next !== "quick-rematch")) window.history.replaceState(null, "", "/");
     if (next !== "room") setResumedRoom(null);
     if (next === "home") void api.trackEvent("homepage_opened").catch(() => undefined);
@@ -1271,13 +1405,54 @@ export function App() {
     setScreen(next);
     window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   };
-  const start = async (mode: SoloMode, difficulty: Difficulty, creationKey: string, parentMatchId?: string, restartMatchId?: string, timed = mode === "quick") => {
+  const start = async (mode: SoloMode, difficulty: Difficulty, creationKey: string, parentMatchId?: string, restartMatchId?: string, timed = mode === "quick", learning = false) => {
     if (!parentMatchId) void api.trackEvent("opponent_selected", `${mode}-bot`).catch(() => undefined);
     const response = await api.createBotMatch(mode, difficulty.toLowerCase() as Lowercase<Difficulty>, creationKey, parentMatchId, restartMatchId, timed);
+    if (learning) beginLearning(response.match.id);
     setSolo({ mode, difficulty });
     setBotMatch(response.match);
     setGameKey((value) => value + 1);
     navigate("game");
+  };
+  const closeWelcome = (restore = true) => {
+    writeFlag(WELCOME_KEY, "handled"); setWelcome(false);
+    if (restore) window.requestAnimationFrame(() => welcomeTriggerRef.current?.focus());
+  };
+  const genericStart = async () => {
+    setEntryError("");
+    try {
+      const { match, room, rankedQueue, rankedChallenge } = await api.getResume();
+      if (match) { setBotMatch(match); setSolo({ mode: match.mode, difficulty: match.botDifficulty ? `${match.botDifficulty[0].toUpperCase()}${match.botDifficulty.slice(1)}` as Difficulty : "Normal" }); navigate("game"); return; }
+      if (room) { setResumedRoom(room); navigate("room"); return; }
+      if (rankedQueue || rankedChallenge) { navigate("ranked"); return; }
+      if (readFlag(WELCOME_KEY)) navigate("quick");
+      else { welcomeTriggerRef.current = document.activeElement as HTMLElement; setWelcome(true); }
+    } catch (reason) { setEntryError(reason instanceof Error ? reason.message : "Please reconnect and try again."); }
+  };
+  const launchLearning = async () => {
+    learningKeyRef.current ??= crypto.randomUUID();
+    await start("practice", "Easy", learningKeyRef.current, undefined, undefined, false, true);
+    learningKeyRef.current = null;
+  };
+  const learn = async () => {
+    if (learningBusy) return;
+    setLearningBusy(true); setEntryError("");
+    try {
+      const { match } = await api.getResume();
+      if (match) setLearningReplacement(match);
+      else await launchLearning();
+    } catch (reason) { setEntryError(reason instanceof Error ? reason.message : "Learning could not start."); }
+    finally { setLearningBusy(false); }
+  };
+  const replaceWithLearning = async () => {
+    if (!learningReplacement || learningBusy) return;
+    setLearningBusy(true); setEntryError("");
+    try {
+      await api.resignMatch(learningReplacement.id);
+      setLearningReplacement(null);
+      await launchLearning();
+    } catch (reason) { setEntryError(reason instanceof Error ? reason.message : "The active match could not be left."); }
+    finally { setLearningBusy(false); }
   };
 
   if (authLoading) return <div className="app-shell"><main className="panel-page"><p className="status-note" role="status">Checking sign-in…</p></main></div>;
@@ -1285,15 +1460,19 @@ export function App() {
   return (
     <div className="app-shell">
       {screen !== "game" && <AppHeader navigate={navigate} />}
-      {screen === "home" && <Home navigate={navigate} />}
+      {entryError && <p className="form-error" role="alert">{entryError}</p>}
+      {learningBusy && <p className="status-note" role="status">Starting untimed learning…</p>}
+      {screen === "home" && <Home navigate={navigate} onGenericStart={() => void genericStart()} onLearn={() => void learn()} />}
       {screen === "practice" && <ModeSelect kind="practice" onStart={(mode, difficulty, key, timed) => start(mode, difficulty, key, undefined, undefined, timed)} navigate={navigate} />}
       {screen === "quick" && <ModeSelect kind="quick" onStart={(mode, difficulty, key, timed) => start(mode, difficulty, key, undefined, undefined, timed)} navigate={navigate} />}
-      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.status === "voided" ? undefined : botMatch.id, undefined, botMatch.timed); }} onRestartPractice={(key) => start("practice", solo.difficulty, key, undefined, botMatch.id, botMatch.timed)} />}
+      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onStartDuel={() => navigate("quick")} onReplayLearning={() => void learn()} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.status === "voided" ? undefined : botMatch.id, undefined, botMatch.timed); }} onRestartPractice={(key) => start("practice", solo.difficulty, key, undefined, botMatch.id, botMatch.timed)} />}
       {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} authRedirectError={authRedirectError} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {(screen === "leaderboard" || screen === "profile" || screen === "how-to") && <InfoScreen screen={screen} authRedirectError={authRedirectError} navigate={navigate}
-        onStartPractice={() => navigate("practice")} />}
+        onStartPractice={() => void learn()} />}
+      {welcome && <WelcomeDialog onClose={() => closeWelcome()} onLearn={() => { closeWelcome(false); void learn(); }} onDuel={() => { closeWelcome(false); navigate("quick"); }} />}
+      {learningReplacement && <ResignDialog ranked={learningReplacement.mode === "ranked"} onCancel={() => setLearningReplacement(null)} onConfirm={() => void replaceWithLearning()} />}
     </div>
   );
 }

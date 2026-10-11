@@ -139,7 +139,7 @@ test('ready handshake binds only when both players confirm and freezes startedAt
   const bound = row<{ started_at: number; deadline: number; ready_deadline: number | null; player_a_name: string; player_b_name: string }>(db,
     'SELECT started_at, deadline, ready_deadline, player_a_name, player_b_name FROM matches WHERE id = ?', shell.matchId);
   assert.equal(bound.started_at, 50_200);
-  assert.equal(bound.deadline, 55_200);
+  assert.equal(bound.deadline, 60_200);
   assert.equal(bound.ready_deadline, null);
   assert.deepEqual([bound.player_a_name, bound.player_b_name].sort(), ['Alpha', 'Bravo']);
   assert.equal(row<{ state: string; lease_expires_at: number | null }>(db,

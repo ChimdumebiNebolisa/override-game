@@ -30,7 +30,12 @@ export interface PublicMatch {
   playerNames: Record<Player, string>;
   state: MatchState;
   score: Record<Player, number>;
-  status: "readying" | "decision" | "transition" | "grace" | "finished" | "voided";
+  status: "readying" | "decision" | "transition" | "review" | "grace" | "finished" | "voided";
+  policyVersion?: number;
+  decisionDurationMs?: number;
+  revealDurationMs?: number;
+  progression?: "automatic" | "review";
+  transitionAt?: number | null;
   deadline: number | null;
   serverNow: number;
   revision: number;
@@ -244,6 +249,12 @@ export const api = {
         body: JSON.stringify({ action, round, revision }),
       },
     );
+  },
+
+  nextRound(matchId: string, round: number, revision: number, acknowledgementKey: string) {
+    return request<MatchResponse<PublicMatch>>(`/api/matches/${encodeURIComponent(matchId)}/next`, {
+      method: "POST", body: JSON.stringify({ round, revision, acknowledgementKey }),
+    });
   },
 
   subscribe(roomId: string, onInvalidate: () => void) {

@@ -1,6 +1,14 @@
-# OVERRIDE implementation status — 2026-10-10
+# OVERRIDE implementation status — 2026-10-11
 
-The product requirements are in `OVERRIDE_PRD_v0.3.docx`; `IMPLEMENTATION_PLAN.md` records approved decisions and acceptance criteria. This status tracks evidence without changing those requirements. Current remediation addresses the [2026-10-10 audit](AUDIT_REPORT_2026-10-10.md); [STAGING_VERIFICATION.md](STAGING_VERIFICATION.md) records the remaining release procedure. The dated sections below preserve implementation history.
+The frozen prototype requirements are in `OVERRIDE_PRD_v0.3.docx`; the owner-directed [learning/pacing addendum](LEARNING_PACING_REQUIREMENTS.md) supersedes its tutorial, new-match timing and fixed-deadline privacy requirements. The dated sections below preserve implementation and deployment history.
+
+## Learning and pacing — 2026-10-11
+
+Implemented on `codex/learning-round-pacing`, without production deployment: one first-start welcome, real untimed Easy learning, action-based completion, static rules, ten-second new timed decisions, server bot review/authorized Next, three-second human reveal and both-lock early resolution. Migration 7 preserves policy 1 on existing records, including ready shells; fresh records/restarts/rematches use policy 2.
+
+Verification and acceptance mapping are in [LEARNING_PACING_VERIFICATION.md](LEARNING_PACING_VERIFICATION.md), with checked-in representative screenshots/browser reports. The 302 unit tests, TypeScript/Vite build, 28 browser checks and container backup/restore gate passed locally. Native Worker runtime is verified in a disposable Linux copy; final Linux evidence is in the handoff. Production was inspected as reference, without public Ranked activity, and its temporary Practice match was resigned. Staging evidence below does not verify this change.
+
+Human comprehension, screen readers, real-device interruptions and real-account Ranked journeys remain unverified. Ten seconds and contextual coaching are product choices for a future novice check. Deployment requires separate authorization and the real-production asset/flow checks in the handoff.
 
 **Latest staging deployment:** Commit `b0b6d659a9ebb5eda645da985e8553621f195643` is deployed to `https://override-game-staging.cnebolisa.workers.dev` as version `f7e65226-b1d0-4792-bbd6-e5a4a27b09d2`. `npm test` passed 209 tests across 25 files and `npm run build` passed before deployment. Live `/`, `/api/health`, and `/api/config` checks returned 200; health reported `ok: true`, and the served asset includes the two-match placement copy and shared bot standings. Real-account sign-in and gameplay remain unverified; Firebase authorized-domain/OAuth callback setup is still pending.
 
