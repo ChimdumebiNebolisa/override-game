@@ -1,6 +1,16 @@
 # Learning and pacing verification / release handoff
 
-Date: 2026-10-11. Branch: **codex/learning-round-pacing**, based on 1238ec10725d58982fe339fd4c07017bc3af5c38. Use `git rev-parse HEAD` for the final review commit. This change has not been deployed or pushed. Existing unrelated output work was preserved.
+Date: 2026-10-11. Branch: **codex/learning-round-pacing**, based on 1238ec10725d58982fe339fd4c07017bc3af5c38. Application commit **b840699c718e37d8809eb7a197dff89712d3f520** was pushed and deployed after the owner's explicit authorization. Existing unrelated output work was preserved.
+
+## Authorized production rollout — 2026-10-11
+
+Ran `npm run deploy:worker` against the configured default production Worker. Cloudflare version **35350bcf-76fa-4268-ac10-e6fcfe2d01a2** serves [the production game](https://override-game.cnebolisa.workers.dev/). No staging flag, namespace change, secret change or production fixture was used. The existing production recovery-control token was unavailable locally, so no pre-rollout recovery bookmark was collected; this did not change the additive migration or existing recovery mechanism.
+
+Read-only verification confirmed HTTP 200, `health.ok === true`, matching HTML asset references and byte-for-byte SHA-256 equality for every built asset. The deployed main client is `index-CdL0ZJ2F.js` and stylesheet is `index-BAIMicxe.css`.
+
+Four real production Chromium checks passed in fresh browser contexts: welcome/rules (no hidden match, keyboard focus containment, Escape restoration, exactly two learning choices); normal Easy untimed learning at 390 px (normal opening, editable alternative target, immediate Lock review, persisted review after reload and eleven seconds idle, independent manual Pass, explicit completion acknowledgement, replay availability and no horizontal overflow); timed Practice; and Quick bot. Both timed paths returned policy 2, a fresh ten-second decision, stationary review with no deadline after eleven seconds idle, and a fresh full window after authenticated Next. All three temporary games were explicitly resigned and active-match lookup returned null afterward. No uncaught browser errors occurred.
+
+Deployment output and asset/flow evidence are local under `output/learning-production-*.log` and `output/playwright/production-learning/`. Later documentation-only commits record this rollout; the application source deployed remains the commit above.
 
 ## Production reference inspected
 
@@ -96,6 +106,6 @@ console.log('Production assets match the reviewed build; health passed.');
 
 ## Evidence limits / optional novice check
 
-No human comprehension/usability test, screen-reader evaluation, real-device interruption test or real Google-account Ranked journey was performed. Narrow/touch evidence uses Chromium emulation; zoom evidence is equivalent CSS reflow rather than browser-chrome zoom on a physical device. Deadline orderings use deterministic service linearizations plus concurrent Worker requests, not a production load test. Storage-refused progress survives within the tab only. Production retains its old behavior until authorized rollout and real-production checks succeed.
+No human comprehension/usability test, screen-reader evaluation, real-device interruption test or real Google-account Ranked journey was performed. Narrow/touch evidence uses Chromium emulation; zoom evidence is equivalent CSS reflow rather than browser-chrome zoom on a physical device. Deadline orderings use deterministic service linearizations plus concurrent Worker requests, not a production load test. Storage-refused progress survives within the tab only. The authorized production rollout and its actual checks are recorded above.
 
 Optional novice test: give a fresh link without explanation, let the player enter and play three rounds, ask them to explain the score and hidden simultaneous choices, then make a self-chosen move. Record hesitations without supplying tactical instructions. Ten seconds and contextual teaching are product choices to evaluate, not proven usability gains. No tracking pipeline was added.
