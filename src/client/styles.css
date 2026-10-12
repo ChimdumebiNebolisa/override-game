@@ -67,14 +67,21 @@ button:not(:disabled) { cursor: pointer; }
 .hero-entry { inline-size: min(100%, 550px); display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 20px; }
 .hero-entry > button { flex: 1 1 230px; min-block-size: 58px; justify-content: center; gap: 12px; border-radius: 4px; font-size: 17px; font-weight: 700; }
 .hero-entry .primary-cta { background: var(--blue); border-color: var(--blue); box-shadow: 5px 5px 0 var(--ink); }
-.hero-entry .secondary-cta { margin: 0; border-color: var(--muted); background: color-mix(in oklch, var(--paper) 85%, transparent); }
+.hero-entry .secondary-cta { margin: 0; border-color: var(--ink); background: var(--ink); color: var(--white); box-shadow: 5px 5px 0 var(--blue); }
 .hero-account-note { margin: 0; font-size: 13px; color: var(--muted); }
 @media (hover: hover) and (pointer: fine) {
   .hero-entry .primary-cta:hover:not(:disabled) { background: var(--blue-dark); box-shadow: 5px 5px 0 var(--ink); }
-  .hero-entry .secondary-cta:hover { background: var(--white); border-color: var(--blue); }
+  .hero-entry .secondary-cta:hover:not(:disabled) { background: var(--blue-dark); border-color: var(--blue-dark); box-shadow: 5px 5px 0 var(--ink); }
 }
 .hero-entry .primary-cta:active { background: var(--blue-dark); box-shadow: 2px 2px 0 var(--ink); }
-.hero-entry .secondary-cta:active { background: var(--white); }
+.hero-entry .secondary-cta:active:not(:disabled) { background: var(--blue-dark); border-color: var(--blue-dark); box-shadow: 2px 2px 0 var(--ink); }
+@media (prefers-reduced-motion: no-preference) {
+  .hero-entry > button:not(:disabled) { transition: transform 140ms var(--ease-out), scale 140ms var(--ease-out); }
+  .hero-entry > button:active:not(:disabled) { transform: translate(2px, 2px); }
+}
+@media (prefers-reduced-motion: no-preference) and (hover: hover) and (pointer: fine) {
+  .hero-entry .secondary-cta:hover:not(:disabled):not(:active) { transform: translate(-1px, -1px); }
+}
 .primary-cta, .secondary-cta, .google-button { min-block-size: 52px; padding: 0 20px; border: 1px solid var(--ink); display: inline-flex; align-items: center; justify-content: space-between; gap: 34px; font-weight: 800; }
 .primary-cta { background: var(--ink); color: white; box-shadow: 5px 5px 0 var(--blue); }
 @media (hover: hover) and (pointer: fine) {
