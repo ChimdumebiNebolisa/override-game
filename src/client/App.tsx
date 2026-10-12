@@ -223,7 +223,7 @@ function Home({ navigate, onGenericStart, onLearn }: { navigate: (screen: Screen
             A territory duel on a 5×5 grid. Choose your move in secret, reveal together, and fight for control.
           </p>
           <div className="hero-entry"><button className="primary-cta" onClick={onGenericStart}>Start a game <span>→</span></button><p>No account needed.</p></div>
-          <button className="back-link learning-link" onClick={onLearn}>Learn with a bot · untimed</button>
+          <button className="secondary-cta learning-link" onClick={onLearn}>Learn with a bot · untimed <span aria-hidden="true">→</span></button>
         </div>
         <HeroDemo />
       </section>

@@ -164,7 +164,7 @@ button:not(:disabled) { cursor: pointer; }
     align-items: start;
     padding-block: 12px;
   }
-  .hero-copy { padding-block-start: clamp(8px, 2.5vh, 22px); }
+  .hero-copy { align-self: safe center; }
   .hero h1 { font-size: clamp(42px, 4vw, 58px); }
   .hero-intro { margin-block: 18px; font-size: 16px; line-height: 1.45; }
   .hero-demo { align-self: center; }
