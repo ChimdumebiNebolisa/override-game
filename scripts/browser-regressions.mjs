@@ -260,18 +260,37 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     } finally { await context.close(); }
   }
   for (const [width, height] of [[1440, 900], [1440, 640], [390, 844], [320, 568]]) {
-    await check(`hero-ambush-visual-${width}-${height}`, async (page) => {
-      const hero = page.locator('.hero-demo');
-      assert.equal(await hero.locator('button, select, input').count(), 0);
-      assert.equal(await hero.locator('.demo-cell').count(), 25);
-      assert.equal(await hero.locator('.demo-cell.A.captured').count(), 1);
-      assert.ok((await hero.innerText()).includes('C3 CAPTURED'));
+    await check(`hero-centered-visual-${width}-${height}`, async (page) => {
+      const hero = page.locator('.hero');
+      const artwork = hero.locator('.hero-artwork');
+      assert.equal(await artwork.getAttribute('aria-hidden'), 'true');
+      assert.equal(await artwork.locator('button, select, input').count(), 0);
+      assert.equal(await artwork.locator('svg').count(), 2);
+      assert.equal(await hero.locator('.hero-demo').count(), 0);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       const frame = await hero.boundingBox();
       const next = await page.locator('.mode-grid').boundingBox();
       assert.ok(next.y >= frame.y + frame.height, 'Hero does not overlap the following modes');
-      await page.screenshot({ path: resolve(outputDir, `hero-ambush-${width}-${height}.png`), fullPage: true });
-      return { nonInteractive: true, capturedCell: true, noOverlap: true };
+      const copy = await page.locator('.hero-copy').boundingBox();
+      assert.ok(Math.abs(copy.x + copy.width / 2 - width / 2) <= 1, 'Hero content is centered');
+      const start = await hero.getByRole('button', { name: /^Start a game/ }).boundingBox();
+      const learn = await hero.getByRole('button', { name: /^Learn with a bot/ }).boundingBox();
+      if (width >= 900) assert.equal(start.y, learn.y, 'Desktop actions share one aligned row');
+      else assert.ok(learn.y >= start.y + start.height, 'Narrow actions stack without overlap');
+      assert.ok(start.height >= 44 && learn.height >= 44, 'Both actions have clear tap targets');
+      const background = await page.locator('body').evaluate((element) => {
+        const probe = document.createElement('div');
+        probe.style.backgroundColor = 'var(--paper)';
+        element.append(probe);
+        const paper = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return { body: getComputedStyle(element).backgroundColor, paper };
+      });
+      assert.equal(background.body, background.paper, 'The light page background is preserved');
+      await hero.getByRole('button', { name: /^Learn with a bot/ }).focus();
+      assert.equal(await page.evaluate(() => document.activeElement.matches(':focus-visible')), true);
+      await page.screenshot({ path: resolve(outputDir, `hero-centered-${width}-${height}.png`), fullPage: true });
+      return { centered: true, lightBackground: true, pairedActions: true, noOverlap: true };
     }, { viewport: { width, height }, reducedMotion: 'reduce' });
   }
   const readMatch = async (page) => {
@@ -495,15 +514,15 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     return { noDecisionScrolling: true };
   }, { viewport: { width: 320, height: 568 }, reducedMotion: 'reduce' });
   for (const [width, height] of [[320, 568], [390, 844]]) {
-    await check(`home-footer-clearance-${width}`, async (page) => {
+    await check(`home-mode-card-clearance-${width}`, async (page) => {
       await page.locator('.ranked-card').waitFor();
       await page.evaluate(() => new Promise(requestAnimationFrame));
       await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
       assert.equal(await page.evaluate(() => scrollY + innerHeight >= document.documentElement.scrollHeight), true);
       const card = await page.locator('.ranked-card').boundingBox();
-      const footer = await page.locator('.hero-entry').boundingBox();
-      assert.ok(card.y + card.height <= footer.y, 'The last mode card clears the fixed entry bar');
-      return { footerClearance: footer.y - card.y - card.height };
+      assert.ok(card.y >= 0 && card.y + card.height <= height, 'The last mode card is fully reachable');
+      assert.equal(await page.locator('.hero-entry').evaluate((element) => getComputedStyle(element).position), 'static', 'The hero actions stay in the hero and do not cover cards');
+      return { lastCardReachable: true, noFixedEntryBar: true };
     }, { viewport: { width, height } });
   }
   await check('welcome-dismiss-and-return', async (page) => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { HeroDemo } from "./HeroDemo";
+import { HeroArtwork } from "./HeroArtwork";
 import { GameBoard } from "./GameBoard";
 import { HowTo } from "./HowTo";
 import { acknowledgeLearning, beginLearning, loadLearning, observeLearning, readFlag, resolvedRound, saveLearning, WELCOME_KEY, writeFlag, type LearningRun } from "./learning";
@@ -245,15 +245,18 @@ function Home({ navigate, onGenericStart, onLearn }: { navigate: (screen: Screen
   return (
     <main className="home-shell">
       <section className="hero">
+        <HeroArtwork />
         <div className="hero-copy">
           <h1>Your rival has a plan.<br /><em>Ruin it.</em></h1>
           <p className="hero-intro">
             A territory duel on a 5×5 grid. Choose your move in secret, reveal together, and fight for control.
           </p>
-          <div className="hero-entry"><button className="primary-cta" onClick={onGenericStart}>Start a game <span>→</span></button><p>No account needed.</p></div>
-          <button className="secondary-cta learning-link" onClick={onLearn}>Learn with a bot · untimed <span aria-hidden="true">→</span></button>
+          <div className="hero-entry">
+            <button className="primary-cta" onClick={onGenericStart}>Start a game <span aria-hidden="true">→</span></button>
+            <button className="secondary-cta learning-link" onClick={onLearn}>Learn with a bot · untimed</button>
+          </div>
+          <p className="hero-account-note">No account needed.</p>
         </div>
-        <HeroDemo />
       </section>
 
       <section className="mode-grid" aria-labelledby="choose-mode">
