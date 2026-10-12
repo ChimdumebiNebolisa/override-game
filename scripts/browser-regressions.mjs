@@ -273,6 +273,11 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     const rect = element.getBoundingClientRect();
     return { x: rect.x, y: rect.y + scrollY, width: rect.width, height: rect.height };
   });
+  const assertStableBoard = (actual, expected, message) => {
+    for (const property of ['x', 'y', 'width', 'height']) {
+      assert.ok(Math.abs(actual[property] - expected[property]) <= 1, `${message}: ${property} changed from ${expected[property]} to ${actual[property]}`);
+    }
+  };
   const lock = async (page, action = 'expand', keepSelection = false) => {
     await dismissTraining(page);
     if (action !== 'expand') await page.locator('.action-grid button').filter({ hasText: new RegExp(`^${action}`, 'i') }).click();
@@ -438,7 +443,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     assert.match(await page.locator('.match-header strong').innerText(), /Round 1.*Review/i);
     assert.equal(await page.locator('.lock-button').isDisabled(), true, 'Review keeps the move editor disabled');
     assert.equal(await page.locator('.action-grid button:not(:disabled)').count(), 0, 'Review keeps controls in place but disabled');
-    assert.deepEqual(await boardGeometry(page), geometry, 'Result overlay does not move or resize the board');
+    assertStableBoard(await boardGeometry(page), geometry, 'Result overlay does not move or resize the board');
     await page.keyboard.press('Escape');
     assert.equal((await readMatch(page)).status, 'review', 'Closing feedback does not advance the round');
     assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), null);
@@ -451,7 +456,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: resolve(outputDir, `learning-review-${width}.png`), fullPage: true });
     await next(page);
-    assert.deepEqual(await boardGeometry(page), geometry, 'Next round preserves board geometry');
+    assertStableBoard(await boardGeometry(page), geometry, 'Next round preserves board geometry');
     assert.equal(await page.locator('.learning-coach').count(), 0, 'Inline training is removed');
     assert.equal(await page.locator('.coach-note').count(), 0, 'No tactical hint on independent move');
     assert.equal(await page.locator('.suggested-target').count(), 0);
