@@ -333,9 +333,8 @@ dialog:not([open]) { display:none; }
 .reveal-actions strong { display: block; margin: 8px 0; font: 750 22px var(--display); text-transform: uppercase; }
 .reveal-actions p { margin:0; color: var(--muted); font-size: 12px; line-height:1.4; }
 .reveal-actions small { display: block; margin-block-start: 7px; color: var(--ink); font: 9px/1.4 var(--mono); }
-.reveal-actions.is-compact p, .reveal-actions.is-compact small { display: none; }
-.reveal-actions .you strong { color: var(--blue); }
-.reveal-actions .bot strong { color: var(--coral); }
+.reveal-actions .side-A strong { color: var(--blue); }
+.reveal-actions .side-B strong { color: var(--coral); }
 .reveal-winner { margin:14px 0 4px; padding:10px 14px; background:var(--paper); font:800 22px var(--display); text-align:center; text-transform:uppercase; }
 .reveal-winner.you-win { color:var(--green); border-inline-start:5px solid var(--green); }
 .reveal-winner.rival-wins { color:var(--coral); border-inline-start:5px solid var(--coral); }
@@ -463,9 +462,6 @@ dialog:not([open]) { display:none; }
   .board-panel { inline-size: min(100%, clamp(260px, calc(100dvh - 440px), 320px)); }
   .move-heading { margin-block-end: 8px; }
   .move-heading h2 { font-size: 24px; }
-  .learning-coach { padding: 8px; margin-block-end: 8px; }
-  .learning-coach details, .learning-coach .back-link { display: inline-block; margin-inline-end: 10px; }
-  .learning-coach .back-link { margin-block: 0; }
   .action-grid { gap: 5px; }
   .action-grid button { min-block-size: 48px; padding-block: 4px; }
   .action-grid { grid-template-columns: 1fr 1fr; }
@@ -626,11 +622,29 @@ dialog:not([open]) { display:none; }
 .learning-choices { display:flex; flex-wrap:wrap; gap:12px; margin-block:18px; }
 .learning-choices > button { flex:1 1 200px; justify-content:center; flex-wrap:wrap; }
 .learning-link { margin-block-start:16px; }
-.learning-coach { padding:12px; margin-block-end:16px; border-inline-start:3px solid var(--blue); background:color-mix(in oklch,var(--blue) 6%,var(--white)); font-size:13px; }
-.learning-coach p { margin-block:0 8px; line-height:1.45; }
-.learning-coach .back-link { margin-block:8px 0; }
-.action-details { margin-block:12px; color:var(--muted); font-size:12px; line-height:1.5; }
-.action-details summary,.learning-coach summary { min-block-size:30px; cursor:pointer; color:var(--ink); }
+.match-tools { display:flex; justify-content:flex-end; gap:16px; min-block-size:44px; }
+.match-tools .back-link { min-block-size:44px; color:var(--blue-dark); }
+.match-tools .back-link:disabled { color:var(--muted); }
+.game-dialog { inline-size:min(460px,calc(100% - 32px)); max-block-size:calc(100dvb - 32px); overflow:auto; overscroll-behavior:contain; margin:auto; padding:24px; border:1px solid var(--ink); border-block-start:4px solid var(--blue); background:var(--paper); color:var(--ink); }
+.game-dialog::backdrop { background:color-mix(in oklch,var(--ink) 38%,transparent); }
+.game-dialog .dialog-close { float:inline-end; min-inline-size:44px; min-block-size:44px; margin-block-start:-12px; margin-inline-end:-12px; }
+.game-dialog > h2 { margin-block:0 16px; margin-inline:0 44px; font:800 28px var(--display); text-transform:uppercase; }
+.game-dialog > p { line-height:1.5; margin-block:0 20px; }
+.game-dialog > .back-link { min-block-size:44px; margin-block-start:8px; }
+.action-help-list { font-size:13px; line-height:1.5; }
+.round-dialog { inline-size:min(560px,calc(100% - 32px)); }
+.round-dialog .round-review { display:block; margin:0; padding:0; border:0; background:transparent; box-shadow:none; }
+.round-dialog .round-review-heading { flex-direction:column; align-items:start; gap:6px; margin-block-end:12px; padding-inline-end:32px; }
+.round-dialog .reveal-actions { grid-template-columns:repeat(2,minmax(0,1fr)); border:0; }
+.round-dialog .reveal-actions > div { padding-block:8px; padding-inline:0 12px; }
+.round-dialog .reveal-actions > div + div { padding-inline:12px 0; border-inline-start:1px solid var(--line); border-block-start:0; }
+.round-dialog .reveal-actions strong { font-size:20px; margin-block:4px; }
+.round-dialog .reveal-actions p { color:var(--ink); }
+.round-dialog .reveal-score { margin-block:12px; }
+.round-dialog .review-navigation { display:grid; gap:12px; }
+.round-dialog .review-navigation p { margin:0; font-size:13px; line-height:1.4; }
+.round-dialog .round-review .secondary-cta { inline-size:100%; min-block-size:44px; }
+.round-notice { position:fixed; inset-block-end:16px; inset-inline:16px; z-index:20; inline-size:min(520px,calc(100% - 32px)); margin-inline:auto; padding:12px 16px; border:1px solid var(--amber); background:var(--ink); color:var(--white); font-size:13px; line-height:1.4; }
 .welcome-dialog { inline-size:min(440px,calc(100% - 32px)); max-block-size:calc(100dvb - 32px); overflow:auto; padding:clamp(18px,4vw,32px); border:1px solid var(--ink); background:var(--paper); color:var(--ink); }
 .welcome-dialog::backdrop { background:color-mix(in oklch,var(--ink) 55%,transparent); }
 .welcome-dialog > .icon-button { float:inline-end; }
@@ -666,8 +680,6 @@ dialog:not([open]) { display:none; }
   .selected-action-help { margin-block-start: 5px; min-block-size: 16px; }
   .selection-line { padding-block: 3px 7px; }
   .lock-button { min-block-size: 46px; scroll-margin-block: 0; }
-  .learning-coach { margin-block-end: 8px; }
-  .learning-coach details, .learning-coach .back-link { display: inline-block; margin-inline-end: 12px; }
   .timed-decision .board-panel { inline-size: min(100%, clamp(220px, calc(100dvh - 350px), 580px)); }
 }
 

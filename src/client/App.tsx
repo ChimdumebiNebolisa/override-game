@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { HeroDemo } from "./HeroDemo";
 import { GameBoard } from "./GameBoard";
 import { HowTo } from "./HowTo";
@@ -126,32 +126,36 @@ function energyEffect(outcome: ActionOutcome): string {
 
 const signed = (value: number) => value >= 0 ? `+${value}` : `−${Math.abs(value)}`;
 
-function ActionDetails({ energy, timed }: { energy: number; timed: boolean }) {
-  return <details className="action-details"><summary>Action costs and rules{timed ? " · clock keeps running" : ""}</summary>
-    <p>Expand · free: claim one open space beside your pre-round territory.</p>
-    <p>Ambush · free: predict an open space beside rival territory. An exact Expand hit earns 1 Energy, capped at 3; no capture.</p>
-    <p>Override · 2 Energy: steal one rival space beside your pre-round territory.{energy < 2 ? ` Need ${2 - energy} more Energy.` : ""}</p>
-    <p>Surge · 3 Energy total: claim or steal one or two distinct spaces within two grid steps of your pre-round territory.{energy < 3 ? ` Need ${3 - energy} more Energy.` : ""} Each target needs its own reach; collisions do not refund Energy or stop the other target.</p>
-    <p>Pass · free: lock without a target. A missing timed commitment becomes an automatic Pass.</p>
-    <p>Unavailable actions need enough Energy and a legal target. Help never pauses a timed decision.</p>
-  </details>;
+function GameDialog({ title, children, onClose, className = "" }: { title: string; children: ReactNode; onClose: () => void; className?: string }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    dialogRef.current?.showModal();
+    return () => {
+      dialogRef.current?.close();
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, []);
+  return <dialog ref={dialogRef} className={`game-dialog ${className}`} aria-label={title}
+    onCancel={(event) => { event.preventDefault(); onClose(); }}>
+    <button className="icon-button dialog-close" aria-label="Close explanation" onClick={onClose}>×</button>
+    {children}
+  </dialog>;
 }
 
-function ContextTip({ run, match, action, onUpdate }: { run: LearningRun; match: PublicMatch; action: Action['type']; onUpdate: (run: LearningRun) => void }) {
-  const [tip, setTip] = useState("");
-  useEffect(() => {
-    const outcomes = match.lastResult?.outcomes;
-    const candidates: [string, string, boolean][] = [
-      ["collision", "Both claimed the same open space. It stays neutral; spent Energy is not refunded.", Boolean(outcomes && Object.values(outcomes).some((item) => item.cells?.some((cell) => cell.reason === "collision")))],
-      ["energy", "Energy changes only through Ambush hits or spending. The cap is three.", Boolean(outcomes && Object.values(outcomes).some((item) => item.energySpent || item.energyEarned))],
-      ["ambush", "Ambush predicts an exact Expand target. A hit earns Energy and captures nothing.", action === "ambush" || Boolean(outcomes && Object.values(outcomes).some((item) => item.action.type === "ambush"))],
-      ["override", "Override spends two Energy to steal an adjacent rival space: you +1, rival −1.", action === "override" || match.state.energy[match.player] >= 2],
-      ["surge", "Surge spends three Energy total. Each target must independently reach pre-round territory.", action === "surge" || match.state.energy[match.player] >= 3],
-    ];
-    const next = candidates.find(([key, , relevant]) => relevant && !run.seenTips.includes(key));
-    if (next) { setTip(next[1]); onUpdate({ ...run, seenTips: [...run.seenTips, next[0]] }); }
-  }, [match.lastResult?.round, match.state.energy[match.player], action]);
-  return tip ? <p className="coach-note" role="status">{tip}</p> : null;
+const ACTION_HELP: Record<Action['type'], string> = {
+  expand: "Claim one open space beside your territory for free.",
+  ambush: "Predict the rival’s exact Expand target to earn 1 Energy; you don’t capture it.",
+  override: "Spend 2 Energy to steal one adjacent rival space.",
+  surge: "Spend 3 Energy to take up to two spaces, each within two steps of your territory.",
+  pass: "Make no move; Pass earns no Energy and needs no target.",
+};
+
+function trainingPrompt(run: LearningRun, selected: boolean, action: Action['type']) {
+  if (run.expandAcknowledged && !run.completed && !run.seenTips.includes("independent-popup")) return { key: "independent-popup", title: "Your turn", text: "Choose your own move, then lock it." };
+  if (run.completed || action !== "expand") return { key: `${action}-popup`, title: ACTIONS.find((item) => item.type === action)?.label ?? "Your move", text: ACTION_HELP[action] };
+  if (selected) return { key: "lock-popup", title: "Lock your move", text: "Your choice stays editable until you press Lock move; both moves reveal together." };
+  return { key: "target-popup", title: "Claim a space", text: "Try Expand: choose a highlighted space beside your territory." };
 }
 
 export function roundActionsDisabled(status: PublicMatch["status"], locked: boolean): boolean {
@@ -356,6 +360,9 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   const [afkWarning, setAfkWarning] = useState(Boolean(initialMatch.afkWarning));
   const [serverStatus, setServerStatus] = useState(initialMatch.status);
   const [showHint, setShowHint] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [resultOpen, setResultOpen] = useState(false);
+  const [dismissedResult, setDismissedResult] = useState<number | null>(null);
   const [deadlineAt, setDeadlineAt] = useState(initialMatch.deadline ? Date.now() + (initialMatch.deadline - initialMatch.serverNow) : null);
   const lockingRef = useRef(false);
   const restartingPracticeRef = useRef(false);
@@ -367,7 +374,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   useEffect(() => {
     if (reveal || !focusRoundAfterReveal.current) return;
     focusRoundAfterReveal.current = false;
-    const frame = window.requestAnimationFrame(() => roundLabelRef.current?.focus());
+    const frame = window.requestAnimationFrame(() => roundLabelRef.current?.focus({ preventScroll: true }));
     return () => window.cancelAnimationFrame(frame);
   }, [reveal]);
   const me = initialMatch.player;
@@ -414,6 +421,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       lockedRoundRef.current = null;
       setActionType("expand");
       setSelectedTargets([]);
+      setResultOpen(false);
     }
     if (acknowledgeRound !== undefined) acknowledgedRoundRef.current = Math.max(acknowledgedRoundRef.current, acknowledgeRound);
     const pendingLearningRound = learningRef.current?.pendingAcknowledgement;
@@ -576,21 +584,23 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
     ? `Sudden Death ${Math.max(1, match.round - match.config.standardRounds)}`
     : `Round ${match.round} / ${match.config.standardRounds}`;
   const roundLabel = (serverStatus === "review" || serverStatus === "transition") && reveal
-    ? `Round ${resolvedRound(snapshotRef.current)} resolved · ${serverStatus === "review" ? "Review" : "Reveal"}` : upcomingRoundLabel;
+    ? `Round ${resolvedRound(snapshotRef.current)} · ${serverStatus === "review" ? "Review" : "Reveal"}` : upcomingRoundLabel;
   const coaching = learning && !learning.skipped;
-  const independent = Boolean(coaching && learning.expandAcknowledged && learning.independentRound === null);
   const qualifyingReview = Boolean(coaching && !learning.completed && learning.independentRound !== null && reveal);
-  const instruction = qualifyingReview ? "You practiced the loop. Continue Practice or start a duel."
-    : learning?.completed ? null
-    : reveal ? "Both moves resolved. Review territory and Energy, then choose Next round."
-    : independent ? "Choose your own move, then lock it."
-    : submitting ? "Sending your move. Wait for the server to accept it."
-    : locked ? "Your move is locked. Both moves reveal together."
-    : selectedAction ? "Your choice is editable. Use Lock move when ready."
-    : "Finish with more territory. Try Expand on a highlighted space.";
+  const prompt = learning ? trainingPrompt(learning, Boolean(selectedAction), actionType) : null;
+  const showPrompt = Boolean(coaching && prompt && decisionOpen && !locked && !learning.seenTips.includes(prompt.key));
+  const closeHelp = () => {
+    if (coaching && prompt && !learning.seenTips.includes(prompt.key)) updateLearning({ ...learning, seenTips: [...learning.seenTips, prompt.key] });
+    setHelpOpen(false);
+  };
+  const automatic = initialMatch.progression === "automatic" && initialMatch.policyVersion === 2;
+  const lastResult = reveal ?? snapshotRef.current.lastResult;
+  const reviewRound = resolvedRound(snapshotRef.current);
+  const showResult = Boolean(lastResult && (resultOpen || (!automatic && !decisionOpen && dismissedResult !== reviewRound)));
+  const closeResult = () => { setDismissedResult(reviewRound); setResultOpen(false); };
 
   return (
-    <main className={`game-page${initialMatch.timed && decisionOpen ? " timed-decision" : ""}`}>
+    <main className={`game-page${initialMatch.timed ? " timed-decision" : ""}`}>
       <header className="match-header">
         <button ref={leaveButtonRef} className="icon-button" onClick={() => setConfirmResign(true)} aria-label="Leave match">×</button>
         <div><span>{mode === "practice" ? "Practice" : mode === "ranked" ? "Ranked Duel" : `Quick Duel · ${initialMatch.roomId ? "Friend" : difficulty}`}</span><strong ref={roundLabelRef} tabIndex={-1}>{roundLabel}</strong></div>
@@ -606,25 +616,34 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
         <div className={`player-score bot side-${rival}`}><p><small>{mode === "ranked" || initialMatch.roomId ? initialMatch.playerNames[rival] : `${difficulty} bot`} · {rival}</small><strong>{totals[rival].toString().padStart(2, "0")}</strong></p><span className="owner-symbol">{rival === "A" ? "●" : "◆"}</span></div>
       </section>
 
-      {reveal && <RevealPanel result={reveal} player={me} finalRound={false} activeRoundOpen={decisionOpen}
-        automatic={initialMatch.progression === "automatic" && initialMatch.policyVersion === 2} pending={nextPending}
+      {automatic && serverStatus === "transition" && reveal && <aside className="round-notice" role="status">
+        Round {reviewRound}: you {outcomeExplanation(reveal.outcomes[me])}; rival {outcomeExplanation(reveal.outcomes[rival])}. Next round opens automatically.
+      </aside>}
+      {showResult && lastResult && <GameDialog title={`Round ${reviewRound} result`} className="round-dialog" onClose={closeResult}>
+        <RevealPanel result={lastResult} player={me} finalRound={false} activeRoundOpen={decisionOpen}
+        automatic={automatic} pending={nextPending}
         learningReady={qualifyingReview} onStartDuel={() => { setLeavingForDuel(true); setConfirmResign(true); }}
         onContinue={() => {
           if (decisionOpen) {
             acknowledgedRoundRef.current = resolvedRound(snapshotRef.current) ?? 0;
             setReveal(null);
+            closeResult();
             focusRoundAfterReveal.current = true;
           } else void nextRound();
-        }} />}
+        }} />
+        {initialMatch.timed && decisionOpen && <p className="status-note">The clock keeps running.</p>}
+        {networkError && <p className="form-error" role="alert">{networkError}</p>}
+      </GameDialog>}
+      {(helpOpen || showPrompt) && !showResult && !confirmResign && <GameDialog title={!helpOpen && prompt ? prompt.title : "Action rules"} onClose={closeHelp}>
+        <h2>{!helpOpen && prompt ? prompt.title : "Action rules"}</h2>
+        {!helpOpen && prompt ? <p>{prompt.text}</p> : <div className="action-help-list">{ACTIONS.map((action) => <p key={action.type}><b>{action.label}</b> · {ACTION_HELP[action.type]}</p>)}<p>Energy caps at 3; collisions leave the space neutral and don’t refund Energy.</p></div>}
+        {initialMatch.timed && decisionOpen && <p className="status-note">The clock keeps running.</p>}
+        <button className="primary-cta full" onClick={closeHelp}>Got it <span aria-hidden="true">→</span></button>
+        {coaching && <button className="back-link" onClick={() => { updateLearning({ ...learning, skipped: true }); setHelpOpen(false); }}>Skip coaching</button>}
+      </GameDialog>}
 
       <div className="game-layout">
-        {decisionOpen && <section className="move-panel" aria-labelledby="move-title">
-          {coaching && <div className="learning-coach">
-            {instruction && <p role="status">{instruction}</p>}
-            <details><summary>Learning details</summary><p>{independent ? "Use any legal action without a recommendation. A manually locked Pass counts too." : "Expand is free. Choose any highlighted empty space beside your territory. Selecting never submits a move; Lock does. All legal alternatives remain available."}</p></details>
-            <button className="back-link" onClick={() => { if (learning) updateLearning({ ...learning, skipped: true }); }}>Skip coaching</button>
-          </div>}
-          {coaching && learning.completed && <ContextTip run={learning} match={snapshotRef.current} action={actionType} onUpdate={updateLearning} />}
+        <section className="move-panel" aria-labelledby="move-title">
           <div className="move-heading"><div><span>YOUR MOVE</span><h2 id="move-title">Choose an action.</h2></div><small>One move per round</small></div>
           <div className="action-grid">
             {ACTIONS.map((action) => {
@@ -643,7 +662,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
             })}
           </div>
           <p className="selected-action-help" role="status">{ACTIONS.find((action) => action.type === actionType)?.short}{actionType === "ambush" ? " · hit: +1ϟ, no capture." : ""}</p>
-        </section>}
+        </section>
         <section className="board-panel" aria-labelledby="board-title">
           <div className="board-label"><span id="board-title">Territory grid</span><span>{!decisionOpen ? "ROUND REVEALED" : submitting ? "SENDING MOVE" : locked ? "MOVE LOCKED" : "CHOOSE A TARGET"}</span></div>
           <GameBoard board={match.board} legal={legal} target={target} secondTarget={selectedTargets[1] ?? null} disabled={!canAct} you={me}
@@ -654,28 +673,31 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
             <strong>{match.energy[me]} / 3</strong>
             <small className="rival-energy">RIVAL {match.energy[rival]} / 3</small>
           </div>
-          <p className="energy-note">Ambush hits earn +1 Energy · cap 3</p>
+          {!learning && <p className="energy-note">Ambush hits earn +1 Energy · cap 3</p>}
           {mode === "practice" && !learning && <div className="hint-control"><button type="button" onClick={() => setShowHint((value) => !value)} aria-pressed={showHint}>{showHint ? "Hide hints" : "Show hints"}</button></div>}
-          {mode === "practice" && !learning && showHint && canAct && <p className="coach-note"><b>Hint</b>{hint}</p>}
+          {mode === "practice" && !learning && showHint && <p className="coach-note"><b>Hint</b>{hint}</p>}
         </section>
 
         <section className="commit-panel" aria-label={decisionOpen ? "Confirm your move" : "Match options"}>
-          {decisionOpen && <><div className="selection-line">
+          <div className="selection-line">
             <span>Selected{actionType === "surge" ? ` · ${selectedTargets.length}/2 · tap again to deselect` : ""}</span><strong>{selectedAction ? actionText(selectedAction) : `${ACTIONS.find((item) => item.type === actionType)?.label}: choose a node`}</strong>
           </div>
           <button className="lock-button" disabled={!selectedAction || !canAct} onClick={() => void commit()}>
             {submitting ? "Sending move…" : locked ? "Move locked" : "Lock move"}<span>{locked ? "✓" : "→"}</span>
-          </button></>}
+          </button>
+          <nav className="match-tools" aria-label="Match help">
+            <button className="back-link" onClick={() => setHelpOpen(true)}>Action rules</button>
+            <button className="back-link" disabled={!lastResult} onClick={() => setResultOpen(true)}>Round result</button>
+          </nav>
           {networkError && <p className="form-error" role="alert">{networkError}</p>}
           {connectionError && <p className="form-error" role="status">{connectionError}</p>}
           {serverStatus === "grace" && <p className="status-note" role="status">Match paused while a player reconnects. The server will resume or finish it after the grace period.</p>}
           {afkWarning && <p className="afk-warning" role="alert"><b>AFK warning</b> Choose a move this round. A third connected miss ends the match.</p>}
-          <ActionDetails energy={match.energy[me]} timed={initialMatch.timed && decisionOpen} />
           {mode === "practice" && <button className="secondary-cta full" disabled={restartingPractice} onClick={() => void restartPractice()}>
             {restartingPractice ? "Restarting Practice…" : "Restart Practice"}
           </button>}
           {learning && <button className="back-link" onClick={onReplayLearning}>Replay learning</button>}
-          <p className="privacy-note">{mode === "ranked" || initialMatch.roomId ? initialMatch.policyVersion === 2 ? "Moves stay secret until both players lock or time expires. Early reveal means both committed." : "Moves stay secret until the fixed server deadline." : "The bot chooses from the same public pre-round state and cannot see your pending move."}</p>
+          {!learning && <p className="privacy-note">{mode === "ranked" || initialMatch.roomId ? initialMatch.policyVersion === 2 ? "Moves stay secret until both players lock or time expires. Early reveal means both committed." : "Moves stay secret until the fixed server deadline." : "The bot chooses from the same public pre-round state and cannot see your pending move."}</p>}
         </section>
       </div>
 
@@ -734,9 +756,9 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
   learningReady?: boolean;
   onStartDuel?: () => void;
 }) {
-  const [detailsOpen, setDetailsOpen] = useState(!activeRoundOpen || finalRound);
+  const [detailsOpen, setDetailsOpen] = useState(finalRound);
   useEffect(() => {
-    setDetailsOpen(!activeRoundOpen || finalRound);
+    setDetailsOpen(finalRound);
   }, [result.state.round, activeRoundOpen, finalRound]);
   const rival: Player = player === "A" ? "B" : "A";
   const rows = ([player, rival] as const).map((side) => ({ side, outcome: result.outcomes[side] }));
@@ -753,7 +775,7 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
       </div>
         <div id="reveal-actions" className={`reveal-actions${detailsOpen ? "" : " is-compact"}`}>
           {rows.map(({ side, outcome }) => (
-            <div key={side} className={side === player ? "you" : "bot"}>
+            <div key={side} className={`${side === player ? "you" : "bot"} side-${side}`}>
               <span>{side === player ? "YOU" : "RIVAL"}</span>
               <strong>{actionText(outcome.action)}</strong>
               <p>{outcomeExplanation(outcome)}.</p>

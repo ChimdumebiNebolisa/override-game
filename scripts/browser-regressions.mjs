@@ -183,9 +183,14 @@ export async function runBrowserRegressions({ browser, origin, outputDir }) {
       await page.setViewportSize({ width, height });
       fixture.open();
       await page.waitForFunction(() => document.querySelectorAll('.action-grid button')[4]?.disabled === false);
+      const boardBefore = await page.locator('.board-panel').boundingBox();
+      await page.getByRole('button', { name: 'Round result', exact: true }).click();
       await page.getByRole('button', { name: 'Show details', exact: true }).click();
       assert.equal(await page.locator('.coach-note').count(), 1, 'Hints remain present');
       assert.equal(await page.locator('.round-review').count(), 1, 'Result remains present');
+      const boardDuring = await page.locator('.board-panel').boundingBox();
+      assert.equal(boardDuring.width, boardBefore.width, 'Opening result does not resize the board');
+      await page.keyboard.press('Escape');
       await page.locator('.board-cell').nth(3).click();
       const lock = page.getByRole('button', { name: /^Lock move/ });
       // Normal wheel scrolling, without forcing a click or moving the DOM.
@@ -195,14 +200,15 @@ export async function runBrowserRegressions({ browser, origin, outputDir }) {
       let box = await lock.boundingBox();
       assert.ok(box.y >= 0 && box.y + box.height <= height, `Full lock visible after scrolling: ${JSON.stringify(box)}`);
       await page.screenshot({ path: resolve(outputDir, `controls-${width}x${height}-expanded.png`) });
-      await page.getByRole('button', { name: 'Hide details', exact: true }).click();
+      await page.getByRole('button', { name: 'Round result', exact: true }).click();
+      assert.equal(await page.getByRole('button', { name: 'Show details', exact: true }).getAttribute('aria-expanded'), 'false');
+      await page.keyboard.press('Escape');
       await page.mouse.move(width - 40, height - 80);
       await page.mouse.wheel(0, 1600);
       await page.waitForTimeout(100);
       box = await lock.boundingBox();
       assert.ok(box.y >= 0 && box.y + box.height <= height, 'Collapsed result also permits scrolling to full control');
       await page.screenshot({ path: resolve(outputDir, `controls-${width}x${height}-collapsed.png`) });
-      await page.getByRole('button', { name: 'Show details', exact: true }).click();
       await page.mouse.move(width - 40, height - 80);
       await page.mouse.wheel(0, 1600);
       fixture.failMoves();
@@ -258,9 +264,21 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     assert.equal(result.status(), 200);
     return (await result.json()).match;
   };
+  const dismissTraining = async (page) => {
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const button = page.getByRole('button', { name: /^Got it/ });
+    if (await button.count()) await button.click();
+  };
+  const boardGeometry = (page) => page.locator('.board-panel').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.x, y: rect.y + scrollY, width: rect.width, height: rect.height };
+  });
   const lock = async (page, action = 'expand', keepSelection = false) => {
+    await dismissTraining(page);
     if (action !== 'expand') await page.locator('.action-grid button').filter({ hasText: new RegExp(`^${action}`, 'i') }).click();
+    await dismissTraining(page);
     if (action !== 'pass' && !keepSelection) await page.locator('.board-panel .board-cell.legal').first().click();
+    await dismissTraining(page);
     const response = page.waitForResponse((item) => item.url().endsWith('/actions'));
     await page.getByRole('button', { name: /^Lock move/ }).click();
     assert.equal((await response).status(), 200);
@@ -271,6 +289,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await page.getByRole('button', { name: /^Next round/ }).click();
     assert.equal((await response).status(), 200);
     await page.waitForFunction(() => document.querySelectorAll('.action-grid button')[4]?.disabled === false);
+    await dismissTraining(page);
   };
   const learn = async (page, root = page) => {
     await root.getByRole('button', { name: /Learn with a bot/ }).click();
@@ -278,6 +297,9 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     const match = await readMatch(page);
     assert.equal(match.mode, 'practice'); assert.equal(match.botDifficulty, 'easy'); assert.equal(match.timed, false);
     assert.deepEqual(match.state, createInitialState());
+    await page.getByRole('dialog', { name: 'Claim a space' }).waitFor();
+    assert.equal((await page.getByRole('dialog').locator('p').innerText()).split(/[.!?]/).filter(Boolean).length, 1, 'Training starts with one sentence');
+    await dismissTraining(page);
     return match;
   };
   await check('uncertain-creation-recovers-original-options', async (page) => {
@@ -340,8 +362,8 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await move.click();
     await page.getByRole('button', { name: /^Next round/ }).waitFor();
     assert.equal(await page.evaluate(() => scrollY), 0, 'No scrolling between action, target, and Lock');
-    assert.equal(await page.locator('.action-grid').count(), 0);
-    assert.equal(await move.count(), 0);
+    assert.equal(await page.locator('.action-grid button:not(:disabled)').count(), 0, 'Review keeps controls in place but disabled');
+    assert.equal(await page.locator('.lock-button').isDisabled(), true);
     return { noDecisionScrolling: true };
   }, { viewport: { width: 320, height: 568 }, reducedMotion: 'reduce' });
   for (const [width, height] of [[320, 568], [390, 844]]) {
@@ -395,28 +417,42 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
   });
   for (const width of [1440, 720, 390, 320]) await check(`normal-learning-core-${width}`, async (page) => {
     const initial = await learn(page);
+    const geometry = await boardGeometry(page);
     assert.equal(await page.locator('dialog[open]').count(), 0);
     const cells = page.locator('.board-panel .board-cell');
     const legal = legalTargets(initial.state, initial.player, 'expand');
     assert.deepEqual(await cells.evaluateAll((buttons) => buttons.flatMap((button, index) => button.disabled ? [] : [index])), legal);
     if (width === 390) await cells.nth(legal.at(-1)).tap();
     else { await cells.nth(legal.at(-1)).focus(); await page.keyboard.press('Space'); }
+    await page.getByRole('dialog', { name: 'Lock your move' }).waitFor();
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => !!document.activeElement.closest('dialog')), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('board-cell')), true, 'Popup restores the selected target focus');
     assert.equal((await readMatch(page)).state.round, 1, 'Selection does not commit');
     await page.screenshot({ path: resolve(outputDir, `learning-selected-${width}.png`), fullPage: true });
     await lock(page, 'expand', true);
     let match = await readMatch(page);
     assert.equal(match.status, 'review'); assert.equal(match.deadline, null);
     assert.equal(match.lastResult.outcomes[initial.player].action.target, legal.at(-1), 'Alternative legal target stays selected');
-    assert.match(await page.locator('.match-header strong').innerText(), /Round 1 resolved/i);
-    assert.equal(await page.getByRole('button', { name: /^Lock move/ }).count(), 0, 'Review has no inactive move editor');
-    assert.equal(await page.locator('.action-grid').count(), 0);
+    assert.match(await page.locator('.match-header strong').innerText(), /Round 1.*Review/i);
+    assert.equal(await page.locator('.lock-button').isDisabled(), true, 'Review keeps the move editor disabled');
+    assert.equal(await page.locator('.action-grid button:not(:disabled)').count(), 0, 'Review keeps controls in place but disabled');
+    assert.deepEqual(await boardGeometry(page), geometry, 'Result overlay does not move or resize the board');
+    await page.keyboard.press('Escape');
+    assert.equal((await readMatch(page)).status, 'review', 'Closing feedback does not advance the round');
+    assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), null);
+    await page.getByRole('button', { name: 'Round result', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Round 1 result' }).waitFor();
+    assert.equal(await page.locator('.round-review .reveal-actions p').first().evaluate(el => getComputedStyle(el).display), 'block', 'Short outcome is visible, not hidden');
     const beforeReload = JSON.stringify(match.lastResult);
     await page.reload(); await page.getByRole('button', { name: /^Next round/ }).waitFor();
     assert.equal(JSON.stringify((await readMatch(page)).lastResult), beforeReload);
     await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: resolve(outputDir, `learning-review-${width}.png`), fullPage: true });
     await next(page);
-    assert.ok((await page.locator('.learning-coach').innerText()).includes('Choose your own move'));
+    assert.deepEqual(await boardGeometry(page), geometry, 'Next round preserves board geometry');
+    assert.equal(await page.locator('.learning-coach').count(), 0, 'Inline training is removed');
     assert.equal(await page.locator('.coach-note').count(), 0, 'No tactical hint on independent move');
     assert.equal(await page.locator('.suggested-target').count(), 0);
     assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), null);
@@ -434,26 +470,33 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await page.waitForFunction(() => document.querySelector('.match-header strong')?.textContent.includes('Round 1 /'));
     assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), 'completed', 'Replay preserves earned completion');
     return { matchId: initial.id, legal, manualPassCompletion: true, resumeReview: true, keyboardBoard: width !== 390, touchBoard: width === 390 };
-  }, { viewport: { width, height: width === 720 ? 450 : width < 500 ? 844 : 900 }, hasTouch: width < 500, isMobile: width < 500, reducedMotion: 'reduce' });
+  }, { viewport: { width, height: width === 720 ? 450 : width === 320 ? 568 : width < 500 ? 844 : 900 }, hasTouch: width < 500, isMobile: width < 500, reducedMotion: 'reduce' });
   await check('accepted-lock-and-next-lost-responses', async (page) => {
     await learn(page);
     await page.route('**/api/matches/*/actions', async (route) => { await route.fetch(); await route.abort('failed'); });
     await page.locator('.board-panel .board-cell.legal').last().click();
+    await page.getByRole('dialog', { name: 'Lock your move' }).waitFor();
+    await dismissTraining(page);
     await page.getByRole('button', { name: /^Lock move/ }).click();
     await page.getByRole('button', { name: /^Next round/ }).waitFor();
     assert.equal((await readMatch(page)).status, 'review');
     assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), null);
     await page.unroute('**/api/matches/*/actions');
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Round result', exact: true }).click();
     await page.route('**/api/matches/*/next', async (route) => { await route.fetch(); await route.abort('failed'); });
     await page.getByRole('button', { name: /^Next round/ }).click();
     await page.waitForFunction(() => document.querySelectorAll('.action-grid button')[4]?.disabled === false);
-    assert.ok((await page.locator('.learning-coach').innerText()).includes('Choose your own move'));
+    await page.getByRole('dialog', { name: 'Your turn' }).waitFor();
+    await dismissTraining(page);
+    assert.equal(await page.locator('.learning-coach').count(), 0, 'Inline training is removed');
     await page.unroute('**/api/matches/*/next');
     await lock(page, 'pass'); await next(page);
     assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), 'completed');
   });
   await check('skip-and-replay-learning', async (page) => {
     const initial = await learn(page);
+    await page.getByRole('button', { name: 'Action rules', exact: true }).click();
     await page.getByRole('button', { name: 'Skip coaching', exact: true }).click();
     await lock(page); await next(page); await lock(page, 'pass'); await next(page);
     assert.equal((await readMatch(page)).id, initial.id);
@@ -464,7 +507,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     const replay = await readMatch(page);
     assert.notEqual(replay.id, initial.id);
     assert.equal(replay.timed, false);
-    assert.ok((await page.locator('.learning-coach').innerText()).includes('Try Expand'));
+    await page.getByRole('dialog', { name: 'Claim a space' }).waitFor();
   });
   await check('storage-unavailable-learning', async (page, context) => {
     await context.addInitScript(() => {
@@ -473,7 +516,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
       Storage.prototype.removeItem = function () { throw new Error('Storage unavailable'); };
     });
     await page.reload(); await learn(page); await lock(page); await next(page); await lock(page, 'pass'); await next(page);
-    assert.equal(await page.locator('.learning-coach').count(), 1);
+    assert.equal(await page.locator('.learning-coach').count(), 0);
   });
   await check('complete-bot-match', async (page) => {
     await page.getByRole('button', { name: /^01 Practice/ }).click();
@@ -503,6 +546,12 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     let match = await readMatch(page);
     assert.equal(match.deadline - match.serverNow <= 10_000 && match.deadline - match.serverNow > 8_000, true);
     assert.notEqual(await page.locator('.timer b').innerText(), '010');
+    const clockDeadline = match.deadline;
+    await page.getByRole('button', { name: 'Action rules', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Action rules' }).waitFor();
+    assert.ok((await page.getByRole('dialog').innerText()).includes('The clock keeps running'));
+    assert.equal((await readMatch(page)).deadline, clockDeadline, 'Opening help never resets the clock');
+    await page.keyboard.press('Escape');
     await lock(page);
     match = await readMatch(page);
     assert.equal(match.status, 'review'); assert.equal(match.deadline, null);
@@ -553,7 +602,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
       assert.equal((await readMatch(page)).deadline, initial.deadline, 'Reload does not reset deadline');
       const second = guest.waitForResponse((item) => item.url().endsWith('/actions'));
       await guest.getByRole('button', { name: /^Lock move/ }).click(); await second;
-      await page.getByRole('heading', { name: 'Round 1 resolved.' }).waitFor();
+      await page.locator('.round-notice').waitFor();
       const reveal = await readMatch(page);
       assert.equal(reveal.status, 'transition'); assert.equal(reveal.deadline, null);
       assert.equal(await page.getByRole('button', { name: /^Next round/ }).count(), 0);
@@ -562,7 +611,11 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
       assert.equal(hostNext.deadline, guestNext.deadline);
       assert.ok(hostNext.deadline >= reveal.transitionAt + 10_000);
       assert.equal(await page.locator('.lock-button').isDisabled(), true);
-      assert.equal(await page.locator('.round-review').count(), 1, 'Compact previous result persists');
+      assert.equal(await page.locator('dialog[open]').count(), 0, 'Automatic rounds never steal focus with a modal');
+      await page.getByRole('button', { name: 'Round result', exact: true }).click();
+      await page.getByRole('dialog', { name: 'Round 1 result' }).waitFor();
+      assert.ok((await page.getByRole('dialog').innerText()).includes('The clock keeps running'));
+      await page.keyboard.press('Escape');
       await page.screenshot({ path: resolve(outputDir, 'human-round-two.png') });
       return { sharedDeadline: hostNext.deadline, revealDuration: reveal.transitionAt - reveal.serverNow, reloadLock: true };
     } finally { await guestContext.close(); }
