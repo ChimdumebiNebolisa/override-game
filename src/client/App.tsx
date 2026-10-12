@@ -95,7 +95,7 @@ const ACTIONS: ReadonlyArray<{
 const OUTCOME_COPY: Record<ActionOutcome["reason"], string> = {
   claimed: "claimed the node",
   stolen: "took control of the node",
-  "ambush-hit": "blocked the Expand; the space stayed empty",
+  "ambush-hit": "blocked the Expand and captured the space",
   "ambush-missed": "missed the rival’s Expand",
   collision: "collided; the node stayed neutral",
   intercepted: "was stopped by an Ambush",
@@ -104,6 +104,9 @@ const OUTCOME_COPY: Record<ActionOutcome["reason"], string> = {
 };
 
 function outcomeExplanation(outcome: ActionOutcome): string {
+  if (outcome.reason === "ambush-hit" && !outcome.cells?.some((cell) => cell.success)) {
+    return "Blocked the Expand; the space stayed empty";
+  }
   if (outcome.action.type === "surge" && outcome.cells) {
     const captured = outcome.cells.filter((cell) => cell.success).length;
     const stolen = outcome.cells.filter((cell) => cell.reason === "stolen").length;
@@ -166,7 +169,7 @@ function CopyButton({ value, label = "Invite link", className = "secondary-cta" 
 
 const ACTION_HELP: Record<Action['type'], string> = {
   expand: "Claim one open space beside your territory and earn 0.5 Energy, up to the cap.",
-  ambush: "Pick an open space beside rival territory. Hit: +3 Energy and drain up to 2; miss: −1. Requires 1 Energy; captures no space.",
+  ambush: "Predict their Expand beside rival territory. Hit: capture that space, gain up to 3 Energy and drain up to 2; miss: −1. Requires 1 Energy.",
   override: "Spend 2 Energy to steal one adjacent rival space.",
   surge: "Spend 3 Energy to take up to two spaces, each within two steps of your territory.",
   pass: "Make no move; Pass earns no Energy and needs no target.",
@@ -683,7 +686,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
               );
             })}
           </div>
-          <p className="selected-action-help" role="status">{ACTIONS.find((action) => action.type === actionType)?.short}{actionType === "ambush" ? " · hit +3ϟ, drain 2; miss −1ϟ." : actionType === "expand" ? " · claim +0.5ϟ." : ""}</p>
+          <p className="selected-action-help" role="status">{ACTIONS.find((action) => action.type === actionType)?.short}{actionType === "ambush" ? " · hit captures, +3ϟ, drain up to 2; miss −1ϟ." : actionType === "expand" ? " · claim +0.5ϟ." : ""}</p>
         </section>
         <section className="board-panel" aria-labelledby="board-title">
           <div className="board-label"><span id="board-title">Territory grid</span><span>{!decisionOpen ? "ROUND REVEALED" : submitting ? "SENDING MOVE" : locked ? "MOVE LOCKED" : "CHOOSE A TARGET"}</span></div>
@@ -838,6 +841,9 @@ export function finalResultExplanation(match: MatchState, player: Player, result
   const rival = player === "A" ? "B" : "A";
   const totals = score(match.board);
   if (lastResult?.outcomes[player].reason === "ambush-hit" && match.winner === rival) {
+    if (lastResult.outcomes[player].cells?.some((cell) => cell.success)) {
+      return `Your Ambush captured a space, but they finished ahead, ${totals[rival]}–${totals[player]}. The final territory score decides the winner.`;
+    }
     return `Your Ambush stopped their Expand, but they finished ahead, ${totals[rival]}–${totals[player]}. Ambush doesn’t capture territory.`;
   }
   return match.winner === null ? "Equal territory at the end of the match means a draw."

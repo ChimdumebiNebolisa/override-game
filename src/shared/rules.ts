@@ -215,6 +215,8 @@ export function resolveRound(
       reason = other.type === "expand" && other.target === action.target
         ? "ambush-hit" : "ambush-missed";
       if (reason === "ambush-hit") {
+        nextBoard[action.target] = player;
+        cells = [{ target: action.target, success: true, reason }];
         energyEarned = Math.min(3, state.config.energyCap - nextEnergy[player]);
         energyDrained = Math.min(2, nextEnergy[opponent(player)]);
         nextEnergy[player] += energyEarned;

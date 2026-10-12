@@ -259,6 +259,21 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
       results.push({ name, passed: false, error: error.message, errors });
     } finally { await context.close(); }
   }
+  for (const [width, height] of [[1440, 900], [1440, 640], [390, 844], [320, 568]]) {
+    await check(`hero-ambush-visual-${width}-${height}`, async (page) => {
+      const hero = page.locator('.hero-demo');
+      assert.equal(await hero.locator('button, select, input').count(), 0);
+      assert.equal(await hero.locator('.demo-cell').count(), 25);
+      assert.equal(await hero.locator('.demo-cell.A.captured').count(), 1);
+      assert.ok((await hero.innerText()).includes('C3 CAPTURED'));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      const frame = await hero.boundingBox();
+      const next = await page.locator('.mode-grid').boundingBox();
+      assert.ok(next.y >= frame.y + frame.height, 'Hero does not overlap the following modes');
+      await page.screenshot({ path: resolve(outputDir, `hero-ambush-${width}-${height}.png`), fullPage: true });
+      return { nonInteractive: true, capturedCell: true, noOverlap: true };
+    }, { viewport: { width, height }, reducedMotion: 'reduce' });
+  }
   const readMatch = async (page) => {
     const result = await page.request.get(`${origin}/api/resume`);
     assert.equal(result.status(), 200);
@@ -444,7 +459,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await page.getByRole('button', { name: /^Play Normal/ }).click();
     await page.locator('.game-page').waitFor();
     await page.locator('.action-grid button').filter({ hasText: 'Ambush' }).click();
-    assert.match(await page.locator('.selected-action-help').innerText(), /hit \+3.*miss −1/);
+    assert.match(await page.locator('.selected-action-help').innerText(), /hit captures, \+3.*miss −1/);
     const move = page.getByRole('button', { name: /^Lock move/ });
     const rect = await move.boundingBox();
     assert.ok(rect.y >= 0 && rect.y + rect.height <= 568, `Lock fits the timed viewport: ${JSON.stringify(rect)}`);
@@ -774,7 +789,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
       const me = initial.player;
       const rival = me === 'A' ? 'B' : 'A';
       const before = { ...createInitialState(), round: 12,
-        board: Array.from({ length: 25 }, (_, index) => index < 11 ? me : index < 23 ? rival : 'neutral'),
+        board: Array.from({ length: 25 }, (_, index) => index < 10 ? me : index < 22 ? rival : 'neutral'),
         energy: { [me]: 5, [rival]: 2 },
       };
       const result = resolveRound(before, { [me]: { type: 'ambush', target: 23 }, [rival]: { type: 'expand', target: 23 } });
@@ -784,7 +799,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
         .run(JSON.stringify(result.state), JSON.stringify(result), initial.id); }
       finally { db.close(); }
       await page.reload(); await page.locator('.result-page').waitFor();
-      assert.equal(await page.locator('.result-explanation').innerText(), 'Your Ambush stopped their Expand, but they finished ahead, 12–11. Ambush doesn’t capture territory.');
+      assert.equal(await page.locator('.result-explanation').innerText(), 'Your Ambush captured a space, but they finished ahead, 12–11. The final territory score decides the winner.');
       assert.equal(await page.locator('.result-score').count(), 1);
       assert.equal(await page.locator('.result-page .round-review').count(), 0);
       assert.equal(await page.locator('.last-move-summary > strong').evaluate((el, side) => {
@@ -802,6 +817,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
       await dialog.waitFor();
       assert.equal(await dialog.locator('.reveal-score, .reveal-winner').count(), 0);
       assert.ok((await dialog.innerText()).includes('Lost 2 Energy to Ambush'));
+      assert.ok((await dialog.innerText()).includes('Blocked the Expand and captured the space'));
       assert.equal(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth), true);
       await page.keyboard.press('Tab');
       assert.equal(await page.evaluate(() => !!document.activeElement.closest('dialog')), true);

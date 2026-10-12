@@ -30,7 +30,11 @@ describe("revised Energy rules", () => {
     expect(legalTargets(before, player, "ambush")).toContain(12);
     expect(validateAction(before, player, { type: "ambush", target: 12 })).toEqual({ ok: true });
     const result = resolveRound(before, { [player]: { type: "ambush", target: 12 }, [rival]: { type: "expand", target: 12 } } as Parameters<typeof resolveRound>[1]);
-    expect(result.state.board[12]).toBe("neutral");
+    expect(result.state.board[12]).toBe(player);
+    expect(result.score[player]).toBe(2);
+    expect(result.score[rival]).toBe(1);
+    expect(result.outcomes[player].cells).toEqual([{ target: 12, success: true, reason: "ambush-hit" }]);
+    expect(before.board[12]).toBe("neutral");
     expect(result.state.energy[player]).toBe(4);
     expect(result.state.energy[rival]).toBe(0);
     expect(result.outcomes[player]).toMatchObject({ energyEarned: 3, energyDrained: 1, energySpent: 0 });
@@ -41,6 +45,15 @@ describe("revised Energy rules", () => {
     const result = resolveRound(facing(1, energy), { A: { type: "ambush", target: 12 }, B: { type: "expand", target: 12 } });
     expect(result.state.energy).toEqual({ A: 4, B: Math.max(0, energy - 2) });
     expect(result.outcomes.A).toMatchObject({ energyEarned: 3, energyDrained: Math.min(2, energy) });
+  });
+
+  it("captures beside only rival territory and decides the final score", () => {
+    const before = { ...facing(1, 2), round: 12 };
+    const result = resolveRound(before, { A: { type: "ambush", target: 14 }, B: { type: "expand", target: 14 } });
+    expect(legalTargets(before, "A", "expand")).not.toContain(14);
+    expect(result.state.board[14]).toBe("A");
+    expect(result.state).toMatchObject({ status: "finished", winner: "A" });
+    expect(result.score).toEqual({ A: 2, B: 1 });
   });
 
   it.each([4, 4.5, 5])("still drains the rival when the reward is capped from %s Energy", (energy) => {

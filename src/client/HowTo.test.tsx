@@ -38,14 +38,14 @@ describe("beginner guide explanations", () => {
     expect(guideSummary(two, resolveGuideScenario(steal, two))).toContain("+2 from stealing; rival −2");
   });
 
-  it("explains Ambush hits, misses, no capture, and the Energy cap", () => {
+  it("explains Ambush hits, misses, capture, and the Energy cap", () => {
     const scenario = guideScenario("ambush");
     const hit = { type: "ambush", target: 12 } as const;
     const result = resolveGuideScenario(scenario, hit);
     expect(guideSummary(hit, result)).toContain("earned 3 Energy");
     expect(guideSummary(hit, result)).toContain("rival lost 2 Energy");
-    expect(guideSummary(hit, result)).toContain("does not capture the target; it stays empty");
-    expect(result.state.board[12]).toBe("neutral");
+    expect(guideSummary(hit, result)).toContain("captured the target: you +1 territory");
+    expect(result.state.board[12]).toBe("A");
     const capped = { ...scenario, start: { ...scenario.start, energy: { A: 5, B: 2 } } };
     expect(guideSummary(hit, resolveGuideScenario(capped, hit))).toContain("already at the cap of 5");
     expect(guideSummary(hit, resolveGuideScenario(capped, hit))).toContain("rival lost 2 Energy");
@@ -63,14 +63,15 @@ describe("beginner guide explanations", () => {
     const ambush = { type: "ambush", target: 12 } as const;
     const collision = resolveGuideScenario(scenario, expand);
     const hit = resolveGuideScenario(scenario, ambush);
-    expect(collision.state.board).toEqual(hit.state.board);
+    expect(collision.state.board[12]).toBe("neutral");
+    expect(hit.state.board[12]).toBe("A");
     expect(collision.state.energy.A).toBe(1);
     expect(hit.state.energy.A).toBe(4);
     expect(guideSummary(expand, collision)).toContain("neither gains territory or earns Energy");
     const html = renderToStaticMarkup(<RulesReference />);
     expect(html).toContain("An Expand collision leaves the space empty and earns no Energy.");
-    expect(html).toContain("If the rival chooses elsewhere, Expand can still capture your target; Ambush captures nothing and a miss costs 1 Energy.");
-    expect(html).toContain("Blocking the last Expand does not win the match if your rival still owns more territory.");
+    expect(html).toContain("If the rival chooses elsewhere, your Ambush captures nothing and costs 1 Energy.");
+    expect(html).toContain("Capturing the last Expand target does not win the match if your rival still owns more territory.");
   });
 
   it("describes the chosen Expand and Override coordinates and score changes", () => {

@@ -194,7 +194,7 @@ describe("simultaneous resolution", () => {
     const result = resolveRound(before, { A: action("ambush", 12), B: action("expand", 12) });
     expect(result.outcomes.A).toMatchObject({ success: true, reason: "ambush-hit", energyEarned: 3 });
     expect(result.outcomes.B.reason).toBe("intercepted");
-    expect(result.state.board[12]).toBe("neutral");
+    expect(result.state.board[12]).toBe("A");
     expect(before.energy.A).toBe(2);
     expect(result.state.energy.A).toBe(5);
     expect(legalTargets(before, "A", "surge")).toEqual([]);

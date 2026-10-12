@@ -62,6 +62,12 @@ describe('in-match round feedback', () => {
     const match = { ...createInitialState(), board, status: 'finished' as const, winner: 'B' as const };
     const last = { ...result, state: match, outcomes: { ...result.outcomes, A: { ...result.outcomes.A, action: { type: 'ambush' as const, target: 3 }, reason: 'ambush-hit' as const } } };
     expect(finalResultExplanation(match, 'A', 'standard', last)).toBe('Your Ambush stopped their Expand, but they finished ahead, 12–11. Ambush doesn’t capture territory.');
+    const captured = { ...last, outcomes: { ...last.outcomes, A: { ...last.outcomes.A, cells: [{ target: 3, success: true, reason: 'ambush-hit' as const }] } } };
+    expect(finalResultExplanation(match, 'A', 'standard', captured)).toBe('Your Ambush captured a space, but they finished ahead, 12–11. The final territory score decides the winner.');
+    const html = renderToStaticMarkup(<RevealPanel result={captured} player="A" finalRound activeRoundOpen={false} onContinue={() => undefined} />);
+    expect(html).toContain('Blocked the Expand and captured the space');
+    const historical = renderToStaticMarkup(<RevealPanel result={last} player="A" finalRound activeRoundOpen={false} onContinue={() => undefined} />);
+    expect(historical).toContain('Blocked the Expand; the space stayed empty');
     expect(finalResultExplanation(match, 'A', 'forfeit', last)).toBe('The match ended by forfeit.');
     expect(finalResultExplanation(match, 'A', 'resignation', last)).toBe('The match ended by resignation.');
     expect(finalResultExplanation({ ...match, winner: 'A' }, 'A', 'standard', last)).toContain('You finished with more territory');

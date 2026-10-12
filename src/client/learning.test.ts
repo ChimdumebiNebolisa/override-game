@@ -56,7 +56,8 @@ describe('learning completion evidence', () => {
       const state = { ...createInitialState(), board: createInitialState().board.map((cell, index) => index === 3 ? 'B' as const : cell) };
       const result = resolveRound(state, { A: { type: 'expand', target: 2 }, B: opponent });
       const snapshot = { ...view('blocked', 1, pass), lastResult: result, state: result.state };
-      expect(result.state.board[2]).toBe('neutral');
+      expect(result.state.board[2]).toBe(opponent.type === 'ambush' ? 'B' : 'neutral');
+      expect(result.outcomes.A.success).toBe(false);
       expect(observeLearning(beginLearning('blocked'), snapshot).expandRound).toBe(1);
     }
   });
