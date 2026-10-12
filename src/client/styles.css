@@ -61,19 +61,19 @@ button:not(:disabled) { cursor: pointer; }
 .eyebrow { margin: 0 0 17px; color: var(--blue-dark); font: 700 11px/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
 .eyebrow span { display: inline-block; background: var(--blue); color: white; padding: 5px 6px; margin-inline-end: 8px; }
 .panel-heading h1, .result-page h1 { margin: 0; font: 850 clamp(58px, 7vw, 104px)/.82 var(--display); letter-spacing: -.045em; text-transform: uppercase; }
-.hero h1 { margin: 0; font: 800 clamp(2.25rem, 1.45rem + 3.4vw, 4rem)/1.08 Arial, "Segoe UI", sans-serif; letter-spacing: -.04em; text-transform: uppercase; text-wrap: balance; }
+.hero h1 { margin: 0; font: 850 clamp(2.25rem, 1.45rem + 3.4vw, 4rem)/1.02 var(--display); letter-spacing: -.035em; text-transform: uppercase; text-wrap: balance; }
 .hero h1 em { font-style: normal; color: var(--blue); }
 .hero-intro { max-inline-size: 650px; margin: 0; font-size: clamp(1rem, .85rem + .6vw, 1.375rem); line-height: 1.5; color: var(--muted); text-wrap: balance; }
 .hero-entry { inline-size: min(100%, 550px); display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 20px; }
 .hero-entry > button { flex: 1 1 230px; min-block-size: 58px; justify-content: center; gap: 12px; border-radius: 4px; font-size: 17px; font-weight: 700; }
-.hero-entry .primary-cta { background: var(--blue); border-color: var(--blue); box-shadow: none; }
+.hero-entry .primary-cta { background: var(--blue); border-color: var(--blue); box-shadow: 5px 5px 0 var(--ink); }
 .hero-entry .secondary-cta { margin: 0; border-color: var(--muted); background: color-mix(in oklch, var(--paper) 85%, transparent); }
 .hero-account-note { margin: 0; font-size: 13px; color: var(--muted); }
 @media (hover: hover) and (pointer: fine) {
-  .hero-entry .primary-cta:hover { background: var(--blue-dark); box-shadow: none; }
+  .hero-entry .primary-cta:hover:not(:disabled) { background: var(--blue-dark); box-shadow: 5px 5px 0 var(--ink); }
   .hero-entry .secondary-cta:hover { background: var(--white); border-color: var(--blue); }
 }
-.hero-entry .primary-cta:active { background: var(--blue-dark); }
+.hero-entry .primary-cta:active { background: var(--blue-dark); box-shadow: 2px 2px 0 var(--ink); }
 .hero-entry .secondary-cta:active { background: var(--white); }
 .primary-cta, .secondary-cta, .google-button { min-block-size: 52px; padding: 0 20px; border: 1px solid var(--ink); display: inline-flex; align-items: center; justify-content: space-between; gap: 34px; font-weight: 800; }
 .primary-cta { background: var(--ink); color: white; box-shadow: 5px 5px 0 var(--blue); }
