@@ -2,8 +2,44 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import { openDatabase } from './db';
 import { pruneExpiredGuestData } from './maintenance';
-import { createBotMatch } from './matches';
+import { createBotMatch, getMatch, lockAction } from './matches';
 import type { Session } from './http';
+
+test('maintenance releases abandoned bot reviews while preserving valid reviews and Ranked records', () => {
+  const db = openDatabase(':memory:');
+  try {
+    const now = Date.now();
+    const sessions: Session[] = [
+      { id: 'expired', uid: null, createdAt: now - 31 * 86_400_000, expiresAt: now - 1 },
+      { id: 'valid', uid: null, createdAt: now, expiresAt: now + 86_400_000 },
+      { id: 'missing', uid: null, createdAt: now, expiresAt: now + 86_400_000 },
+    ];
+    const ids = sessions.map((session) => {
+      if (session.id !== 'missing') db.prepare('INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)').run(session.id, session.createdAt, session.expiresAt);
+      const id = createBotMatch(db, session, 'Player', 'practice', 'easy', undefined, undefined, undefined, undefined, false);
+      lockAction(db, id, session, { type: 'pass' }, 1, getMatch(db, id)!.revision);
+      assert.equal(getMatch(db, id)!.status, 'review');
+      return id;
+    });
+    db.prepare(`INSERT INTO matches (id, mode, player_a_key, player_b_key, player_a_name, player_b_name,
+      state_json, status) VALUES ('ranked-active', 'ranked', 'a', 'b', 'A', 'B', '{}', 'decision')`).run();
+    const removed = pruneExpiredGuestData(db, now);
+    assert.equal(removed.abandonedMatches, 2);
+    assert.equal(removed.sessions, 1);
+    assert.equal(removed.matches, 0, 'Retain ended matches for the normal retention window');
+    for (const id of [ids[0], ids[2]]) {
+      const row = getMatch(db, id)!;
+      assert.equal(row.status, 'voided');
+      assert.equal(row.result_type, 'session-expired');
+      assert.equal(row.ended_at, now);
+      assert.equal(JSON.parse(row.state_json).status, 'finished');
+    }
+    assert.equal(getMatch(db, ids[1])!.status, 'review');
+    assert.equal(getMatch(db, 'ranked-active')!.status, 'decision');
+    assert.equal(pruneExpiredGuestData(db, now).abandonedMatches, 0);
+    assert.deepEqual(db.pragma('foreign_key_check'), []);
+  } finally { db.close(); }
+});
 
 test('retention removes old guest match chains and telemetry but preserves Ranked audit rows', () => {
   const db = openDatabase(':memory:');

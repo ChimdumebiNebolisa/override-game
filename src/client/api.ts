@@ -120,7 +120,25 @@ export interface LeaderboardEntry {
   bot?: boolean;
 }
 
+export class RequestError extends Error {
+  constructor(message: string, readonly uncertain = false) { super(message); }
+}
+
+let sessionReady: Promise<unknown> | null = null;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (path !== "/api/config") {
+    // Establish the HttpOnly cookie before concurrent resume, telemetry, or creation requests.
+    sessionReady ??= sendRequest("/api/session").catch((error) => {
+      sessionReady = null;
+      throw error;
+    });
+    await sessionReady;
+  }
+  return sendRequest<T>(path, init);
+}
+
+async function sendRequest<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
 
   try {
@@ -133,7 +151,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   } catch {
-    throw new Error("The game server is unavailable. Check your connection and try again.");
+    throw new RequestError("The game server is unavailable. Check your connection and try again.", true);
   }
 
   const payload = (await response.json().catch(() => null)) as
@@ -141,11 +159,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     | null;
 
   if (!response.ok) {
-    throw new Error(payload?.error ?? "The request could not be completed.");
+    throw new RequestError(payload?.error ?? "The request could not be completed.", response.status >= 500);
   }
 
   if (!payload) {
-    throw new Error("The game server returned an invalid response.");
+    throw new RequestError("The game server returned an invalid response.", true);
   }
 
   return payload;
@@ -228,11 +246,17 @@ export const api = {
     return request<{ closed: boolean }>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
   },
 
-  createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", creationKey: string, parentMatchId?: string, restartMatchId?: string, timed = mode === "quick") {
-    return request<MatchResponse<PublicMatch>>("/api/bot-matches", {
+  async createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", creationKey: string, parentMatchId?: string, restartMatchId?: string, timed = mode === "quick") {
+    const init = {
       method: "POST",
       body: JSON.stringify({ displayName: "Player", mode, difficulty, parentMatchId, restartMatchId, creationKey, timed }),
-    });
+    };
+    try { return await request<MatchResponse<PublicMatch>>("/api/bot-matches", init); }
+    catch (error) {
+      if (!(error instanceof RequestError) || !error.uncertain) throw error;
+      // Creation keys make repeating the identical request safe after a lost response.
+      return request<MatchResponse<PublicMatch>>("/api/bot-matches", init);
+    }
   },
 
   getMatch<TMatch = unknown>(matchId: string) {

@@ -5,7 +5,9 @@ import { createInitialState } from '../src/shared/rules.js';
 import { acknowledgeRankedReady, createRankedShell, markRankedReadyPresence } from './ranked.js';
 import { sessionTokenId } from './invitation-secrets.js';
 import { createQuickRoom, joinQuickRoom } from './rooms.js';
-import { getMatch, markConnected } from './matches.js';
+import { createBotMatch, getMatch, lockAction, markConnected } from './matches.js';
+import { pruneExpiredGuestData } from './maintenance.js';
+import { asDomainDatabase, WorkerSqliteDatabase } from './worker-sqlite.js';
 
 const originalEnvironment = process.env.NODE_ENV;
 const originalOrigin = process.env.PUBLIC_ORIGIN;
@@ -31,6 +33,31 @@ function fixture() {
   const ctx = { blockConcurrencyWhile, storage: store.storage, acceptWebSocket() {}, getWebSockets() { return sockets; } };
   return { store, sockets, env, ctx };
 }
+
+it('releases 80 orphaned reviews through the Worker adapter so new visitors can start a game', async () => {
+  const { store, env, ctx } = fixture();
+  const durable = new GameDurableObject(ctx, env);
+  await durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/config`));
+  const now = Date.now();
+  for (let index = 0; index < 80; index++) {
+    const session = { id: `expired-bot-${index}`, uid: null, createdAt: now, expiresAt: now - 1 };
+    store.sqlite.prepare('INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)').run(session.id, now, session.expiresAt);
+    const id = createBotMatch(store.sqlite, session, 'Player', 'practice', 'easy', undefined, undefined, undefined, undefined, false);
+    lockAction(store.sqlite, id, session, { type: 'pass' }, 1, getMatch(store.sqlite, id)!.revision);
+  }
+  const db = asDomainDatabase(new WorkerSqliteDatabase(store.storage.sql, store.storage));
+  expect(pruneExpiredGuestData(db, now).abandonedMatches).toBe(80);
+  expect(pruneExpiredGuestData(db, now).abandonedMatches).toBe(0);
+  store.sqlite.prepare('DELETE FROM worker_usage').run();
+  store.sqlite.prepare('DELETE FROM worker_daily_usage').run();
+  const response = await durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/bot-matches`, {
+    method: 'POST', headers: { origin: env.PUBLIC_ORIGIN, 'x-requested-with': 'override-game', 'content-type': 'application/json' },
+    body: JSON.stringify({ mode: 'practice', difficulty: 'easy', displayName: 'Player', creationKey: '00000000-0000-4000-8000-000000000099' }),
+  }));
+  expect(response.status).toBe(201);
+  expect((await response.json() as { match: { status: string } }).match.status).toBe('decision');
+  expect(store.sqlite.pragma('foreign_key_check')).toEqual([]);
+});
 
 it('serializes concurrent final Ranked locks and a duplicate request into one result and settlement', async () => {
   const { store, env, ctx } = fixture();

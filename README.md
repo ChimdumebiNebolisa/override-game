@@ -34,7 +34,7 @@ Enable Google in Firebase Authentication. Add each deployed host to Firebase Aut
 
 `wrangler.jsonc` builds the client, serves the SPA assets, and routes API and WebSocket requests to the Durable Object. The `staging` environment deploys as `override-game-staging`, uses its own `GAME` namespace, and reuses the Firebase project. The current staging URL, version, and smoke results are recorded in [STAGING_VERIFICATION.md](STAGING_VERIFICATION.md).
 
-This learning/pacing change has not been deployed. After separate production authorization, run `npm run deploy:worker` from the reviewed commit; this builds and deploys the default `override-game` configuration. Follow [LEARNING_PACING_VERIFICATION.md](LEARNING_PACING_VERIFICATION.md) for asset checks and real-production verification.
+Learning and manual bot-round pacing are deployed at [override-game.cnebolisa.workers.dev](https://override-game.cnebolisa.workers.dev/). Run `npm run deploy:worker` from the reviewed commit; this builds and deploys the default `override-game` configuration. Follow [LEARNING_PACING_VERIFICATION.md](LEARNING_PACING_VERIFICATION.md) for asset checks and real-production verification.
 
 Deploy staging with `npx wrangler deploy --env staging`. Use separate secrets for each environment; staging uses `INVITATION_ENCRYPTION_KEY` and `RECOVERY_CONTROL_TOKEN`. For example:
 
@@ -53,7 +53,7 @@ npm run ops:status
 npm run backup:db
 ```
 
-Metrics summarize revealed rounds and finished matches; pending actions are never read. Guest matches, telemetry, and expired invitation tokens are removed after 30 days. Ranked matches and settlement records are retained for rating integrity. `ops:status` reports overdue deadlines, stuck ready shells, expired searches, unsettled matches, failed settlement retries, and duplicate settlement attempts. `/api/health` returns 503 when database checks fail or server work is overdue.
+Metrics summarize revealed rounds and finished matches; pending actions are never read. Finished and voided guest matches are removed 30 days after ending, once dependent rematches and restarts can also be removed. Bot matches with an expired or missing owning session are voided during maintenance, releasing capacity; reviews owned by valid sessions remain untimed. Telemetry and expired invitation tokens are removed after 30 days. Ranked matches and settlement records are retained for rating integrity. `ops:status` reports overdue deadlines, stuck ready shells, expired searches, unsettled matches, failed settlement retries, and duplicate settlement attempts. `/api/health` returns 503 when database checks fail or server work is overdue.
 
 `backup:db` creates an integrity-checked SQLite backup beside `DB_PATH`. Restore to a new database path and use the same `INVITATION_ENCRYPTION_KEY` as the source. Preserve the source database and WAL files before a recovery. Back up persistent databases regularly; ephemeral storage loses sessions, matches, and ratings.
 

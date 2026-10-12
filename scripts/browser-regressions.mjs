@@ -125,7 +125,7 @@ export async function runBrowserRegressions({ browser, origin, outputDir }) {
     while (held.length !== copies && Date.now() < until) await new Promise((done) => setTimeout(done, 10));
     assert.equal(held.length, copies, 'Continuation requests are pending');
     fixture.open(currentRevision);
-    await page.waitForFunction(() => !document.querySelectorAll('.action-grid button')[4].disabled);
+    await page.waitForFunction(() => document.querySelectorAll('.action-grid button')[4]?.disabled === false);
     const action = name === 'duplicate-continuation' ? { type: 'ambush', target: 8 } : { type: 'expand', target: 3 };
     if (action.type === 'ambush') await page.locator('.action-grid button').nth(1).click();
     await page.locator('.board-panel .board-cell').nth(action.target).click();
@@ -158,7 +158,7 @@ export async function runBrowserRegressions({ browser, origin, outputDir }) {
     fixture.hold(1, 3);
     await page.getByRole('button', { name: /^Next round/ }).click();
     fixture.open();
-    await page.waitForFunction(() => !document.querySelectorAll('.action-grid button')[4].disabled);
+    await page.waitForFunction(() => document.querySelectorAll('.action-grid button')[4]?.disabled === false);
     await page.locator('.board-cell').nth(3).click();
     await page.getByRole('button', { name: 'Restart Practice', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.match-header strong')?.textContent.includes('Round 1'));
@@ -182,7 +182,7 @@ export async function runBrowserRegressions({ browser, origin, outputDir }) {
       const { page } = fixture;
       await page.setViewportSize({ width, height });
       fixture.open();
-      await page.waitForFunction(() => !document.querySelectorAll('.action-grid button')[4].disabled);
+      await page.waitForFunction(() => document.querySelectorAll('.action-grid button')[4]?.disabled === false);
       await page.getByRole('button', { name: 'Show details', exact: true }).click();
       assert.equal(await page.locator('.coach-note').count(), 1, 'Hints remain present');
       assert.equal(await page.locator('.round-review').count(), 1, 'Result remains present');
@@ -217,7 +217,7 @@ export async function runBrowserRegressions({ browser, origin, outputDir }) {
       }
       assert.equal(await lock.evaluate((button) => button === document.activeElement), true);
       box = await lock.boundingBox();
-      assert.ok(box.y >= 0 && box.y + box.height <= height, 'Keyboard focus brings full button into view');
+      assert.ok(box.y >= 0 && box.y + box.height <= height, `Keyboard focus brings full button into view: ${JSON.stringify(box)}`);
       const keyboardRequest = page.waitForResponse((value) => value.url().endsWith('/actions') && value.status() === 503);
       await page.keyboard.press('Enter');
       await keyboardRequest;
@@ -270,7 +270,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     const response = page.waitForResponse((item) => item.url().endsWith('/next'));
     await page.getByRole('button', { name: /^Next round/ }).click();
     assert.equal((await response).status(), 200);
-    await page.waitForFunction(() => !document.querySelectorAll('.action-grid button')[4].disabled);
+    await page.waitForFunction(() => document.querySelectorAll('.action-grid button')[4]?.disabled === false);
   };
   const learn = async (page, root = page) => {
     await root.getByRole('button', { name: /Learn with a bot/ }).click();
@@ -280,6 +280,82 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     assert.deepEqual(match.state, createInitialState());
     return match;
   };
+  await check('uncertain-creation-recovers-original-options', async (page) => {
+    await page.getByRole('button', { name: /^01 Practice/ }).click();
+    let acceptedId;
+    const attempts = [];
+    await page.route('**/api/bot-matches', async (route) => {
+      attempts.push(route.request().postDataJSON());
+      const response = await route.fetch();
+      assert.equal(response.status(), 201);
+      acceptedId = (await response.json()).match.id;
+      await route.abort('failed');
+    }, { times: 2 });
+    await page.getByRole('button', { name: /^Play Easy/ }).click();
+    await page.getByRole('alert').filter({ hasText: 'Retry to recover this same match' }).waitFor();
+    assert.equal(await page.getByRole('checkbox').isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /^Hard/ }).isDisabled(), true);
+    assert.deepEqual(attempts[0], attempts[1]);
+    await page.getByRole('button', { name: /^Play Easy/ }).click();
+    await page.locator('.game-page').waitFor();
+    const match = await readMatch(page);
+    assert.equal(match.id, acceptedId);
+    assert.equal(match.timed, false);
+    return { recoveredSameMatch: true, attempts: attempts.length };
+  });
+  await check('voided-bot-rematch-recovers', async (page) => {
+    const match = await learn(page);
+    const { openDatabase } = await import('../server/db.ts');
+    const db = openDatabase(dbPath);
+    try { db.prepare("UPDATE matches SET state_json = 'corrupt', deadline = ? WHERE id = ?").run(Date.now() - 1, match.id); }
+    finally { db.close(); }
+    await page.getByRole('heading', { name: 'Match voided', exact: true }).waitFor();
+    const created = page.waitForResponse((response) => response.url().endsWith('/api/bot-matches'));
+    await page.getByRole('button', { name: /^Rematch/ }).click();
+    const response = await created;
+    assert.equal(response.status(), 201);
+    assert.equal(response.request().postDataJSON().parentMatchId, undefined);
+    await page.locator('.game-page').waitFor();
+    const replacement = await readMatch(page);
+    assert.notEqual(replacement.id, match.id);
+    assert.equal(replacement.timed, false);
+    return { recovered: true };
+  }, { viewport: { width: 390, height: 844 } });
+  await check('mobile-timed-move-stays-in-view', async (page) => {
+    await page.getByRole('button', { name: /^02 Quick Duel/ }).click();
+    const friend = page.locator('.friend-entry');
+    const divider = await friend.locator('span').boundingBox();
+    const button = await friend.getByRole('button').boundingBox();
+    const group = await friend.boundingBox();
+    assert.ok(button.y > divider.y + divider.height);
+    assert.ok(Math.abs(button.width - group.width) < 1);
+    await page.getByRole('button', { name: /^Play Normal/ }).click();
+    await page.locator('.game-page').waitFor();
+    await page.locator('.action-grid button').filter({ hasText: 'Ambush' }).click();
+    assert.match(await page.locator('.selected-action-help').innerText(), /hit: \+1/);
+    const move = page.getByRole('button', { name: /^Lock move/ });
+    const rect = await move.boundingBox();
+    assert.ok(rect.y >= 0 && rect.y + rect.height <= 568, `Lock fits the timed viewport: ${JSON.stringify(rect)}`);
+    await page.locator('.board-panel .board-cell.legal').first().click();
+    await move.click();
+    await page.getByRole('button', { name: /^Next round/ }).waitFor();
+    assert.equal(await page.evaluate(() => scrollY), 0, 'No scrolling between action, target, and Lock');
+    assert.equal(await page.locator('.action-grid').count(), 0);
+    assert.equal(await move.count(), 0);
+    return { noDecisionScrolling: true };
+  }, { viewport: { width: 320, height: 568 }, reducedMotion: 'reduce' });
+  for (const [width, height] of [[320, 568], [390, 844]]) {
+    await check(`home-footer-clearance-${width}`, async (page) => {
+      await page.locator('.ranked-card').waitFor();
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+      assert.equal(await page.evaluate(() => scrollY + innerHeight >= document.documentElement.scrollHeight), true);
+      const card = await page.locator('.ranked-card').boundingBox();
+      const footer = await page.locator('.hero-entry').boundingBox();
+      assert.ok(card.y + card.height <= footer.y, 'The last mode card clears the fixed entry bar');
+      return { footerClearance: footer.y - card.y - card.height };
+    }, { viewport: { width, height } });
+  }
   await check('welcome-dismiss-and-return', async (page) => {
     assert.equal(await page.locator('dialog[open]').count(), 0);
     await page.getByRole('button', { name: /^Start a game/ }).click();
@@ -332,7 +408,8 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     assert.equal(match.status, 'review'); assert.equal(match.deadline, null);
     assert.equal(match.lastResult.outcomes[initial.player].action.target, legal.at(-1), 'Alternative legal target stays selected');
     assert.match(await page.locator('.match-header strong').innerText(), /Round 1 resolved/i);
-    assert.equal(await page.getByRole('button', { name: /^Lock move/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /^Lock move/ }).count(), 0, 'Review has no inactive move editor');
+    assert.equal(await page.locator('.action-grid').count(), 0);
     const beforeReload = JSON.stringify(match.lastResult);
     await page.reload(); await page.getByRole('button', { name: /^Next round/ }).waitFor();
     assert.equal(JSON.stringify((await readMatch(page)).lastResult), beforeReload);
@@ -344,7 +421,8 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     assert.equal(await page.locator('.suggested-target').count(), 0);
     assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), null);
     await lock(page, 'pass');
-    assert.ok((await page.locator('.learning-coach').innerText()).includes('You practiced the loop'));
+    assert.ok((await page.locator('.round-review').innerText()).includes('You practiced the loop'));
+    assert.equal(await page.locator('.round-review').getByRole('button', { name: /^Start a duel/ }).count(), 1);
     assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), null, 'Second review still needs acknowledgement');
     await next(page);
     assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), 'completed');
@@ -368,7 +446,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await page.unroute('**/api/matches/*/actions');
     await page.route('**/api/matches/*/next', async (route) => { await route.fetch(); await route.abort('failed'); });
     await page.getByRole('button', { name: /^Next round/ }).click();
-    await page.waitForFunction(() => !document.querySelectorAll('.action-grid button')[4].disabled);
+    await page.waitForFunction(() => document.querySelectorAll('.action-grid button')[4]?.disabled === false);
     assert.ok((await page.locator('.learning-coach').innerText()).includes('Choose your own move'));
     await page.unroute('**/api/matches/*/next');
     await lock(page, 'pass'); await next(page);

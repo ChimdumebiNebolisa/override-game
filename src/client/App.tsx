@@ -15,7 +15,7 @@ import {
   type Player,
 } from "../shared/rules";
 import { PLACEMENT_MATCHES } from "../shared/rating";
-import { api, snapshotIsCurrent, type LeaderboardEntry, type PublicMatch, type QuickRematchInvitation, type RankedInvitation, type RankedProfile, type RankedQueue, type RankedSettlement, type Room } from "./api";
+import { api, RequestError, snapshotIsCurrent, type LeaderboardEntry, type PublicMatch, type QuickRematchInvitation, type RankedInvitation, type RankedProfile, type RankedQueue, type RankedSettlement, type Room } from "./api";
 import {
   beginGoogleFirebaseSignIn,
   clearGoogleAuthReturnFromLocation,
@@ -266,13 +266,20 @@ function ModeSelect({
   const [timedPractice, setTimedPractice] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const creationRef = useRef<{ difficulty: Difficulty; key: string } | null>(null);
+  const [uncertainCreation, setUncertainCreation] = useState(false);
+  const creationRef = useRef<{ difficulty: Difficulty; timed: boolean; key: string } | null>(null);
   const launch = async () => {
     setBusy(true);
     setError("");
-    if (creationRef.current?.difficulty !== difficulty) creationRef.current = { difficulty, key: crypto.randomUUID() };
-    try { await onStart(kind, difficulty, creationRef.current.key, kind === "quick" || timedPractice); creationRef.current = null; }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "The match could not start."); }
+    const timed = kind === "quick" || timedPractice;
+    if (creationRef.current?.difficulty !== difficulty || creationRef.current.timed !== timed) creationRef.current = { difficulty, timed, key: crypto.randomUUID() };
+    try { await onStart(kind, difficulty, creationRef.current.key, timed); creationRef.current = null; setUncertainCreation(false); }
+    catch (reason) {
+      const uncertain = reason instanceof RequestError && reason.uncertain;
+      setUncertainCreation(uncertain);
+      if (!uncertain) creationRef.current = null;
+      setError(`${reason instanceof Error ? reason.message : "The match could not start."}${uncertain ? " Retry to recover this same match." : ""}`);
+    }
     finally { setBusy(false); }
   };
   return (
@@ -283,7 +290,7 @@ function ModeSelect({
         <h1>{kind === "practice" ? "Practice" : "Choose your rival."}</h1>
         <p>{kind === "practice" ? "Legal targets and outcome explanations stay on. You can show or hide hints while you play." : "A full unranked match with no coaching and no sign-in."}</p>
       </div>
-      <fieldset className="difficulty-picker">
+      <fieldset className="difficulty-picker" disabled={busy || uncertainCreation}>
         <legend>Bot difficulty</legend>
         {(["Easy", "Normal", "Hard"] as const).map((item) => (
           <button key={item} className={difficulty === item ? "active" : ""} onClick={() => setDifficulty(item)}>
@@ -292,7 +299,7 @@ function ModeSelect({
           </button>
         ))}
       </fieldset>
-      {kind === "practice" && <label className="timed-practice"><input type="checkbox" checked={timedPractice} onChange={(event) => setTimedPractice(event.target.checked)} />
+      {kind === "practice" && <label className="timed-practice"><input type="checkbox" disabled={busy || uncertainCreation} checked={timedPractice} onChange={(event) => setTimedPractice(event.target.checked)} />
         <span><strong>Use a turn timer</strong><small>Ten seconds per round. Off by default while you learn.</small></span>
       </label>}
       {error && <p className="form-error" role="alert">{error}</p>}
@@ -312,7 +319,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   difficulty: Difficulty;
   initialMatch: PublicMatch;
   onExit: () => void;
-  onRestart: (creationKey: string) => Promise<void>;
+  onRestart: (creationKey: string, currentMatch: PublicMatch) => Promise<void>;
   onRestartPractice: (creationKey: string) => Promise<void>;
   onOpenRanked: () => void;
   onOpenLeaderboard: () => void;
@@ -549,7 +556,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   };
   const exit = () => { if (match.status === "finished") acknowledgeReview(); onExit(); };
   if (serverStatus === "voided" || match.status === "finished") {
-    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={async (key) => { acknowledgeReview(); await onRestart(key); }} onExit={exit} onOpenRanked={onOpenRanked} onOpenLeaderboard={onOpenLeaderboard} onQuickRematch={onQuickRematch} onSnapshot={receiveSnapshot}
+    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={async (key) => { acknowledgeReview(); await onRestart(key, snapshotRef.current); }} onExit={exit} onOpenRanked={onOpenRanked} onOpenLeaderboard={onOpenLeaderboard} onQuickRematch={onQuickRematch} onSnapshot={receiveSnapshot}
       lastResult={reveal} learningReady={Boolean(learning && !learning.skipped && learning.independentRound !== null && !learning.completed)} onStartDuel={() => { acknowledgeReview(); onStartDuel(); }} onReplayLearning={onReplayLearning} />;
   }
 
@@ -583,7 +590,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
     : "Finish with more territory. Try Expand on a highlighted space.";
 
   return (
-    <main className="game-page">
+    <main className={`game-page${initialMatch.timed && decisionOpen ? " timed-decision" : ""}`}>
       <header className="match-header">
         <button ref={leaveButtonRef} className="icon-button" onClick={() => setConfirmResign(true)} aria-label="Leave match">×</button>
         <div><span>{mode === "practice" ? "Practice" : mode === "ranked" ? "Ranked Duel" : `Quick Duel · ${initialMatch.roomId ? "Friend" : difficulty}`}</span><strong ref={roundLabelRef} tabIndex={-1}>{roundLabel}</strong></div>
@@ -601,6 +608,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
 
       {reveal && <RevealPanel result={reveal} player={me} finalRound={false} activeRoundOpen={decisionOpen}
         automatic={initialMatch.progression === "automatic" && initialMatch.policyVersion === 2} pending={nextPending}
+        learningReady={qualifyingReview} onStartDuel={() => { setLeavingForDuel(true); setConfirmResign(true); }}
         onContinue={() => {
           if (decisionOpen) {
             acknowledgedRoundRef.current = resolvedRound(snapshotRef.current) ?? 0;
@@ -610,6 +618,32 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
         }} />}
 
       <div className="game-layout">
+        {decisionOpen && <section className="move-panel" aria-labelledby="move-title">
+          {coaching && <div className="learning-coach">
+            {instruction && <p role="status">{instruction}</p>}
+            <details><summary>Learning details</summary><p>{independent ? "Use any legal action without a recommendation. A manually locked Pass counts too." : "Expand is free. Choose any highlighted empty space beside your territory. Selecting never submits a move; Lock does. All legal alternatives remain available."}</p></details>
+            <button className="back-link" onClick={() => { if (learning) updateLearning({ ...learning, skipped: true }); }}>Skip coaching</button>
+          </div>}
+          {coaching && learning.completed && <ContextTip run={learning} match={snapshotRef.current} action={actionType} onUpdate={updateLearning} />}
+          <div className="move-heading"><div><span>YOUR MOVE</span><h2 id="move-title">Choose an action.</h2></div><small>One move per round</small></div>
+          <div className="action-grid">
+            {ACTIONS.map((action) => {
+              const canAfford = match.energy[me] >= action.cost;
+              const hasTargets = action.type === "pass" || legalTargets(match, me, action.type).length > 0;
+              const reason = !canAfford ? `Need ${action.cost - match.energy[me]} more Energy` : !hasTargets ? "No legal target · see action rules" : action.short;
+              return (
+                <button key={action.type} className={actionType === action.type ? "selected" : ""}
+                  onClick={() => chooseAction(action.type)} disabled={!canAct || !canAfford || !hasTargets}
+                  aria-pressed={actionType === action.type} aria-label={`${action.label} · ${reason}${action.cost ? ` · ${action.cost} Energy` : " · free"}`}>
+                  <span className={`action-glyph glyph-${action.type}`} aria-hidden="true" />
+                  <span><strong>{action.label}</strong><small className="action-description">{reason}</small><small className="action-availability">{!canAfford ? `Need ${action.cost - match.energy[me]}ϟ` : !hasTargets ? "No target" : action.cost ? `${action.cost}ϟ` : "Free"}</small></span>
+                  {action.cost > 0 && <b className="cost">{action.cost}ϟ</b>}
+                </button>
+              );
+            })}
+          </div>
+          <p className="selected-action-help" role="status">{ACTIONS.find((action) => action.type === actionType)?.short}{actionType === "ambush" ? " · hit: +1ϟ, no capture." : ""}</p>
+        </section>}
         <section className="board-panel" aria-labelledby="board-title">
           <div className="board-label"><span id="board-title">Territory grid</span><span>{!decisionOpen ? "ROUND REVEALED" : submitting ? "SENDING MOVE" : locked ? "MOVE LOCKED" : "CHOOSE A TARGET"}</span></div>
           <GameBoard board={match.board} legal={legal} target={target} secondTarget={selectedTargets[1] ?? null} disabled={!canAct} you={me}
@@ -620,49 +654,23 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
             <strong>{match.energy[me]} / 3</strong>
             <small className="rival-energy">RIVAL {match.energy[rival]} / 3</small>
           </div>
+          <p className="energy-note">Ambush hits earn +1 Energy · cap 3</p>
           {mode === "practice" && !learning && <div className="hint-control"><button type="button" onClick={() => setShowHint((value) => !value)} aria-pressed={showHint}>{showHint ? "Hide hints" : "Show hints"}</button></div>}
           {mode === "practice" && !learning && showHint && canAct && <p className="coach-note"><b>Hint</b>{hint}</p>}
         </section>
 
-        <section className="move-panel" aria-labelledby="move-title">
-          {coaching && <div className="learning-coach">
-            {instruction && <p role="status">{instruction}</p>}
-            <details><summary>Learning details</summary><p>{independent ? "Use any legal action without a recommendation. A manually locked Pass counts too." : "Expand is free. Choose any highlighted empty space beside your territory. Selecting never submits a move; Lock does. All legal alternatives remain available."}</p></details>
-            <button className="back-link" onClick={() => { if (learning) updateLearning({ ...learning, skipped: true }); }}>Skip coaching</button>
-            {qualifyingReview && <button className="secondary-cta" onClick={() => { setLeavingForDuel(true); setConfirmResign(true); }}>Start a duel</button>}
-          </div>}
-          {coaching && learning.completed && <ContextTip run={learning} match={snapshotRef.current} action={actionType} onUpdate={updateLearning} />}
-          <div className="move-heading"><div><span>YOUR MOVE</span><h2 id="move-title">Choose an action.</h2></div><small>One move per round</small></div>
-          <div className="action-grid">
-            {ACTIONS.map((action) => {
-              const canAfford = match.energy[me] >= action.cost;
-              const hasTargets = action.type === "pass" || legalTargets(match, me, action.type).length > 0;
-              return (
-                <button
-                  key={action.type}
-                  className={actionType === action.type ? "selected" : ""}
-                  onClick={() => chooseAction(action.type)}
-                  disabled={!canAct || !canAfford || !hasTargets}
-                  aria-pressed={actionType === action.type}
-                >
-                  <span className={`action-glyph glyph-${action.type}`} aria-hidden="true" />
-                  <span><strong>{action.label}</strong><small>{!canAfford ? `Need ${action.cost - match.energy[me]} more Energy` : !hasTargets ? "No legal target · see action rules" : action.short}</small></span>
-                  {action.cost > 0 && <b className="cost">{action.cost}ϟ</b>}
-                </button>
-              );
-            })}
-          </div>
-          <div className="selection-line">
+        <section className="commit-panel" aria-label={decisionOpen ? "Confirm your move" : "Match options"}>
+          {decisionOpen && <><div className="selection-line">
             <span>Selected{actionType === "surge" ? ` · ${selectedTargets.length}/2 · tap again to deselect` : ""}</span><strong>{selectedAction ? actionText(selectedAction) : `${ACTIONS.find((item) => item.type === actionType)?.label}: choose a node`}</strong>
           </div>
+          <button className="lock-button" disabled={!selectedAction || !canAct} onClick={() => void commit()}>
+            {submitting ? "Sending move…" : locked ? "Move locked" : "Lock move"}<span>{locked ? "✓" : "→"}</span>
+          </button></>}
           {networkError && <p className="form-error" role="alert">{networkError}</p>}
           {connectionError && <p className="form-error" role="status">{connectionError}</p>}
           {serverStatus === "grace" && <p className="status-note" role="status">Match paused while a player reconnects. The server will resume or finish it after the grace period.</p>}
           {afkWarning && <p className="afk-warning" role="alert"><b>AFK warning</b> Choose a move this round. A third connected miss ends the match.</p>}
           <ActionDetails energy={match.energy[me]} timed={initialMatch.timed && decisionOpen} />
-          <button className="lock-button" disabled={!selectedAction || !canAct} onClick={() => void commit()}>
-            {submitting ? "Sending move…" : decisionOpen && locked ? "Move locked" : "Lock move"}<span>{decisionOpen && locked ? "✓" : "→"}</span>
-          </button>
           {mode === "practice" && <button className="secondary-cta full" disabled={restartingPractice} onClick={() => void restartPractice()}>
             {restartingPractice ? "Restarting Practice…" : "Restart Practice"}
           </button>}
@@ -715,7 +723,7 @@ function WelcomeDialog({ onClose, onLearn, onDuel }: { onClose: () => void; onLe
   </dialog>;
 }
 
-export function RevealPanel({ result, player, finalRound, activeRoundOpen, onContinue, automatic = false, pending = false }: {
+export function RevealPanel({ result, player, finalRound, activeRoundOpen, onContinue, automatic = false, pending = false, learningReady = false, onStartDuel }: {
   result: NonNullable<PublicMatch["lastResult"]>;
   player: Player;
   finalRound: boolean;
@@ -723,6 +731,8 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
   onContinue: () => void;
   automatic?: boolean;
   pending?: boolean;
+  learningReady?: boolean;
+  onStartDuel?: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(!activeRoundOpen || finalRound);
   useEffect(() => {
@@ -760,9 +770,9 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
           <div><small>You</small><strong>{result.score[player]}</strong></div><i aria-hidden="true">—</i><div><small>Rival</small><strong>{result.score[rival]}</strong></div>
         </div>
         {!finalRound && (automatic && !activeRoundOpen ? <p role="status">Next round opens automatically after the shared reveal.</p>
-          : <button className="secondary-cta full" disabled={pending} onClick={onContinue}>
+          : <div className="review-navigation">{learningReady && <p>You practiced the loop. Continue Practice or start a duel.</p>}<button className="secondary-cta full" disabled={pending} onClick={onContinue}>
             {pending ? "Opening round…" : activeRoundOpen ? "Hide result" : "Next round"} <span>→</span>
-          </button>)}
+          </button>{learningReady && <button className="primary-cta full" disabled={pending} onClick={onStartDuel}>Start a duel <span>→</span></button>}</div>)}
       </section>
   );
 }
@@ -1465,7 +1475,7 @@ export function App() {
       {screen === "home" && <Home navigate={navigate} onGenericStart={() => void genericStart()} onLearn={() => void learn()} />}
       {screen === "practice" && <ModeSelect kind="practice" onStart={(mode, difficulty, key, timed) => start(mode, difficulty, key, undefined, undefined, timed)} navigate={navigate} />}
       {screen === "quick" && <ModeSelect kind="quick" onStart={(mode, difficulty, key, timed) => start(mode, difficulty, key, undefined, undefined, timed)} navigate={navigate} />}
-      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onStartDuel={() => navigate("quick")} onReplayLearning={() => void learn()} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key) => { if (solo.mode === "ranked") navigate("ranked"); else if (botMatch.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, botMatch.status === "voided" ? undefined : botMatch.id, undefined, botMatch.timed); }} onRestartPractice={(key) => start("practice", solo.difficulty, key, undefined, botMatch.id, botMatch.timed)} />}
+      {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onStartDuel={() => navigate("quick")} onReplayLearning={() => void learn()} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key, current) => { if (solo.mode === "ranked") navigate("ranked"); else if (current.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, current.status === "voided" ? undefined : current.id, undefined, current.timed); }} onRestartPractice={(key) => start("practice", solo.difficulty, key, undefined, botMatch.id, botMatch.timed)} />}
       {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} authRedirectError={authRedirectError} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
