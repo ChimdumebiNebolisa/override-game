@@ -496,6 +496,12 @@ dialog:not([open]) { display:none; }
 .segmented button.active { border-color:var(--blue); color:var(--blue); }
 .room-form label { display:flex; flex-direction:column; gap:8px; margin:18px 0; font:700 10px var(--mono); letter-spacing:.1em; text-transform:uppercase; }
 .room-form input { block-size:50px; padding:0 14px; border:1px solid var(--line); background:var(--paper); font-size:16px; text-transform:none; }
+.copy-control { min-inline-size:0; display:grid; gap:8px; }
+.room-ticket > .copy-control { inline-size:fit-content; max-inline-size:100%; margin-inline:auto; }
+.copy-feedback { color:var(--ink); font-size:13px; line-height:1.5; }
+.copy-fallback { min-inline-size:0; display:grid; gap:8px; text-align:start; font-size:13px; line-height:1.5; }
+.copy-fallback input { min-inline-size:0; inline-size:100%; min-block-size:44px; padding-block:8px; padding-inline:10px; border:1px solid var(--line); background:var(--paper); color:var(--ink); font:16px var(--mono); }
+.copy-fallback input:focus-visible { outline:2px solid var(--focus); outline-offset:3px; }
 .form-error { padding:10px; background:oklch(0.9661 0.0168 31.1); color:oklch(0.4687 0.1602 29.9); font-size:12px; }
 .room-ticket { text-align:center; }
 .room-ticket > span { color:var(--muted); font:9px var(--mono); letter-spacing:.14em; }

@@ -144,6 +144,26 @@ function GameDialog({ title, children, onClose, className = "" }: { title: strin
   </dialog>;
 }
 
+function CopyButton({ value, label = "Invite link", className = "secondary-cta" }: { value: string; label?: string; className?: string }) {
+  const [status, setStatus] = useState<"idle" | "copying" | "copied" | "failed">("idle");
+  useEffect(() => { setStatus("idle"); }, [value]);
+  const copy = async () => {
+    setStatus("copying");
+    try {
+      await navigator.clipboard.writeText(value);
+      setStatus("copied");
+    } catch { setStatus("failed"); }
+  };
+  return <div className="copy-control">
+    <button className={className} disabled={status === "copying"} onClick={() => void copy()}>Copy {label.toLowerCase()}</button>
+    {status === "copied" && <span className="copy-feedback" role="status">{label} copied.</span>}
+    {status === "failed" && <label className="copy-fallback">
+      <span role="alert">Couldn’t copy. Select and copy the {label.toLowerCase()} below.</span>
+      <input aria-label={label} readOnly value={value} onFocus={(event) => event.currentTarget.select()} />
+    </label>}
+  </div>;
+}
+
 const ACTION_HELP: Record<Action['type'], string> = {
   expand: "Claim one open space beside your territory and earn 0.5 Energy, up to the cap.",
   ambush: "Pick an open space beside rival territory. Hit: +3 Energy and drain up to 2; miss: −1. Requires 1 Energy; captures no space.",
@@ -970,7 +990,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
       {ranked && settlement && <RankedSettlementDetails settlement={settlement} profile={profile} />}
       {ranked && !settlement && resultType !== "server-error" && <p className="status-note" role="status">Rating update pending. This result will refresh automatically.</p>}
       {ranked && invitation && !requested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Sides will swap and credit is recalculated before ready.</p><button className="primary-cta" disabled={busy} onClick={acceptRematch}>Accept rematch <span>→</span></button></div>}
-      {ranked && requested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your opponent.</p>{invitation && <button className="secondary-cta" onClick={() => navigator.clipboard.writeText(invitation.inviteUrl)}>Copy invite link</button>}</div>}
+      {ranked && requested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your opponent.</p>{invitation && <CopyButton value={invitation.inviteUrl} />}</div>}
       {friend && quickInvitation && !quickRequested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Accept to play again with sides swapped.</p><button className="primary-cta" disabled={busy} onClick={acceptQuickRematch}>Accept rematch <span>→</span></button></div>}
       {friend && quickRequested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your friend.</p></div>}
       {error && <p className="form-error" role="alert">{error}</p>}
@@ -992,6 +1012,7 @@ function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate:
   const [room, setRoom] = useState<Room | null>(initialRoom ?? null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [uncertainSubmission, setUncertainSubmission] = useState(false);
   const creationRef = useRef<{ name: string; key: string } | null>(null);
 
   useEffect(() => {
@@ -1026,10 +1047,14 @@ function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate:
           ? await api.joinInvite(inviteToken, roomName)
           : await api.joinRoom(code.trim().toUpperCase(), roomName);
       if (tab === "create") creationRef.current = null;
+      setUncertainSubmission(false);
       if (inviteToken) window.history.replaceState(null, "", "/");
       setRoom(response.room);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The room could not be opened.");
+      const uncertain = reason instanceof RequestError && reason.uncertain;
+      setUncertainSubmission(uncertain);
+      if (!uncertain) creationRef.current = null;
+      setError(`${reason instanceof Error ? reason.message : "The room could not be opened."}${uncertain ? " Retry to recover this same room." : ""}`);
     } finally {
       setBusy(false);
     }
@@ -1044,15 +1069,15 @@ function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate:
       ) : room ? (
         <section className="room-ticket">
           <span>ROOM CODE</span><strong>{room.code}</strong>
-          <button className="secondary-cta" onClick={() => navigator.clipboard.writeText(room.inviteUrl)}>Copy invite link</button>
+          <CopyButton value={room.inviteUrl} />
           {room.status === "open" && <button className="room-close" onClick={() => void api.closeRoom(room.id).then(() => setRoom(null)).catch((reason) => setError(reason instanceof Error ? reason.message : "The room could not be closed."))}>Close room</button>}
           <div className="seat-list"><p><i className="online" />{room.hostDisplayName}<small>Host</small></p><p><i />{room.guestDisplayName ?? "Waiting for friend…"}<small>{room.guestDisplayName ? "Joined" : "Open seat"}</small></p></div>
         </section>
       ) : (
         <section className="room-form">
-          {!inviteToken && <div className="segmented"><button className={tab === "create" ? "active" : ""} onClick={() => setTab("create")}>Create room</button><button className={tab === "join" ? "active" : ""} onClick={() => setTab("join")}>Join room</button></div>}
-          <label>Display name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" maxLength={24} /></label>
-          {tab === "join" && !inviteToken && <label>Room code<input value={code} onChange={(event) => setCode(event.target.value)} placeholder="e.g. K7MX9Q" maxLength={12} /></label>}
+          {!inviteToken && <div className="segmented"><button disabled={busy || uncertainSubmission} className={tab === "create" ? "active" : ""} onClick={() => setTab("create")}>Create room</button><button disabled={busy || uncertainSubmission} className={tab === "join" ? "active" : ""} onClick={() => setTab("join")}>Join room</button></div>}
+          <label>Display name<input disabled={busy || uncertainSubmission} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" maxLength={24} /></label>
+          {tab === "join" && !inviteToken && <label>Room code<input disabled={busy || uncertainSubmission} value={code} onChange={(event) => setCode(event.target.value)} placeholder="e.g. K7MX9Q" maxLength={12} /></label>}
           <button className="primary-cta full" disabled={!name.trim() || (tab === "join" && !inviteToken && !code.trim()) || busy} onClick={submit}>{busy ? "Connecting…" : tab === "create" ? "Create room" : "Join room"}<span>→</span></button>
         </section>
       )}
@@ -1251,7 +1276,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { 
       <div className="panel-heading"><p className="eyebrow">Human opponents · Rated</p><h1>Ranked Duel</h1><p>Sign in with Google to enter matchmaking, complete two placement matches, and earn an official human leaderboard rank.</p></div>
       {!signedIn && <button className="google-button" disabled={!firebaseConfig || busy} onClick={() => void signInWithGoogle()}><span>G</span> {busy ? "Signing in…" : firebaseConfig ? "Continue with Google" : "Google sign-in is not configured"}</button>}
       {signedIn && !profile?.handle && <section className="room-form ranked-setup"><label>Choose a public handle<input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><button className="primary-cta full" disabled={busy || !/^[A-Za-z0-9_]{3,16}$/.test(handle)} onClick={claim}>Claim handle <span>→</span></button></section>}
-      {profile?.handle && !queue && (!inviteIntent || inviteDismissed) && <section className="ranked-console"><p>Signed in as <strong>{profile.handle}</strong></p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Find opponent <span>→</span></button><button className="secondary-cta full challenge-button" disabled={busy} onClick={challenge}>Challenge friend</button>{inviteUrl && <div className="invite-output"><span>Waiting for friend to accept</span>{inviteCode && <p>Challenge code <strong>{inviteCode}</strong></p>}<div className="invite-actions">{inviteCode && <button onClick={() => navigator.clipboard.writeText(inviteCode)}>Copy code</button>}<button onClick={() => navigator.clipboard.writeText(inviteUrl)}>Copy invite link</button></div></div>}<form className="ranked-code-form" onSubmit={(event) => { event.preventDefault(); void acceptChallengeCode(); }}><label>Join a Ranked challenge<input value={challengeCode} onChange={(event) => setChallengeCode(event.target.value.toUpperCase())} placeholder="10-character code" maxLength={12} autoCapitalize="characters" /></label><button className="secondary-cta full" disabled={busy || !challengeCode.trim()}>Join challenge</button></form></section>}
+      {profile?.handle && !queue && (!inviteIntent || inviteDismissed) && <section className="ranked-console"><p>Signed in as <strong>{profile.handle}</strong></p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Find opponent <span>→</span></button><button className="secondary-cta full challenge-button" disabled={busy} onClick={challenge}>Challenge friend</button>{inviteUrl && <div className="invite-output"><span>Waiting for friend to accept</span>{inviteCode && <p>Challenge code <strong>{inviteCode}</strong></p>}<div className="invite-actions">{inviteCode && <CopyButton value={inviteCode} label="Code" className="" />}<CopyButton value={inviteUrl} className="" /></div></div>}<form className="ranked-code-form" onSubmit={(event) => { event.preventDefault(); void acceptChallengeCode(); }}><label>Join a Ranked challenge<input value={challengeCode} onChange={(event) => setChallengeCode(event.target.value.toUpperCase())} placeholder="10-character code" maxLength={12} autoCapitalize="characters" /></label><button className="secondary-cta full" disabled={busy || !challengeCode.trim()}>Join challenge</button></form></section>}
       {profile?.handle && inviteIntent && !inviteDismissed && !queue && <section className="ranked-console">{inviteFailed ? <><strong>Invitation could not be opened.</strong><p>Check that it is still valid, or return to Ranked.</p><button className="primary-cta full" disabled={busy} onClick={retryInvite}>Retry invitation <span>→</span></button><button className="secondary-cta full" disabled={busy} onClick={dismissInvite}>Return to Ranked</button></> : <><div className="queue-pulse" /><strong>Opening {inviteIntent.kind}…</strong><p>Your destination was preserved through sign-in.</p></>}</section>}
       {queue?.state === "searching" && <section className="ranked-console"><div className="queue-pulse" /><strong>Finding an opponent…</strong><p>Search expands over 15 seconds.</p><button className="secondary-cta full" onClick={() => void api.leaveRankedQueue().then(() => setQueue(null))}>Cancel</button></section>}
       {queue?.state === "timed-out" && <section className="ranked-console"><strong>No opponent found this time.</strong><p>Search timed out after 15 seconds.</p><button className="primary-cta full" disabled={busy} onClick={findOpponent}>Try again <span>→</span></button></section>}

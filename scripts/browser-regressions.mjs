@@ -309,6 +309,89 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await dismissTraining(page);
     return match;
   };
+  const friendForm = async (page) => {
+    await page.getByRole('button', { name: /^02 Quick Duel/ }).click();
+    await page.getByRole('button', { name: 'Play a friend', exact: true }).click();
+  };
+  await check('uncertain-room-creation-recovers-original-options', async (page) => {
+    await friendForm(page);
+    await page.getByLabel('Display name', { exact: true }).fill('Original host');
+    let acceptedId;
+    const attempts = [];
+    await page.route('**/api/rooms', async (route) => {
+      attempts.push(route.request().postDataJSON());
+      const response = await route.fetch();
+      assert.equal(response.status(), 201);
+      acceptedId = (await response.json()).room.id;
+      await route.abort('failed');
+    }, { times: 1 });
+    await page.locator('.room-form .primary-cta').click();
+    await page.getByRole('alert').waitFor();
+    assert.equal(await page.getByLabel('Display name', { exact: true }).isDisabled(), true, 'Lost accepted room response must freeze its original name');
+    for (const name of ['Create room', 'Join room']) assert.equal(await page.locator('.segmented').getByRole('button', { name, exact: true }).isDisabled(), true);
+    assert.ok((await page.getByRole('alert').innerText()).includes('Retry to recover this same room'));
+    await page.locator('.room-form .primary-cta').click();
+    await page.locator('.room-ticket > strong').waitFor();
+    const resumed = (await (await page.request.get(`${origin}/api/resume`)).json()).room;
+    assert.equal(resumed.id, acceptedId);
+    assert.equal(resumed.hostDisplayName, 'Original host');
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(dbPath);
+    try { assert.equal(db.prepare('SELECT count(*) AS count FROM rooms WHERE creation_key = ?').get(attempts[0].creationKey).count, 1); }
+    finally { db.close(); }
+    return { originalRoomRecovered: true };
+  }, { viewport: { width: 390, height: 844 } });
+
+  await check('uncertain-room-join-recovers-original-options', async (page) => {
+    const guestContext = await browser.newContext();
+    const guest = await guestContext.newPage();
+    try {
+      await friendForm(page); await page.getByLabel('Display name', { exact: true }).fill('Host');
+      await page.locator('.room-form .primary-cta').click(); await page.locator('.room-ticket > strong').waitFor();
+      const code = await page.locator('.room-ticket > strong').innerText();
+      await guest.goto(origin); await friendForm(guest);
+      await guest.getByRole('button', { name: 'Join room', exact: true }).click();
+      await guest.getByLabel('Display name', { exact: true }).fill('Original guest');
+      await guest.getByLabel('Room code', { exact: true }).fill(code);
+      await guest.route('**/api/rooms/join', async (route) => {
+        const response = await route.fetch(); assert.equal(response.status(), 200); await route.abort('failed');
+      }, { times: 1 });
+      await guest.locator('.room-form .primary-cta').click(); await guest.getByRole('alert').waitFor();
+      assert.equal(await guest.getByLabel('Display name', { exact: true }).isDisabled(), true);
+      assert.equal(await guest.getByLabel('Room code', { exact: true }).isDisabled(), true);
+      await guest.locator('.room-form .primary-cta').click(); await guest.locator('.game-page').waitFor();
+      assert.equal((await readMatch(guest)).id, (await readMatch(page)).id);
+      return { joinedMatchRecovered: true };
+    } finally { await guestContext.close(); }
+  });
+
+  for (const width of [1440, 390, 320]) await check(`clipboard-denied-${width}`, async (page) => {
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true,
+      value: { writeText: async () => { throw new Error('Clipboard permission denied by audit fixture'); } } }));
+    await friendForm(page); await page.getByLabel('Display name', { exact: true }).fill('Clipboard host');
+    await page.locator('.room-form .primary-cta').click(); await page.locator('.room-ticket > strong').waitFor();
+    await page.getByRole('button', { name: 'Copy invite link', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: 'Couldn’t copy' }).waitFor();
+    const fallback = page.getByRole('textbox', { name: 'Invite link', exact: true });
+    assert.ok((await fallback.inputValue()).startsWith(`${origin}/join/`));
+    await fallback.focus();
+    assert.equal(await fallback.evaluate((input) => input.selectionEnd - input.selectionStart === input.value.length), true);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: resolve(outputDir, `clipboard-fallback-${width}.png`), fullPage: true });
+    return { manualCopyAvailable: true };
+  }, { viewport: { width, height: width === 320 ? 568 : 900 } });
+
+  await check('clipboard-success-is-announced', async (page) => {
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true,
+      value: { writeText: async (value) => { globalThis.__copiedInvite = value; } } }));
+    await friendForm(page); await page.getByLabel('Display name', { exact: true }).fill('Clipboard host');
+    await page.locator('.room-form .primary-cta').click(); await page.locator('.room-ticket > strong').waitFor();
+    await page.getByRole('button', { name: 'Copy invite link', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: 'Invite link copied' }).waitFor();
+    assert.ok((await page.evaluate(() => globalThis.__copiedInvite)).startsWith(`${origin}/join/`));
+    return { copyAnnounced: true };
+  });
+
   await check('uncertain-creation-recovers-original-options', async (page) => {
     await page.getByRole('button', { name: /^01 Practice/ }).click();
     let acceptedId;

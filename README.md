@@ -64,6 +64,7 @@ Durable Object recovery uses the operator-only `POST /__ops/recovery/bookmark` a
 ## Product boundaries
 
 - Guest and bot games never affect Ranked ratings.
+- Every new game starts both players at 5/5 Energy. Successful Expand earns 0.5; Ambush requires 1 to attempt, earns up to 3 and drains up to 2 on a hit, or costs 1 on a miss. Ambush captures no territory. Surge costs 3 and Override costs 2; existing saved games retain their balances and caps.
 - Ranked requires two distinct Google accounts and public handles.
 - Pending contents remain secret until resolution. New human matches reveal when both players lock or the shared ten-second deadline expires; early reveal communicates that both committed, without a rival-ready indicator. Migrated matches retain their fixed-deadline policy.
 - New bot games resolve on accepted Lock or a timed deadline, then persist in review until the human chooses Next round. Default Practice and explicit learning are untimed; timed Practice and Quick bot use ten seconds. New human matches have a shared three-second reveal.
