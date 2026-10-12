@@ -84,10 +84,11 @@ button:not(:disabled) { cursor: pointer; }
   .primary-cta:hover:not(:disabled) { transform: translate(-1px, -1px); }
 }
 .primary-cta:disabled { opacity: .45; }
-.secondary-cta { background: transparent; }
+.secondary-cta { background: transparent; box-shadow: 5px 5px 0 var(--ink); }
 @media (hover: hover) and (pointer: fine) {
-  .secondary-cta:hover { background: white; }
+  .secondary-cta:hover:not(:disabled) { background: var(--white); }
 }
+.secondary-cta:active:not(:disabled) { box-shadow: 2px 2px 0 var(--ink); }
 .full { inline-size: 100%; }
 
 .mode-grid { margin-block-start: 76px; display: grid; grid-template-columns: 1.25fr repeat(3, 1fr); border-block-start: 1px solid var(--ink); border-block-end: 1px solid var(--ink); }
@@ -106,8 +107,9 @@ button:not(:disabled) { cursor: pointer; }
   .mode-card:hover .mode-copy small { color: color-mix(in oklch, var(--white) 75%, transparent); }
 }
 @media (prefers-reduced-motion: no-preference) and (hover: hover) and (pointer: fine) {
-  .mode-card { transition: background .2s, color .2s, transform .2s var(--ease-out); }
-  .mode-card:hover { transform: translateY(-5px); }
+  .mode-card:not(:disabled) { transition: background .2s, color .2s, transform 240ms var(--ease-out), scale 140ms var(--ease-out); }
+  .mode-card:hover { transform: translateY(-8px); }
+  .mode-card:active { transform: translateY(-2px); }
 }
 .mode-arrow { position: absolute; inset-block-start: 18px; inset-inline-end: 20px; font-size: 22px; }
 
