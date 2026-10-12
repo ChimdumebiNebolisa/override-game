@@ -13,6 +13,25 @@ const territory = [
   "11111110",
 ];
 
+const rivalTerritory = [
+  "00111111",
+  "00011111",
+  "01011011",
+  "00101111",
+  "10011101",
+  "00110111",
+  "01001110",
+  "00111011",
+  "00010101",
+  "10001011",
+  "00110100",
+  "01000101",
+  "00011000",
+  "00100010",
+  "00001001",
+  "00010000",
+];
+
 export function HeroArtwork() {
   return <div className="hero-artwork" aria-hidden="true">
     <svg className="hero-tiles-blue" viewBox="-120 0 600 740" preserveAspectRatio="xMidYMid slice" focusable="false">
@@ -37,8 +56,8 @@ export function HeroArtwork() {
         </linearGradient>
       </defs>
       <g transform="rotate(-18 1480 180)" fill="url(#hero-red-tiles)">
-        {[...territory].reverse().flatMap((row, y) => [...row].reverse().map((occupied, x) => occupied === "1"
-          ? <rect key={`${y}-${x}`} x={x * 58 + 1190} y={y * 58 - 150} width="54" height="54" /> : null))}
+        {rivalTerritory.flatMap((row, y) => [...row].map((occupied, x) => occupied === "1"
+          ? <rect key={`${y}-${x}`} x={x * 58 + 1150} y={y * 58 - 150} width="54" height="54" /> : null))}
       </g>
     </svg>
   </div>;
