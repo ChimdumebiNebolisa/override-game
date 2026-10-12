@@ -25,12 +25,15 @@ This implements the actionable findings in the engineering audit of `f839f550bdb
 - Rendered matrix: 27 states across desktop, tablet, and mobile widths; no horizontal overflow or uncaught client errors. Targeted small-screen movement and footer checks passed after the final spacing corrections.
 - Impeccable detector: existing accent-border and score-width-animation warnings remain; those incumbent styles were not rewritten as part of these fixes.
 - `git diff --check`: passed.
+- [Main CI run 38192055717](https://github.com/ChimdumebiNebolisa/override-game/actions/runs/38192055717): all three jobs passed on application commit `45e4cc2db2be24a998b427bbc699b240c6621485`, including Linux native Worker runtime, browser checks, dependency audits, and container backup/restore.
 
 Raw screenshots, geometry, test fixtures, and logs remain local under `output/fixes-2026-10-11/`. The original audit reports are historical evidence, not a description of this repaired revision.
 
 ## Release
 
-Push/deployment verification pending. The existing production URL is https://override-game.cnebolisa.workers.dev/.
+Application commit `45e4cc2db2be24a998b427bbc699b240c6621485` was pushed to `main` and deployed with `npm run deploy:worker` after CI passed. Cloudflare version `48c1629e-0969-4b46-a46c-f77239f010f5` receives 100% of production traffic at [the live game](https://override-game.cnebolisa.workers.dev/).
+
+Production verification confirmed HTTP 200, healthy API status, matching HTML asset references, and byte-for-byte SHA-256 equality for the built files. Two real Chromium flows passed: 390-pixel learning with review persisted through reload and grouped completion choices; and 320×568 timed Quick with action, target, and Lock at scroll position zero, followed by stationary manual review. Both temporary guest matches were explicitly resigned, and active-match lookup returned null after cleanup. No uncaught browser errors occurred. The final release-record commit changes documentation only.
 
 ## Remaining limits
 
