@@ -286,8 +286,10 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await dismissTraining(page);
     const response = page.waitForResponse((item) => item.url().endsWith('/actions'));
     await page.getByRole('button', { name: /^Lock move/ }).click();
-    assert.equal((await response).status(), 200);
-    await page.getByRole('heading', { name: /resolved/ }).waitFor();
+    const locked = await response;
+    assert.equal(locked.status(), 200);
+    if ((await locked.json()).match.status === 'finished') await page.locator('.result-page').waitFor();
+    else await page.getByRole('heading', { name: /resolved/ }).waitFor();
   };
   const next = async (page) => {
     const response = page.waitForResponse((item) => item.url().endsWith('/next'));
@@ -359,7 +361,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await page.getByRole('button', { name: /^Play Normal/ }).click();
     await page.locator('.game-page').waitFor();
     await page.locator('.action-grid button').filter({ hasText: 'Ambush' }).click();
-    assert.match(await page.locator('.selected-action-help').innerText(), /hit: \+1/);
+    assert.match(await page.locator('.selected-action-help').innerText(), /hit \+3.*miss −1/);
     const move = page.getByRole('button', { name: /^Lock move/ });
     const rect = await move.boundingBox();
     assert.ok(rect.y >= 0 && rect.y + rect.height <= 568, `Lock fits the timed viewport: ${JSON.stringify(rect)}`);
@@ -653,6 +655,79 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
       assert.equal(await page.evaluate(() => localStorage.getItem('override:core-loop:v1')), 'completed', 'Terminal exit acknowledges independent result');
     }
   });
+  for (const [width, height] of [[1440, 900], [390, 844], [320, 568]]) {
+    await check(`fractional-energy-${width}`, async (page) => {
+      const initial = await learn(page);
+      assert.deepEqual(initial.state.energy, { A: 5, B: 5 });
+      const me = initial.player;
+      const rival = me === 'A' ? 'B' : 'A';
+      const state = createInitialState();
+      state.board = Array.from({ length: 25 }, (_, index) => index === 11 ? me : index === 13 ? rival : 'neutral');
+      state.energy = { [me]: 2.5, [rival]: 0.5 };
+      const { default: Database } = await import('better-sqlite3');
+      const db = new Database(dbPath);
+      try { db.prepare('UPDATE matches SET state_json = ?, revision = revision + 1 WHERE id = ?').run(JSON.stringify(state), initial.id); }
+      finally { db.close(); }
+      await page.reload(); await page.locator('.game-page').waitFor(); await dismissTraining(page);
+      assert.equal(await page.locator('.energy-bar strong').innerText(), '2.5 / 5');
+      assert.equal(await page.locator('.energy-bar i.charged').count(), 2);
+      assert.equal(await page.locator('.energy-bar i.half-charged').count(), 1);
+      assert.equal(await page.locator('.energy-bar i').count(), 5);
+      assert.equal(await page.locator('.action-grid button').filter({ hasText: /^Surge/ }).isDisabled(), true);
+      assert.equal(await page.locator('.action-grid button').filter({ hasText: /^Ambush/ }).isDisabled(), false);
+      await page.screenshot({ path: resolve(outputDir, `fractional-energy-${width}.png`), fullPage: true });
+      await lock(page);
+      const resolved = await readMatch(page);
+      assert.equal(resolved.lastResult.outcomes[me].energyEarned, 0.5);
+      assert.equal(resolved.state.energy[me], 3);
+      await page.reload(); await page.getByRole('button', { name: /^Next round/ }).waitFor();
+      assert.equal((await readMatch(page)).state.energy[me], 3);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      return { startingEnergy: initial.state.energy, halfFilled: true, persistedExpandReward: true };
+    }, { viewport: { width, height }, reducedMotion: 'reduce' });
+
+    await check(`successful-ambush-defeat-${width}`, async (page) => {
+      const initial = await learn(page);
+      const me = initial.player;
+      const rival = me === 'A' ? 'B' : 'A';
+      const before = { ...createInitialState(), round: 12,
+        board: Array.from({ length: 25 }, (_, index) => index < 11 ? me : index < 23 ? rival : 'neutral'),
+        energy: { [me]: 5, [rival]: 2 },
+      };
+      const result = resolveRound(before, { [me]: { type: 'ambush', target: 23 }, [rival]: { type: 'expand', target: 23 } });
+      const { default: Database } = await import('better-sqlite3');
+      const db = new Database(dbPath);
+      try { db.prepare("UPDATE matches SET state_json = ?, last_result_json = ?, status = 'finished', result_type = 'standard', revision = revision + 1 WHERE id = ?")
+        .run(JSON.stringify(result.state), JSON.stringify(result), initial.id); }
+      finally { db.close(); }
+      await page.reload(); await page.locator('.result-page').waitFor();
+      assert.equal(await page.locator('.result-explanation').innerText(), 'Your Ambush stopped their Expand, but they finished ahead, 12–11. Ambush doesn’t capture territory.');
+      assert.equal(await page.locator('.result-score').count(), 1);
+      assert.equal(await page.locator('.result-page .round-review').count(), 0);
+      assert.equal(await page.locator('.last-move-summary > strong').evaluate((el, side) => {
+        const sample = document.createElement('span'); sample.style.color = side === 'A' ? 'var(--blue)' : 'var(--coral)';
+        document.body.append(sample); const expected = getComputedStyle(sample).color; sample.remove();
+        return getComputedStyle(el).color === expected;
+      }, me), true, 'Last move uses the actual territory colour');
+      assert.ok((await page.locator('.last-move-summary').innerText()).includes('Rival lost 2 Energy'));
+      assert.ok((await page.locator('.last-move-summary').innerText()).includes('Energy was full'));
+      assert.ok(await page.locator('.result-page h1').evaluate((el) => parseFloat(getComputedStyle(el).fontSize) <= 80));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.screenshot({ path: resolve(outputDir, `successful-ambush-defeat-${width}.png`), fullPage: true });
+      await page.getByRole('button', { name: 'View last round', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'Last round', exact: true });
+      await dialog.waitFor();
+      assert.equal(await dialog.locator('.reveal-score, .reveal-winner').count(), 0);
+      assert.ok((await dialog.innerText()).includes('Lost 2 Energy to Ambush'));
+      assert.equal(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth), true);
+      await page.keyboard.press('Tab');
+      assert.equal(await page.evaluate(() => !!document.activeElement.closest('dialog')), true);
+      await page.screenshot({ path: resolve(outputDir, `last-round-dialog-${width}.png`), fullPage: true });
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate(() => document.activeElement.textContent), 'View last round');
+      return { finalScore: result.score, correctlyExplained: true, focusRestored: true };
+    }, { viewport: { width, height }, reducedMotion: 'reduce' });
+  }
   await writeFile(resolve(outputDir, 'learning-regressions.json'), JSON.stringify(results, null, 2));
   return results;
 }

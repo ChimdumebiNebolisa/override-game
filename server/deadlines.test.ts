@@ -41,7 +41,7 @@ describe('deadline failure recovery', () => {
         .run(corruption === 'state-json' ? '{broken secret' : '{"board":[]}', broken.id);
     } else {
       db.prepare("INSERT INTO pending_actions (match_id, round, player, action_json, locked_at) VALUES (?, 1, 'A', ?, 101000)")
-        .run(broken.id, corruption === 'action-json' ? '{secret move' : JSON.stringify({ type: 'surge', target: 2 }));
+        .run(broken.id, corruption === 'action-json' ? '{secret move' : JSON.stringify({ type: 'surge', target: 0 }));
     }
 
     expect(dueMatches(db, 105_000)).toEqual([broken.id, healthy.id]);

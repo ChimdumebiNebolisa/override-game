@@ -39,6 +39,8 @@ describe('persisted match pacing', () => {
       progression: 'review', deadline: timed ? 110_000 : null });
     const before = matchForSession(db, id, actor);
     expect(before.state).toEqual(createInitialState());
+    expect(before.state?.energy).toEqual({ A: 5, B: 5 });
+    expect(before.state?.config.energyCap).toBe(5);
     const action = legalActions(before.state!, before.player!)[0];
     lock(id, actor, action);
     expect(getMatch(db, id)).toMatchObject({ status: 'review', deadline: null, transition_at: null });

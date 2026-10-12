@@ -141,6 +141,9 @@ test('ready handshake binds only when both players confirm and freezes startedAt
   assert.equal(bound.started_at, 50_200);
   assert.equal(bound.deadline, 60_200);
   assert.equal(bound.ready_deadline, null);
+  const opening = JSON.parse(row<{ state_json: string }>(db, 'SELECT state_json FROM matches WHERE id = ?', shell.matchId).state_json);
+  assert.deepEqual(opening.energy, { A: 5, B: 5 });
+  assert.equal(opening.config.energyCap, 5);
   assert.deepEqual([bound.player_a_name, bound.player_b_name].sort(), ['Alpha', 'Bravo']);
   assert.equal(row<{ state: string; lease_expires_at: number | null }>(db,
     'SELECT state, lease_expires_at FROM ranked_ownership WHERE match_id = ? LIMIT 1', shell.matchId).state, 'active_match');

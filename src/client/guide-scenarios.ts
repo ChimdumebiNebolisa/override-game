@@ -51,7 +51,7 @@ export function guideScenario(
   finishExample: FinishExampleId = "standard-win",
 ): GuideScenario {
   if (lesson === "expand") {
-    return { start: createInitialState(), rivalMove: { type: "expand", target: 22 }, suggestedTargets: [2], note: "Staged opening · 0 starting Energy" };
+    return { start: createInitialState(), rivalMove: { type: "expand", target: 22 }, suggestedTargets: [2], note: "Staged opening · Full 5 Energy" };
   }
   if (lesson === "collision") {
     const cells = Array<string>(25).fill("A");
@@ -60,7 +60,7 @@ export function guideScenario(
       rivalMove: { type: "expand", target: 12 }, suggestedTargets: [12], note: "Staged example · C3 is the only open space" };
   }
   if (lesson === "ambush") {
-    return { start: position(facing), rivalMove: { type: "expand", target: 12 }, suggestedTargets: [12], note: "Staged example · Rival’s move stays hidden until reveal" };
+    return { start: position(facing, 1, 2), rivalMove: { type: "expand", target: 12 }, suggestedTargets: [12], note: "Staged example · You have 1 Energy; rival has 2" };
   }
   if (lesson === "surge") {
     const start = surgeExample === "steal"

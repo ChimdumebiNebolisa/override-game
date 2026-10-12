@@ -21,7 +21,7 @@ describe("hero final-round scenario", () => {
       match = resolveRound(match, moves).state;
     }
     expect(match).toEqual(createDemoMatch());
-    expect(match).toMatchObject({ round: 15, phase: "sudden-death", status: "active", energy: { A: 3, B: 0 } });
+    expect(match).toMatchObject({ round: 15, phase: "sudden-death", status: "active", energy: { A: 5, B: 0 } });
     expect(match.round).toBe(match.config.standardRounds + match.config.suddenDeathRounds);
     expect(score(match.board)).toEqual({ A: 10, B: 10 });
     expect(validateAction(match, "B", DEMO_RIVAL_MOVE).ok).toBe(true);
@@ -92,7 +92,7 @@ describe("hero selection, commitment and replay", () => {
     expect(demoReducer(revealed, { type: "reveal", attempt: 0 })).toBe(revealed);
     const finished = demoReducer(revealed, { type: "finish", attempt: 0 });
     expect(finished.match).toEqual(revealed.result!.state);
-    expect(finished.match.energy.A).toBe(1);
+    expect(finished.match.energy.A).toBe(3);
     expect(finished.result!.outcomes.A.energySpent).toBe(2);
     expect(demoReducer(finished, { type: "finish", attempt: 0 })).toBe(finished);
   });
@@ -116,7 +116,7 @@ describe("hero selection, commitment and replay", () => {
     expect(revealed.result!.outcomes.A.action).toEqual({ type: "surge", target: 13, secondTarget: 17 });
     const finished = demoReducer(revealed, { type: "finish", attempt: 0 });
     expect(finished.result!.score).toEqual({ A: 12, B: 9 });
-    expect(finished.match.energy.A).toBe(0);
+    expect(finished.match.energy.A).toBe(2);
     const reset = demoReducer(finished, { type: "reset" });
     expect(reset).toEqual({ ...createDemoState(), attempt: 1 });
     expect(demoReducer(reset, { type: "finish", attempt: 0 })).toBe(reset);

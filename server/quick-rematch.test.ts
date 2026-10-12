@@ -99,6 +99,7 @@ test('opponent acceptance starts one authoritative fresh match with sides swappe
   assert.equal(created.deadline, now + 2 + 10_000);
   assert.equal(created.revision, 1);
   assert.deepEqual(JSON.parse(created.state_json), createInitialState());
+  assert.deepEqual(JSON.parse(created.state_json).energy, { A: 5, B: 5 });
   assert.deepEqual(row<{ disconnected_a_at: number | null; disconnected_b_at: number | null }>(db,
     'SELECT disconnected_a_at, disconnected_b_at FROM matches WHERE id = ?', accepted.matchId),
   { disconnected_a_at: now + 2, disconnected_b_at: now + 2 });

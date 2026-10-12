@@ -21,7 +21,7 @@ const facing = [".....", ".....", ".A.B.", ".....", "....."];
 
 describe("action Energy costs", () => {
   it.each([
-    [0, false, false], [1, false, false], [2, true, false], [3, true, true],
+    [0, false, false], [1, false, false], [1.5, false, false], [2, true, false], [2.5, true, false], [3, true, true], [5, true, true],
   ] as const)("with %i Energy, Override affordability is %s and Surge affordability is %s", (energy, canOverride, canSurge) => {
     const current = state([".....", ".....", ".AB..", ".....", "....."], energy);
     for (const [move, affordable, spent] of [
@@ -41,12 +41,12 @@ describe("action Energy costs", () => {
 });
 
 describe("opening and legality", () => {
-  it("starts with the exact opposite 2x2 corners and zero Energy", () => {
+  it("starts with the exact opposite 2x2 corners and full Energy", () => {
     const opening = createInitialState();
     expect(opening.board.map((cell) => cell === "neutral" ? "." : cell).join(""))
       .toBe("AA...AA...........BB...BB");
     expect(score(opening.board)).toEqual({ A: 4, B: 4 });
-    expect(opening.energy).toEqual({ A: 0, B: 0 });
+    expect(opening.energy).toEqual({ A: 5, B: 5 });
     expect(opening.round).toBe(1);
   });
 
@@ -59,7 +59,7 @@ describe("opening and legality", () => {
   });
 
   it("targets the opponent's legal Expand nodes with Ambush", () => {
-    const current = state(facing);
+    const current = state(facing, 1);
     expect(legalTargets(current, "A", "ambush")).toEqual([8, 12, 14, 18]);
     expect(validateAction(current, "A", action("ambush", 10))).toEqual({ ok: false, reason: "not-adjacent" });
   });
@@ -95,7 +95,7 @@ describe("simultaneous resolution", () => {
   });
 
   it("allows a mix of neutral and rival targets, without Ambush interception", () => {
-    const before = state([".....", ".....", ".ABB.", ".....", "....."], 3);
+    const before = state([".....", ".....", ".ABB.", ".....", "....."], 3, 1);
     const result = resolveRound(before, { A: { type: "surge", target: 6, secondTarget: 12 }, B: action("ambush", 6) });
     expect(result.score).toEqual({ A: 3, B: 1 });
     expect(result.outcomes.A.cells).toEqual([
@@ -183,8 +183,8 @@ describe("simultaneous resolution", () => {
     if (a.type !== "pass" && b.type !== "pass" && "target" in a && "target" in b && a.target === b.target) {
       expect(result.state.board[a.target]).toBe("neutral");
     }
-    expect(result.state.energy.A).toBe(3 - (a.type === "surge" ? 3 : 0));
-    expect(result.state.energy.B).toBe(3 - (b.type === "surge" ? 3 : 0));
+    expect(result.state.energy.A).toBe(3 - (a.type === "surge" ? 3 : 0) + (a.type === "expand" && reasonA === "claimed" ? 0.5 : 0));
+    expect(result.state.energy.B).toBe(3 - (b.type === "surge" ? 3 : 0) + (b.type === "expand" && reasonB === "claimed" ? 0.5 : 0));
     expect(before.board).toEqual(board(facing));
     expect(before.energy).toEqual({ A: 3, B: 3 });
   });
@@ -192,31 +192,31 @@ describe("simultaneous resolution", () => {
   it("rewards a correct Ambush after blocking Expand, available next round", () => {
     const before = state(facing, 2);
     const result = resolveRound(before, { A: action("ambush", 12), B: action("expand", 12) });
-    expect(result.outcomes.A).toMatchObject({ success: true, reason: "ambush-hit", energyEarned: 1 });
+    expect(result.outcomes.A).toMatchObject({ success: true, reason: "ambush-hit", energyEarned: 3 });
     expect(result.outcomes.B.reason).toBe("intercepted");
     expect(result.state.board[12]).toBe("neutral");
     expect(before.energy.A).toBe(2);
-    expect(result.state.energy.A).toBe(3);
+    expect(result.state.energy.A).toBe(5);
     expect(legalTargets(before, "A", "surge")).toEqual([]);
     expect(legalTargets(result.state, "A", "surge")).not.toEqual([]);
   });
 
   it("does not reward a missed or capped Ambush", () => {
-    const missed = resolveRound(state(facing), { A: action("ambush", 8), B: action("expand", 12) });
+    const missed = resolveRound(state(facing, 1), { A: action("ambush", 8), B: action("expand", 12) });
     expect(missed.outcomes.A.reason).toBe("ambush-missed");
     expect(missed.state.board[12]).toBe("B");
     expect(missed.state.energy.A).toBe(0);
-    const capped = resolveRound(state(facing, 3), { A: action("ambush", 12), B: action("expand", 12) });
+    const capped = resolveRound(state(facing, 5), { A: action("ambush", 12), B: action("expand", 12) });
     expect(capped.outcomes.A.reason).toBe("ambush-hit");
     expect(capped.outcomes.A.energyEarned).toBe(0);
-    expect(capped.state.energy.A).toBe(3);
+    expect(capped.state.energy.A).toBe(5);
   });
 
   it("does not intercept Surge or Override", () => {
-    const surge = resolveRound(state(facing, 0, 3), { A: action("ambush", 12), B: action("surge", 12) });
+    const surge = resolveRound(state(facing, 1, 3), { A: action("ambush", 12), B: action("surge", 12) });
     expect(surge.outcomes.A.reason).toBe("ambush-missed");
     expect(surge.state.board[12]).toBe("B");
-    const override = resolveRound(state([".....", ".....", ".AB..", ".....", "....."], 0, 3), {
+    const override = resolveRound(state([".....", ".....", ".AB..", ".....", "....."], 1, 3), {
       A: action("ambush", 13), B: action("override", 11),
     });
     expect(override.outcomes.A.reason).toBe("ambush-missed");
@@ -225,7 +225,7 @@ describe("simultaneous resolution", () => {
   });
 
   it("resolves two Ambushes and Pass without territorial effects", () => {
-    const both = resolveRound(state(facing), { A: action("ambush", 12), B: action("ambush", 12) });
+    const both = resolveRound(state(facing, 1, 1), { A: action("ambush", 12), B: action("ambush", 12) });
     expect(both.outcomes.A.reason).toBe("ambush-missed");
     expect(both.outcomes.B.reason).toBe("ambush-missed");
     expect(both.score).toEqual({ A: 1, B: 1 });

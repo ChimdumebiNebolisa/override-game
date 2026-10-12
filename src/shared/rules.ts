@@ -40,6 +40,7 @@ export interface ActionOutcome {
   reason: ActionReason;
   energySpent: number;
   energyEarned: number;
+  energyDrained?: number;
   cells?: ReadonlyArray<{ target: number; success: boolean; reason: ActionReason }>;
 }
 
@@ -67,7 +68,7 @@ export const BOARD_SIZE = 5;
 const DEFAULT_CONFIG: Readonly<GameConfig> = Object.freeze({
   standardRounds: 12,
   suddenDeathRounds: 3,
-  energyCap: 3,
+  energyCap: 5,
 });
 
 const OPENING: Board = [
@@ -86,6 +87,9 @@ const distance = (left: number, right: number): number =>
 const cost = (type: Action["type"]): number =>
   type === "surge" ? 3 : type === "override" ? 2 : 0;
 
+export const minimumEnergy = (type: Action["type"]): number =>
+  type === "ambush" ? 1 : cost(type);
+
 export function createInitialState(config: Partial<GameConfig> = {}): MatchState {
   const selected = { ...DEFAULT_CONFIG, ...config };
   if (!Number.isInteger(selected.standardRounds) || selected.standardRounds < 1 ||
@@ -94,7 +98,7 @@ export function createInitialState(config: Partial<GameConfig> = {}): MatchState
     throw new Error("Invalid game configuration");
   }
   return {
-    board: [...OPENING], energy: { A: 0, B: 0 }, round: 1,
+    board: [...OPENING], energy: { A: selected.energyCap, B: selected.energyCap }, round: 1,
     phase: "standard", status: "active", winner: null, endingReason: null,
     config: selected,
   };
@@ -114,7 +118,7 @@ export function actionTargets(action: Action): number[] {
 }
 
 export function legalTargets(state: MatchState, player: Player, type: TargetedActionType): number[] {
-  if (state.status !== "active" || state.energy[player] < cost(type)) return [];
+  if (state.status !== "active" || state.energy[player] < minimumEnergy(type)) return [];
   const owner = type === "ambush" ? opponent(player) : player;
   const targetOwner = type === "override" ? opponent(player) : "neutral";
   const reach = type === "surge" ? 2 : 1;
@@ -157,7 +161,7 @@ export function validateAction(state: MatchState, player: Player, action: Action
   if (targets.some((target) => !Number.isInteger(target) || target < 0 || target >= state.board.length) || new Set(targets).size !== targets.length) {
     return { ok: false, reason: "invalid-target" };
   }
-  if (state.energy[player] < cost(action.type)) return { ok: false, reason: "insufficient-energy" };
+  if (state.energy[player] < minimumEnergy(action.type)) return { ok: false, reason: "insufficient-energy" };
   const owner = action.type === "ambush" ? opponent(player) : player;
   const targetOwner = action.type === "override" ? opponent(player) : "neutral";
   if (targets.some((target) => action.type === "surge" ? state.board[target] === player : state.board[target] !== targetOwner)) return { ok: false, reason: "occupied-target" };
@@ -202,12 +206,23 @@ export function resolveRound(
     const other = actions[opponent(player)];
     let reason: ActionReason;
     let cells: ActionOutcome["cells"];
+    let energySpent = cost(action.type);
+    let energyEarned = 0;
+    let energyDrained = 0;
     if (action.type === "pass") {
       reason = submitted[player] === null ? "automatic-pass" : "passed";
     } else if (action.type === "ambush") {
       reason = other.type === "expand" && other.target === action.target
         ? "ambush-hit" : "ambush-missed";
-      if (reason === "ambush-hit") nextEnergy[player] = Math.min(state.config.energyCap, nextEnergy[player] + 1);
+      if (reason === "ambush-hit") {
+        energyEarned = Math.min(3, state.config.energyCap - nextEnergy[player]);
+        energyDrained = Math.min(2, nextEnergy[opponent(player)]);
+        nextEnergy[player] += energyEarned;
+        nextEnergy[opponent(player)] -= energyDrained;
+      } else {
+        energySpent = 1;
+        nextEnergy[player] -= energySpent;
+      }
     } else {
       cells = actionTargets(action).map((target) => {
         const cellReason: ActionReason = action.type === "expand" && other.type === "ambush" && other.target === target
@@ -219,10 +234,15 @@ export function resolveRound(
         return { target, success, reason: cellReason };
       });
       reason = cells.find((cell) => cell.reason === "stolen")?.reason ?? cells.find((cell) => cell.success)?.reason ?? cells[0].reason;
+      if (action.type === "expand" && reason === "claimed") {
+        energyEarned = Math.min(0.5, state.config.energyCap - nextEnergy[player]);
+        nextEnergy[player] += energyEarned;
+      }
     }
     outcomes[player] = {
       action: { ...action }, success: reason === "claimed" || reason === "stolen" || reason === "ambush-hit",
-      reason, energySpent: cost(action.type), energyEarned: reason === "ambush-hit" ? nextEnergy[player] - state.energy[player] : 0,
+      reason, energySpent, energyEarned,
+      ...(action.type === "ambush" && reason === "ambush-hit" ? { energyDrained } : {}),
       ...(cells ? { cells } : {}),
     };
   }

@@ -15,7 +15,7 @@ describe("beginner guide explanations", () => {
   });
   it("covers all powers, turn timing, opening and endings independently in static rules", () => {
     const html = renderToStaticMarkup(<RulesReference />);
-    for (const text of ["zero Energy", "Selecting a space never locks", "ten seconds", "three seconds", "Expand · free", "Ambush · free", "Surge · 3 Energy total", "Override · 2 Energy", "automatic Pass", "12 rounds", "sudden death", "3 sudden-death", "collisions", "refund", "pre-round", "−1", "−2"]) expect(html).toContain(text);
+    for (const text of ["full 5 Energy bar", "Selecting a space never locks", "ten seconds", "three seconds", "Expand · free", "Ambush · requires 1 Energy", "Surge · 3 Energy total", "Override · 2 Energy", "automatic Pass", "12 rounds", "sudden death", "3 sudden-death", "collisions", "refund", "pre-round", "−1", "−2", "0.5 Energy", "miss costs 1 Energy"]) expect(html).toContain(text);
     expect(html).toContain("Normal opening");
     expect(html).toContain("Partial Surge");
   });
@@ -42,15 +42,17 @@ describe("beginner guide explanations", () => {
     const scenario = guideScenario("ambush");
     const hit = { type: "ambush", target: 12 } as const;
     const result = resolveGuideScenario(scenario, hit);
-    expect(guideSummary(hit, result)).toContain("earned 1 Energy");
+    expect(guideSummary(hit, result)).toContain("earned 3 Energy");
+    expect(guideSummary(hit, result)).toContain("rival lost 2 Energy");
     expect(guideSummary(hit, result)).toContain("does not capture the target; it stays empty");
     expect(result.state.board[12]).toBe("neutral");
-    const capped = { ...scenario, start: { ...scenario.start, energy: { A: 3, B: 0 } } };
-    expect(guideSummary(hit, resolveGuideScenario(capped, hit))).toContain("already at the cap of 3");
+    const capped = { ...scenario, start: { ...scenario.start, energy: { A: 5, B: 2 } } };
+    expect(guideSummary(hit, resolveGuideScenario(capped, hit))).toContain("already at the cap of 5");
+    expect(guideSummary(hit, resolveGuideScenario(capped, hit))).toContain("rival lost 2 Energy");
     const miss = { type: "ambush", target: 8 } as const;
     const missed = resolveGuideScenario(scenario, miss);
     expect(guideSummary(miss, missed)).toContain("D2 missed the rival’s move (Expand C3)");
-    expect(guideSummary(miss, missed)).toContain("earned 0 Energy");
+    expect(guideSummary(miss, missed)).toContain("lost 1 Energy");
     expect(missed.state.energy.A).toBe(0);
     expect(missed.state.board[12]).toBe("B");
   });
@@ -62,13 +64,13 @@ describe("beginner guide explanations", () => {
     const collision = resolveGuideScenario(scenario, expand);
     const hit = resolveGuideScenario(scenario, ambush);
     expect(collision.state.board).toEqual(hit.state.board);
-    expect(collision.state.energy.A).toBe(0);
-    expect(hit.state.energy.A).toBe(1);
+    expect(collision.state.energy.A).toBe(1);
+    expect(hit.state.energy.A).toBe(4);
     expect(guideSummary(expand, collision)).toContain("neither gains territory or earns Energy");
     const html = renderToStaticMarkup(<RulesReference />);
     expect(html).toContain("An Expand collision leaves the space empty and earns no Energy.");
-    expect(html).toContain("If the rival chooses elsewhere, Expand can still capture your target; Ambush captures nothing.");
-    expect(html).toContain("At 3 Energy, a successful Ambush and an Expand collision can have the same immediate result.");
+    expect(html).toContain("If the rival chooses elsewhere, Expand can still capture your target; Ambush captures nothing and a miss costs 1 Energy.");
+    expect(html).toContain("Blocking the last Expand does not win the match if your rival still owns more territory.");
   });
 
   it("describes the chosen Expand and Override coordinates and score changes", () => {

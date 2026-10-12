@@ -11,7 +11,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 const pass: Action = { type: 'pass' };
 function view(id: string, round: number, action: Action | null, terminal = false): PublicMatch {
-  const result = resolveRound({ ...createInitialState(), round, config: { standardRounds: terminal ? round : 12, suddenDeathRounds: 0, energyCap: 3 } }, { A: action, B: pass });
+  const result = resolveRound({ ...createInitialState({ standardRounds: terminal ? round : 12, suddenDeathRounds: 0, energyCap: 3 }), round }, { A: action, B: pass });
   return { id, mode: 'practice', botDifficulty: 'easy', timed: false, roomId: null, player: 'A', playerNames: { A: 'You', B: 'Bot' },
     state: result.state, score: { ...result.score }, status: terminal ? 'finished' : 'review', deadline: null, serverNow: 1,
     revision: round + 1, locked: false, lastResult: result, resultType: terminal ? 'standard' : null, competitiveMultiplier: null };

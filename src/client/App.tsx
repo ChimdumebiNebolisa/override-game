@@ -8,6 +8,7 @@ import {
   legalActions,
   actionTargets,
   legalTargets,
+  minimumEnergy,
   score,
   type Action,
   type ActionOutcome,
@@ -94,8 +95,8 @@ const ACTIONS: ReadonlyArray<{
 const OUTCOME_COPY: Record<ActionOutcome["reason"], string> = {
   claimed: "claimed the node",
   stolen: "took control of the node",
-  "ambush-hit": "read the Expand",
-  "ambush-missed": "did not catch an Expand",
+  "ambush-hit": "blocked the Expand; the space stayed empty",
+  "ambush-missed": "missed the rival’s Expand",
   collision: "collided; the node stayed neutral",
   intercepted: "was stopped by an Ambush",
   passed: "passed",
@@ -107,20 +108,20 @@ function outcomeExplanation(outcome: ActionOutcome): string {
     const captured = outcome.cells.filter((cell) => cell.success).length;
     const stolen = outcome.cells.filter((cell) => cell.reason === "stolen").length;
     const blocked = outcome.cells.length - captured;
-    return `captured ${captured} ${captured === 1 ? "node" : "nodes"}${stolen ? ` (${stolen} stolen)` : ""}${blocked ? `; ${blocked} collided` : ""}`;
+    return `Captured ${captured} ${captured === 1 ? "space" : "spaces"}${stolen ? ` (${stolen} stolen)` : ""}${blocked ? `; ${blocked} collided` : ""}`;
   }
-  if (outcome.reason === "ambush-hit" && outcome.energyEarned === 0) {
-    return "read the Expand; Energy was already full";
-  }
-  return OUTCOME_COPY[outcome.reason];
+  const text = OUTCOME_COPY[outcome.reason];
+  return text[0].toUpperCase() + text.slice(1);
 }
 
-function energyEffect(outcome: ActionOutcome): string {
+export function energyEffect(outcome: ActionOutcome, drainedByRival = 0, energyFull = false): string {
   const effects = [
-    ...(outcome.energySpent > 0 ? [`Spent ${outcome.energySpent} Energy`] : []),
+    ...(outcome.energySpent > 0 ? [outcome.reason === "ambush-missed" ? `Miss penalty: −${outcome.energySpent} Energy` : `Spent ${outcome.energySpent} Energy`] : []),
     ...(outcome.energyEarned > 0 ? [`Earned ${outcome.energyEarned} Energy`] : []),
+    ...((outcome.energyDrained ?? 0) > 0 ? [`Rival lost ${outcome.energyDrained} Energy`] : []),
+    ...(drainedByRival > 0 ? [`Lost ${drainedByRival} Energy to Ambush`] : []),
   ];
-  if (outcome.reason === "ambush-hit" && outcome.energyEarned === 0) effects.push("Energy was full; none earned");
+  if ((outcome.reason === "ambush-hit" || outcome.action.type === "expand" && outcome.success && energyFull) && outcome.energyEarned === 0) effects.push("Energy was full; none earned");
   return effects.length ? effects.join(" · ") : "No Energy change";
 }
 
@@ -144,8 +145,8 @@ function GameDialog({ title, children, onClose, className = "" }: { title: strin
 }
 
 const ACTION_HELP: Record<Action['type'], string> = {
-  expand: "Claim one open space beside your territory for free.",
-  ambush: "Predict the rival’s exact Expand target to earn 1 Energy; you don’t capture it.",
+  expand: "Claim one open space beside your territory and earn 0.5 Energy, up to the cap.",
+  ambush: "Pick an open space beside rival territory. Hit: +3 Energy and drain up to 2; miss: −1. Requires 1 Energy; captures no space.",
   override: "Spend 2 Energy to steal one adjacent rival space.",
   surge: "Spend 3 Energy to take up to two spaces, each within two steps of your territory.",
   pass: "Make no move; Pass earns no Energy and needs no target.",
@@ -636,7 +637,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
       </GameDialog>}
       {(helpOpen || showPrompt) && !showResult && !confirmResign && <GameDialog title={!helpOpen && prompt ? prompt.title : "Action rules"} onClose={closeHelp}>
         <h2>{!helpOpen && prompt ? prompt.title : "Action rules"}</h2>
-        {!helpOpen && prompt ? <p>{prompt.text}</p> : <div className="action-help-list">{ACTIONS.map((action) => <p key={action.type}><b>{action.label}</b> · {ACTION_HELP[action.type]}</p>)}<p>Energy caps at 3; collisions leave the space neutral and don’t refund Energy.</p></div>}
+        {!helpOpen && prompt ? <p>{prompt.text}</p> : <div className="action-help-list">{ACTIONS.map((action) => <p key={action.type}><b>{action.label}</b> · {ACTION_HELP[action.type]}</p>)}<p>Energy caps at {match.config.energyCap}; an Ambush hit drains the rival even when your Energy is full.</p></div>}
         {initialMatch.timed && decisionOpen && <p className="status-note">The clock keeps running.</p>}
         <button className="primary-cta full" onClick={closeHelp}>Got it <span aria-hidden="true">→</span></button>
         {coaching && <button className="back-link" onClick={() => { updateLearning({ ...learning, skipped: true }); setHelpOpen(false); }}>Skip coaching</button>}
@@ -647,33 +648,33 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
           <div className="move-heading"><div><span>YOUR MOVE</span><h2 id="move-title">Choose an action.</h2></div><small>One move per round</small></div>
           <div className="action-grid">
             {ACTIONS.map((action) => {
-              const canAfford = match.energy[me] >= action.cost;
+              const required = minimumEnergy(action.type);
+              const canAfford = match.energy[me] >= required;
               const hasTargets = action.type === "pass" || legalTargets(match, me, action.type).length > 0;
-              const reason = !canAfford ? `Need ${action.cost - match.energy[me]} more Energy` : !hasTargets ? "No legal target · see action rules" : action.short;
+              const reason = !canAfford ? `Need ${required - match.energy[me]} more Energy` : !hasTargets ? "No legal target · see action rules" : action.short;
               return (
                 <button key={action.type} className={actionType === action.type ? "selected" : ""}
                   onClick={() => chooseAction(action.type)} disabled={!canAct || !canAfford || !hasTargets}
-                  aria-pressed={actionType === action.type} aria-label={`${action.label} · ${reason}${action.cost ? ` · ${action.cost} Energy` : " · free"}`}>
+                  aria-pressed={actionType === action.type} aria-label={`${action.label} · ${reason}${action.type === "ambush" ? " · requires 1 Energy; miss costs 1" : action.cost ? ` · ${action.cost} Energy` : " · free"}`}>
                   <span className={`action-glyph glyph-${action.type}`} aria-hidden="true" />
-                  <span><strong>{action.label}</strong><small className="action-description">{reason}</small><small className="action-availability">{!canAfford ? `Need ${action.cost - match.energy[me]}ϟ` : !hasTargets ? "No target" : action.cost ? `${action.cost}ϟ` : "Free"}</small></span>
+                  <span><strong>{action.label}</strong><small className="action-description">{reason}</small><small className="action-availability">{!canAfford ? `Need ${required - match.energy[me]}ϟ` : !hasTargets ? "No target" : action.type === "ambush" ? "Miss −1ϟ" : action.cost ? `${action.cost}ϟ` : "Free"}</small></span>
                   {action.cost > 0 && <b className="cost">{action.cost}ϟ</b>}
                 </button>
               );
             })}
           </div>
-          <p className="selected-action-help" role="status">{ACTIONS.find((action) => action.type === actionType)?.short}{actionType === "ambush" ? " · hit: +1ϟ, no capture." : ""}</p>
+          <p className="selected-action-help" role="status">{ACTIONS.find((action) => action.type === actionType)?.short}{actionType === "ambush" ? " · hit +3ϟ, drain 2; miss −1ϟ." : actionType === "expand" ? " · claim +0.5ϟ." : ""}</p>
         </section>
         <section className="board-panel" aria-labelledby="board-title">
           <div className="board-label"><span id="board-title">Territory grid</span><span>{!decisionOpen ? "ROUND REVEALED" : submitting ? "SENDING MOVE" : locked ? "MOVE LOCKED" : "CHOOSE A TARGET"}</span></div>
           <GameBoard board={match.board} legal={legal} target={target} secondTarget={selectedTargets[1] ?? null} disabled={!canAct} you={me}
             onTarget={(cell) => setSelectedTargets((current) => actionType === "surge" ? toggleSurgeTarget(current, cell) : [cell])} />
-          <div className="energy-bar" aria-label={`Your Energy ${match.energy[me]} of 3. Rival Energy ${match.energy[rival]} of 3.`}>
+          <div className="energy-bar" role="img" aria-label={`Your Energy ${match.energy[me]} of ${match.config.energyCap}. Rival Energy ${match.energy[rival]} of ${match.config.energyCap}.`}>
             <span>ENERGY</span>
-            {[1, 2, 3].map((value) => <i key={value} className={value <= match.energy[me] ? "charged" : ""}>ϟ</i>)}
-            <strong>{match.energy[me]} / 3</strong>
-            <small className="rival-energy">RIVAL {match.energy[rival]} / 3</small>
+            {Array.from({ length: match.config.energyCap }, (_, index) => <i key={index} aria-hidden="true" className={match.energy[me] >= index + 1 ? "charged" : match.energy[me] === index + 0.5 ? "half-charged" : ""} />)}
+            <strong>{match.energy[me]} / {match.config.energyCap}</strong>
+            <small className="rival-energy">RIVAL {match.energy[rival]} / {match.config.energyCap}</small>
           </div>
-          {!learning && <p className="energy-note">Ambush hits earn +1 Energy · cap 3</p>}
           {mode === "practice" && !learning && <div className="hint-control"><button type="button" onClick={() => setShowHint((value) => !value)} aria-pressed={showHint}>{showHint ? "Hide hints" : "Show hints"}</button></div>}
           {mode === "practice" && !learning && showHint && <p className="coach-note"><b>Hint</b>{hint}</p>}
         </section>
@@ -762,7 +763,6 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
   }, [result.state.round, activeRoundOpen, finalRound]);
   const rival: Player = player === "A" ? "B" : "A";
   const rows = ([player, rival] as const).map((side) => ({ side, outcome: result.outcomes[side] }));
-  const winnerText = result.state.winner === player ? "You win" : result.state.winner === rival ? "Rival wins" : "The match is tied";
   return (
     <section className="round-review" role="region" aria-labelledby="reveal-title" aria-live="polite">
       <div className="round-review-heading">
@@ -779,17 +779,13 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
               <span>{side === player ? "YOU" : "RIVAL"}</span>
               <strong>{actionText(outcome.action)}</strong>
               <p>{outcomeExplanation(outcome)}.</p>
-              <small>{energyEffect(outcome)}</small>
+              <small>{energyEffect(outcome, result.outcomes[side === player ? rival : player].energyDrained ?? 0, result.state.energy[side] >= result.state.config.energyCap)}</small>
               {detailsOpen && <>
-                {outcome.cells && <p>{outcome.cells.map((cell) => `${coordinate(cell.target)}: ${OUTCOME_COPY[cell.reason]}`).join(" · ")}</p>}
-                <p>Territory {result.score[side]}{result.beforeScore && ` (${signed(result.score[side] - result.beforeScore[side])})`} · Energy {result.state.energy[side]}{result.beforeEnergy && ` (${signed(result.state.energy[side] - result.beforeEnergy[side])})`}</p>
+                {outcome.cells && outcome.cells.length > 1 && <p>{outcome.cells.map((cell) => `${coordinate(cell.target)}: ${OUTCOME_COPY[cell.reason]}`).join(" · ")}</p>}
+                <p>{result.beforeScore && `Territory ${signed(result.score[side] - result.beforeScore[side])} · `}Energy {result.state.energy[side]} / {result.state.config.energyCap}</p>
               </>}
             </div>
           ))}
-        </div>
-        {finalRound && result.state.status === "finished" && (result.state.winner !== null || result.state.endingReason) && <p className={`reveal-winner ${result.state.winner === player ? "you-win" : result.state.winner === rival ? "rival-wins" : "tied"}`} role="status">{winnerText}</p>}
-        <div className="reveal-score" aria-label={`Territory score: you ${result.score[player]}, rival ${result.score[rival]}`}>
-          <div><small>You</small><strong>{result.score[player]}</strong></div><i aria-hidden="true">—</i><div><small>Rival</small><strong>{result.score[rival]}</strong></div>
         </div>
         {!finalRound && (automatic && !activeRoundOpen ? <p role="status">Next round opens automatically after the shared reveal.</p>
           : <div className="review-navigation">{learningReady && <p>You practiced the loop. Continue Practice or start a duel.</p>}<button className="secondary-cta full" disabled={pending} onClick={onContinue}>
@@ -812,6 +808,21 @@ export function RankedSettlementDetails({ settlement, profile }: { settlement: R
     <p className="status-note">{creditExplanation(settlement.multiplier)}</p>
     {profile?.rating !== undefined && <p className="next-rival">{nextRivalText(profile.rating)}</p>}
   </>;
+}
+
+export function finalResultExplanation(match: MatchState, player: Player, resultType: PublicMatch['resultType'], lastResult: PublicMatch['lastResult']): string {
+  if (resultType === "server-error") return "Match voided due to a connection or server error. No rating was changed.";
+  if (resultType === "no-contest") return "Neither player receives competitive credit for this match.";
+  if (resultType === "resignation" || match.endingReason === "resignation") return "The match ended by resignation.";
+  if (resultType === "forfeit" || match.endingReason === "forfeit") return "The match ended by forfeit.";
+  const rival = player === "A" ? "B" : "A";
+  const totals = score(match.board);
+  if (lastResult?.outcomes[player].reason === "ambush-hit" && match.winner === rival) {
+    return `Your Ambush stopped their Expand, but they finished ahead, ${totals[rival]}–${totals[player]}. Ambush doesn’t capture territory.`;
+  }
+  return match.winner === null ? "Equal territory at the end of the match means a draw."
+    : match.winner === player ? "You finished with more territory than your rival."
+      : "Your rival finished with more territory. The final territory score decides the winner.";
 }
 
 function ResultScreen({ match, totals, player, ranked, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onOpenLeaderboard, onQuickRematch, onSnapshot, lastResult, learningReady, onStartDuel, onReplayLearning }: {
@@ -843,6 +854,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   const [quickRequested, setQuickRequested] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [lastRoundOpen, setLastRoundOpen] = useState(false);
   const restartKey = useRef<string | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
 
@@ -942,12 +954,17 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
       <p className="eyebrow">{ranked ? "Ranked Duel" : "Unranked match"} · Complete</p>
       <h1 className={title === "Victory" ? "victory" : title === "Defeat" ? "defeat" : title === "Draw" ? "draw" : ""} ref={titleRef} tabIndex={-1}>{title}</h1>
       <div className="result-score" aria-label={`Final score: you ${totals[player]}, rival ${totals[rival]}`}><span><small>You</small>{totals[player]}</span><i>—</i><span><small>Rival</small>{totals[rival]}</span></div>
-      <p>{resultType === "server-error" ? "Match voided due to a connection or server error. No rating was changed." :
-        resultType === "no-contest" ? "Neither player receives competitive credit for this match." :
-        resultType === "resignation" ? "The match ended by resignation." :
-          resultType === "forfeit" ? "The match ended by forfeit." :
-            match.endingReason === "board-exhaustion" ? "No legal territory-changing moves remained." : "Final territory after the last round."}</p>
-      {lastResult && <RevealPanel result={lastResult} player={player} finalRound activeRoundOpen={false} onContinue={onExit} />}
+      <p className="result-explanation">{finalResultExplanation(match, player, resultType, lastResult)}</p>
+      {lastResult && <section className="last-move-summary" aria-label="Your last move">
+        <span className="eyebrow">Your last move</span>
+        <strong className={`side-${player}`}>{actionText(lastResult.outcomes[player].action)}</strong>
+        <p>{outcomeExplanation(lastResult.outcomes[player])}.</p>
+        <small>{energyEffect(lastResult.outcomes[player], lastResult.outcomes[rival].energyDrained ?? 0, match.energy[player] >= match.config.energyCap)}</small>
+        <button className="secondary-cta" onClick={() => setLastRoundOpen(true)}>View last round</button>
+      </section>}
+      {lastRoundOpen && lastResult && <GameDialog title="Last round" className="round-dialog" onClose={() => setLastRoundOpen(false)}>
+        <RevealPanel result={lastResult} player={player} finalRound activeRoundOpen={false} onContinue={() => setLastRoundOpen(false)} />
+      </GameDialog>}
       {learningReady && <p role="status">You practiced the loop. Start a duel or leave to acknowledge this result.</p>}
       {!ranked && !friend && <div className="learning-choices"><button className="secondary-cta" onClick={onStartDuel}>Start a duel</button><button className="back-link" onClick={onReplayLearning}>Replay learning</button></div>}
       {ranked && settlement && <RankedSettlementDetails settlement={settlement} profile={profile} />}

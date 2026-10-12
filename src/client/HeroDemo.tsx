@@ -3,8 +3,8 @@ import { actionTargets, legalTargets, score, type Action } from "../shared/rules
 import { createDemoState, demoExplanation, demoReducer, selectedDemoMove } from "./hero-demo";
 
 const ACTIONS = [
-  { type: "expand", label: "Expand", cost: 0, hint: "Claim an open space beside your territory." },
-  { type: "ambush", label: "Ambush", cost: 0, hint: "Predict their Expand to block the claim." },
+  { type: "expand", label: "Expand", cost: 0, hint: "Claim an open space beside your territory; a claim earns up to 0.5 Energy." },
+  { type: "ambush", label: "Ambush", cost: 0, hint: "Predict their Expand beside rival territory: hit +3 Energy and drain up to 2; miss −1. Requires 1 Energy." },
   { type: "surge", label: "Surge", cost: 3, hint: "Take up to two open or rival spaces within two steps. Tap again to deselect." },
   { type: "override", label: "Override", cost: 2, hint: "Steal a rival space beside your territory." },
   { type: "pass", label: "Pass", cost: 0, hint: "Sit this round out. No space needed." },
@@ -82,10 +82,10 @@ export function HeroDemo() {
           <label htmlFor="demo-action">Action
             <select id="demo-action" ref={actionRef} value={demo.actionType} disabled={!choosing}
               aria-describedby="demo-action-hint" onChange={(event) => dispatch({ type: "action", actionType: event.target.value as Action["type"] })}>
-              {ACTIONS.map((item) => <option key={item.type} value={item.type}>{item.label} · {item.cost ? `${item.cost} Energy` : "free"}</option>)}
+              {ACTIONS.map((item) => <option key={item.type} value={item.type}>{item.label} · {item.type === "ambush" ? "requires 1 Energy" : item.cost ? `${item.cost} Energy` : "free"}</option>)}
             </select>
           </label>
-          <span className="demo-energy">Energy <b>{demo.match.energy.A} / 3</b></span>
+        <span className="demo-energy">Energy <b>{demo.match.energy.A} / {demo.match.config.energyCap}</b></span>
         </div>
         <p id="demo-action-hint" className="demo-hint">{action.hint}</p>
         <div className="demo-feedback" role="status" aria-live="polite" aria-atomic="true">

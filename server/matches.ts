@@ -58,7 +58,7 @@ function stateOf(row: MatchRow): MatchState {
       !state.config || !Number.isSafeInteger(state.config.standardRounds) || state.config.standardRounds < 1 ||
       !Number.isSafeInteger(state.config.suddenDeathRounds) || state.config.suddenDeathRounds < 0 ||
       !Number.isSafeInteger(state.config.energyCap) || state.config.energyCap < 1 ||
-      !state.energy || !(['A', 'B'] as const).every((side) => Number.isSafeInteger(state.energy[side]) &&
+      !state.energy || !(['A', 'B'] as const).every((side) => typeof state.energy[side] === 'number' && Number.isSafeInteger(state.energy[side] * 2) &&
         state.energy[side] >= 0 && state.energy[side] <= state.config.energyCap) ||
       !Number.isSafeInteger(state.round) || state.round < 1 ||
       !['standard', 'sudden-death'].includes(state.phase) || !['active', 'finished'].includes(state.status) ||

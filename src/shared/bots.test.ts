@@ -10,7 +10,7 @@ function state(rows: string[], energyA = 0, energyB = 0): MatchState {
   };
 }
 
-const facing = state([".....", ".....", ".A.B.", ".....", "....."]);
+const facing = state([".....", ".....", ".A.B.", ".....", "....."], 1, 1);
 const difficulties: BotDifficulty[] = ["easy", "normal", "hard"];
 
 describe("bot policies", () => {

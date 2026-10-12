@@ -160,6 +160,7 @@ describe('guest matches', () => {
       const parent = id;
       expectStatus(() => createBotMatch(db, session('stranger'), 'Stranger', 'practice', 'hard', parent), 404);
       id = createBotMatch(db, guest, 'Guest', 'practice', 'hard', parent, `rematch-${turn}`);
+      expect(matchForSession(db, id, guest).state?.energy).toEqual({ A: 5, B: 5 });
       expect(matchForSession(db, id, guest).player).toBe(side === 'A' ? 'B' : 'A');
       side = matchForSession(db, id, guest).player;
       expect(createBotMatch(db, guest, 'Guest', 'practice', 'hard', parent, `rematch-${turn}`)).toBe(id);
@@ -180,6 +181,7 @@ describe('guest matches', () => {
     expect(createBotMatch(db, guest, 'Guest', 'practice', 'hard', undefined, key, original)).toBe(replacement);
     expect(getMatch(db, original)).toMatchObject({ status: 'voided', result_type: 'practice-restarted' });
     expect(getMatch(db, replacement)?.restart_match_id).toBe(original);
+    expect(matchForSession(db, replacement, guest).state?.energy).toEqual({ A: 5, B: 5 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE (player_a_key = ? OR player_b_key = ?)
       AND mode = 'practice' AND bot_difficulty = 'hard' AND status IN ('decision', 'transition', 'grace')`)
       .get(guest.id, guest.id)).toEqual({ count: 1 });
@@ -192,6 +194,40 @@ describe('guest matches', () => {
       energy: { A: energyA, B: energyB },
     };
   }
+
+  it('starts friend matches with a full five Energy bar for both players', () => {
+    const match = humanMatch();
+    const opening = matchForSession(db, match.id, match.A).state!;
+    expect(opening.energy).toEqual({ A: 5, B: 5 });
+    expect(opening.config.energyCap).toBe(5);
+  });
+
+  it('persists half-unit balances through resolution and reload without resetting legacy caps', () => {
+    const match = humanMatch();
+    const state = { ...facingState(2, 0.5), config: { ...createInitialState().config, energyCap: 3 } };
+    db.prepare('UPDATE matches SET state_json = ? WHERE id = ?').run(JSON.stringify(state), match.id);
+    lockAction(db, match.id, match.A, move('expand', 10));
+    lockAction(db, match.id, match.B, pass);
+    resolveMatch(db, match.id, getMatch(db, match.id)!.deadline!);
+    const reloaded = matchForSession(db, match.id, match.A);
+    expect(reloaded.state?.energy).toEqual({ A: 2.5, B: 0.5 });
+    expect(reloaded.state?.config.energyCap).toBe(3);
+    expect(JSON.parse(getMatch(db, match.id)!.state_json).energy).toEqual({ A: 2.5, B: 0.5 });
+  });
+
+  it('rejects fractional Ambush affordability below one', () => {
+    const match = humanMatch();
+    db.prepare('UPDATE matches SET state_json = ? WHERE id = ?').run(JSON.stringify(facingState(0.5, 5)), match.id);
+    expectStatus(() => lockAction(db, match.id, match.A, move('ambush', 12)), 400);
+    expect(db.prepare('SELECT count(*) AS count FROM pending_actions WHERE match_id = ?').get(match.id)).toEqual({ count: 0 });
+  });
+
+  it.each([0.25, '0.5', null, -0.5, 5.5])('rejects invalid saved Energy %s', (energy) => {
+    const match = humanMatch();
+    const invalid = { ...facingState(), energy: { A: energy, B: 5 } };
+    db.prepare('UPDATE matches SET state_json = ? WHERE id = ?').run(JSON.stringify(invalid), match.id);
+    expect(() => matchForSession(db, match.id, match.A)).toThrow('Invalid saved match state');
+  });
 
   it('persists both Surge targets privately and resolves each through the shared engine once', () => {
     const match = humanMatch();
@@ -251,7 +287,7 @@ describe('guest matches', () => {
     const id = createBotMatch(db, human, 'Human', 'quick', 'hard');
     const side = matchForSession(db, id, human).player!;
     const bot = side === 'A' ? 'B' : 'A';
-    const state = { ...facingState(), round: 4 };
+    const state = { ...facingState(1, 1), round: 4 };
     db.prepare('UPDATE matches SET state_json = ? WHERE id = ?').run(JSON.stringify(state), id);
     const humanOutcome = { action: move('expand', side === 'A' ? 11 : 13), success: true, reason: 'claimed' as const, energySpent: 0, energyEarned: 0 };
     const botOutcome = { action: pass, success: false, reason: 'passed' as const, energySpent: 0, energyEarned: 0 };
@@ -349,7 +385,7 @@ describe('guest matches', () => {
 
   it('rejects illegal and duplicate locks without consuming the first valid lock', () => {
     const match = humanMatch();
-    expectStatus(() => lockAction(db, match.id, match.A, move('surge', 2)), 400);
+    expectStatus(() => lockAction(db, match.id, match.A, move('surge', 0)), 400);
     expect(db.prepare('SELECT count(*) AS count FROM pending_actions WHERE match_id = ?').get(match.id))
       .toEqual({ count: 0 });
     lockAction(db, match.id, match.A, move('expand', 2));
@@ -390,14 +426,14 @@ describe('guest matches', () => {
 
     const ambush = humanMatch();
     db.prepare('UPDATE matches SET state_json = ? WHERE id = ?')
-      .run(JSON.stringify(facingState()), ambush.id);
+      .run(JSON.stringify(facingState(1, 2)), ambush.id);
     lockAction(db, ambush.id, ambush.A, move('ambush', 12));
     lockAction(db, ambush.id, ambush.B, move('expand', 12));
     expect(resolveMatch(db, ambush.id, getMatch(db, ambush.id)!.deadline!)).toBe(true);
     const second = matchForSession(db, ambush.id, ambush.A).lastResult!;
     expect(second.outcomes.A.reason).toBe('ambush-hit');
     expect(second.outcomes.B.reason).toBe('intercepted');
-    expect(second.state.energy.A).toBe(1);
+    expect(second.state.energy).toEqual({ A: 4, B: 0 });
   });
 
   it.each([0, 1])('chooses a legal bot action and resolves immediately after human side %s locks', (random) => {

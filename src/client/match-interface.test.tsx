@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { createInitialState, resolveRound, type RoundResult } from '../shared/rules';
-import { RevealPanel, roundActionsDisabled, snapshotKeepsRoundLocked } from './App';
+import { energyEffect, finalResultExplanation, RevealPanel, roundActionsDisabled, snapshotKeepsRoundLocked } from './App';
 
 const result: RoundResult = {
   state: createInitialState(),
@@ -38,10 +38,10 @@ describe('in-match round feedback', () => {
       activeRoundOpen={false} onContinue={() => undefined} />);
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('Spent 3 Energy');
-    expect(html).toContain('collided; the node stayed neutral');
+    expect(html).toContain('Collided; the node stayed neutral');
   });
 
-  it('shows who won and labels both scores in the last-round reveal', () => {
+  it('keeps the last-round reveal focused on moves without repeating the match winner or score', () => {
     const completed: RoundResult = {
       ...result,
       state: { ...result.state, status: 'finished', winner: 'B' },
@@ -49,12 +49,36 @@ describe('in-match round feedback', () => {
     };
     const html = renderToStaticMarkup(<RevealPanel result={completed} player="A" finalRound
       activeRoundOpen={false} onContinue={() => undefined} />);
-    expect(html).toContain('Rival wins');
-    expect(html).toContain('Territory score: you 11, rival 13');
-    expect(html).toContain('<small>You</small>');
-    expect(html).toContain('<small>Rival</small>');
+    expect(html).toContain('YOU');
+    expect(html).toContain('RIVAL');
+    expect(html).not.toContain('Rival wins');
+    expect(html).not.toContain('reveal-score');
     expect(html).not.toContain('Next round');
     expect(html).not.toContain('See result');
+  });
+
+  it('explains a successful Ambush defeat using final territory, not the move outcome', () => {
+    const board = Array.from({ length: 25 }, (_, index) => index < 11 ? 'A' as const : index < 23 ? 'B' as const : 'neutral' as const);
+    const match = { ...createInitialState(), board, status: 'finished' as const, winner: 'B' as const };
+    const last = { ...result, state: match, outcomes: { ...result.outcomes, A: { ...result.outcomes.A, action: { type: 'ambush' as const, target: 3 }, reason: 'ambush-hit' as const } } };
+    expect(finalResultExplanation(match, 'A', 'standard', last)).toBe('Your Ambush stopped their Expand, but they finished ahead, 12–11. Ambush doesn’t capture territory.');
+    expect(finalResultExplanation(match, 'A', 'forfeit', last)).toBe('The match ended by forfeit.');
+    expect(finalResultExplanation(match, 'A', 'resignation', last)).toBe('The match ended by resignation.');
+    expect(finalResultExplanation({ ...match, winner: 'A' }, 'A', 'standard', last)).toContain('You finished with more territory');
+    expect(finalResultExplanation({ ...match, winner: null }, 'A', 'sudden-death', null)).toContain('means a draw');
+    expect(finalResultExplanation(match, 'A', 'server-error', last)).toContain('Match voided');
+    expect(finalResultExplanation(match, 'A', 'no-contest', last)).toContain('Neither player');
+  });
+
+  it('reports actual rewards, miss penalties and rival drains, including historical results', () => {
+    const hit = { ...result.outcomes.A, action: { type: 'ambush' as const, target: 12 }, reason: 'ambush-hit' as const, energySpent: 0, energyEarned: 0, energyDrained: 2 };
+    expect(energyEffect(hit)).toBe('Rival lost 2 Energy · Energy was full; none earned');
+    expect(energyEffect(result.outcomes.B, 0.5)).toBe('Lost 0.5 Energy to Ambush');
+    expect(energyEffect({ ...hit, reason: 'ambush-missed', energySpent: 1, energyDrained: 0 })).toBe('Miss penalty: −1 Energy');
+    expect(energyEffect(result.outcomes.B)).toBe('No Energy change');
+    const legacyExpand = { ...result.outcomes.B, success: true, reason: 'claimed' as const };
+    expect(energyEffect(legacyExpand)).toBe('No Energy change');
+    expect(energyEffect(legacyExpand, 0, true)).toBe('Energy was full; none earned');
   });
 
   it('does not call a previous round or a no-contest a terminal draw', () => {

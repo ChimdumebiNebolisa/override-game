@@ -45,7 +45,9 @@ describe("How to play lesson positions", () => {
     const hit = resolveGuideScenario(scenario, { type: "ambush", target: 12 });
     const miss = resolveGuideScenario(scenario, { type: "ambush", target: 8 });
     expect(hit.outcomes.A.reason).toBe("ambush-hit");
-    expect(hit.state.energy.A).toBe(scenario.start.energy.A + 1);
+    expect(hit.state.energy.A).toBe(scenario.start.energy.A + 3);
+    expect(hit.state.energy.B).toBe(0);
+    expect(miss.state.energy.A).toBe(scenario.start.energy.A - 1);
     expect(miss.outcomes.A.reason).toBe("ambush-missed");
     expect(miss.state.board[12]).toBe("B");
   });
