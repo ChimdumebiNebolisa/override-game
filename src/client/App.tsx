@@ -686,7 +686,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
               );
             })}
           </div>
-          <p className="selected-action-help" role="status">{ACTIONS.find((action) => action.type === actionType)?.short}{actionType === "ambush" ? " · hit captures, +3ϟ, drain up to 2; miss −1ϟ." : actionType === "expand" ? " · claim +0.5ϟ." : ""}</p>
+          <p className="selected-action-help" role="status">{ACTIONS.find((action) => action.type === actionType)?.short}{actionType === "ambush" ? " · hit captures; miss −1ϟ." : actionType === "expand" ? " · claim +0.5ϟ." : ""}</p>
         </section>
         <section className="board-panel" aria-labelledby="board-title">
           <div className="board-label"><span id="board-title">Territory grid</span><span>{!decisionOpen ? "ROUND REVEALED" : submitting ? "SENDING MOVE" : locked ? "MOVE LOCKED" : "CHOOSE A TARGET"}</span></div>

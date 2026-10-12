@@ -328,6 +328,29 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await page.getByRole('button', { name: /^02 Quick Duel/ }).click();
     await page.getByRole('button', { name: 'Play a friend', exact: true }).click();
   };
+  for (const [width, height] of [[1440, 900], [390, 844], [320, 568]]) {
+    await check(`ambush-learning-copy-and-layout-${width}`, async (page) => {
+      await learn(page);
+      const before = await boardGeometry(page);
+      await page.locator('.action-grid button').filter({ hasText: /^Ambush/ }).click();
+      const popup = page.getByRole('dialog', { name: 'Ambush', exact: true });
+      await popup.waitFor();
+      const copy = await popup.innerText();
+      for (const phrase of ['capture that space', 'up to 3 Energy', 'drain up to 2', 'miss: −1', 'Requires 1 Energy']) assert.ok(copy.includes(phrase), phrase);
+      assertStableBoard(await boardGeometry(page), before, 'Ambush tutorial keeps the board in place');
+      assert.equal(await popup.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+      await page.screenshot({ path: resolve(outputDir, `ambush-learning-${width}.png`) });
+      await dismissTraining(page);
+      assert.ok((await page.locator('.selected-action-help').innerText()).includes('hit captures; miss −1'));
+      await page.getByRole('button', { name: 'Action rules', exact: true }).click();
+      const help = page.getByRole('dialog', { name: 'Action rules', exact: true });
+      await help.waitFor();
+      assert.ok((await help.innerText()).includes('Hit: capture that space'));
+      assert.ok((await help.innerText()).includes('earn 0.5 Energy'));
+      assertStableBoard(await boardGeometry(page), before, 'Full action rules keep the board in place');
+      return { captureRule: true, energyRules: true, stableBoard: true };
+    }, { viewport: { width, height }, reducedMotion: 'reduce' });
+  }
   await check('uncertain-room-creation-recovers-original-options', async (page) => {
     await friendForm(page);
     await page.getByLabel('Display name', { exact: true }).fill('Original host');
@@ -459,7 +482,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     await page.getByRole('button', { name: /^Play Normal/ }).click();
     await page.locator('.game-page').waitFor();
     await page.locator('.action-grid button').filter({ hasText: 'Ambush' }).click();
-    assert.match(await page.locator('.selected-action-help').innerText(), /hit captures, \+3.*miss −1/);
+    assert.match(await page.locator('.selected-action-help').innerText(), /hit captures; miss −1/);
     const move = page.getByRole('button', { name: /^Lock move/ });
     const rect = await move.boundingBox();
     assert.ok(rect.y >= 0 && rect.y + rect.height <= 568, `Lock fits the timed viewport: ${JSON.stringify(rect)}`);
@@ -671,7 +694,7 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     assert.equal(await page.locator('.learning-choices button').count(), 2);
     await page.getByRole('button', { name: 'Read the rules', exact: true }).focus(); await page.keyboard.press('Enter');
     const text = await page.locator('.rules-reference').innerText();
-    for (const rule of ['Expand', 'Ambush', 'Override', 'Surge', 'Pass', 'Energy', 'sudden death', 'Selecting a space never locks']) assert.ok(text.includes(rule));
+    for (const rule of ['Expand', 'Ambush', 'Override', 'Surge', 'Pass', 'Energy', 'sudden death', 'Selecting a space never locks', 'captures that space for you', 'full 5 Energy bar', '0.5 Energy', 'miss costs 1 Energy']) assert.ok(text.includes(rule));
     const mixed = resolveGuideScenario(guideScenario('surge', 'mixed'), { type: 'surge', target: 10, secondTarget: 13 });
     const board = await page.locator('.rule-examples figure').nth(1).locator('.board-cell').evaluateAll((buttons) => buttons.map((button) => /owner-(A|B|neutral)/.exec(button.className)[1]));
     assert.deepEqual(board, mixed.state.board);
