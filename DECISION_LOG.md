@@ -1,33 +1,34 @@
-# OVERRIDE Product Decision Approval
+# Product decisions
 
-**Recorded:** 2026-10-04
-**Approver:** Product owner  
-**Status:** Approved
+This records owner-approved behavior and its rationale. It is a decision record, not a release status page; the current implementation and tests determine runtime behavior. Superseded plans and audit snapshots remain in Git history.
 
-The product owner reviewed the recommendations presented for decisions D1–D10 and gave explicit sign-off on the complete set. Record all ten as approved product decisions and implement them as specified in [IMPLEMENTATION_PLAN.md, §10](IMPLEMENTATION_PLAN.md#10-approved-rule-clarifications).
+## Ranked and game rules — approved 2026-10-04
 
-This approval covers the ten decisions in that section: placement repeat credit, Elo rounding, invalid locks, third connected missed deadline, disconnect episodes, repeat-match assessment timing, mutual disconnect outcomes, pre-ready credit notice privacy, handle rename rules, and same-cell Override legality. The implementation tuning recorded immediately after the table (including the disconnect debounce and Ranked cooldown) is included in the approved behavior.
+| ID | Decision |
+| --- | --- |
+| D1 | When a placement player's same-opponent limit is exhausted, both players can finish the match but receive zero competitive credit. |
+| D2 | Round signed, adjusted Elo half-points away from zero, then clamp RP at zero. |
+| D3 | Reject an invalid Lock without consuming it. A player may retry until the deadline; an omitted move becomes automatic Pass. |
+| D4 | A third consecutive connected missed deadline resolves that round as automatic Pass, then ends the match as a forfeit. |
+| D5 | Confirm disconnect after a 1.5-second debounce; count one episode until reconnection rather than every socket flap. |
+| D6 | Freeze repeat-match credit when the Ranked shell is created, using prior binding matches started in the preceding rolling 24 hours; exclude voided and cancelled shells. |
+| D7 | Mutual disconnect at grace expiry is no contest and awards no competitive credit. Three such incidents in 24 hours start a 15-minute Ranked queue cooldown. |
+| D8 | Show competitive credit before Ready without revealing the opponent's identity or rating. |
+| D9 | Allow one successful handle rename per 30 days after initial selection. Handles are 3–16 alphanumeric/underscore characters, case-insensitively unique, and screened for profanity. |
+| D10 | Same-cell opposing Overrides are unreachable under the current legal target rules; keep those action domains unchanged. |
 
-The implementation plan remains the detailed source for exact behavior, milestone placement, and verification criteria. Any change to an approved decision should be recorded there with a new product-owner decision.
+## Authentication — approved 2026-10-04, updated 2026-10-10
 
-## D11 — Authentication provider
+Use Firebase Authentication for Google sign-in. Node and Worker verify Firebase ID tokens against public signing certificates and allow only the Google provider. Keep opaque game sessions, authoritative services, WebSockets, and SQLite profiles. Do not move game state to Firestore. Deployed hosts and same-origin callbacks require Firebase/Google allowlisting; real-account sign-in still needs hands-on verification.
 
-**Recorded:** 2026-10-04
-**Decision (updated 2026-10-10):** Use Firebase Authentication for Google sign-in. The web SDK obtains Firebase ID tokens; both Node and Worker verify them with JOSE against Firebase Secure Token public signing certificates while allowing only the Google provider. Keep the existing opaque game sessions, authoritative game services, WebSocket transport, and SQLite profiles; this decision does not migrate game data to Firestore or Firebase Realtime Database.
-**Approval:** The product owner directed the implementation to proceed with this switch after reviewing Firebase Auth as the alternative to direct Google OAuth integration.
-**Operational requirements:** Enable Google as a Firebase Authentication provider, authorize deployed origins and their same-origin OAuth callback URIs, and provide public web-app config. No Firebase Admin service-account credential is required. The earlier custom game-session nonce design is superseded by the Firebase SDK redirect flow and server verification of the signed token; its unused nullable migration columns remain for compatibility. Verify real sign-in with two distinct accounts in staging before release. Use four real Google accounts, playing two matches per pair, for complete placement/leaderboard verification.
+## Hosting — updated 2026-10-10
 
-## D12 — Hosting plan
+Keep Firebase on Spark and use the existing Workers Paid account for the isolated staging Worker and Durable Object. Do not add a custom domain or another paid host. Usage above included allowances may incur charges; budget notifications and application admission estimates are not account-level spending caps.
 
-**Recorded:** 2026-10-04; staging tier updated 2026-10-10
-**Decision:** Keep Firebase on Spark. Use the existing Workers Paid account for the isolated staging Worker and its SQLite-backed Durable Object. The owner selected Paid rather than Free for staging. Do not provision Render, add paid products, or configure a custom domain.
-**Reason:** Workers Paid is the selected staging tier. Usage beyond included allowances may be billed; budget alerts and application guardrails do not impose an account-level spend cap. This staging decision does not guarantee zero spend. Production cost requirements remain subject to review before launch.
-**Implementation consequence:** Worker assets/API, SQLite storage, WebSockets, alarms, and Firebase public-certificate token verification are implemented. The isolated staging environment is deployed. Complete Firebase/Google allowlisting, real-account journeys, cloud recovery, device checks, and the human playtest before public release.
+## Learning and round pacing — approved 2026-10-11
 
-## D13 — Learning and round pacing
+Teach the core loop in an ordinary Easy untimed Practice match, with an optional first-start welcome and a static rules reference. New timed decisions last ten seconds. Bot review waits for human Next; human rounds resolve after both accepted locks or the deadline and share a three-second reveal. Existing matches retain their stored timing policy. The learning and pacing implementation was subsequently authorized for production deployment; the original implementation-only authorization is historical.
 
-**Recorded:** 2026-10-11
-**Authorization:** The owner directed implementation and isolated verification in the supplied learning/pacing brief. Production deployment was not authorized.
-**Decision:** Teach the core loop inside an ordinary Easy untimed Practice match; use one optional first-start welcome and a static rules reference. New timed decisions last ten seconds. Bot results wait for participant-authorized Next; human rounds resolve after both accepted locks or the deadline and share a three-second reveal. Early human reveal communicates both commitments; pending contents and rival readiness remain private.
-**Compatibility:** Migration 7 preserves all existing records as policy 1 (five-second decisions, one-second automatic transition and fixed-deadline human resolution). Fresh records, restarts and rematches explicitly select policy 2. Existing Ranked shells activate using their stored policy.
-**Evidence limit:** Ten seconds and contextual coaching are product choices to evaluate in a future novice test, not proven improvements. See [requirements](LEARNING_PACING_REQUIREMENTS.md) and [verification/handoff](LEARNING_PACING_VERIFICATION.md).
+## Rated Hard bot — approved 2026-10-12
+
+A signed-in player with a public handle may earn RP and placement credit in new timed Hard Quick Duels. Score against a fixed 1000-RP bot at 50% credit for the first three qualifying starts per rolling 24 hours, 37.5% for the fourth, 25% for the fifth, and 0% thereafter; voided starts do not count. Freeze credit at creation. Reduced-credit bot games advance placements and rated-match count without changing W-L-D or streak. The 1000-RP value is a conservative scoring benchmark, not measured human Elo.

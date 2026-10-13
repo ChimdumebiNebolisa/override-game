@@ -1,10 +1,12 @@
 # OVERRIDE
 
-A 5×5 simultaneous-turn territory game with Practice, Quick Duel, friend rooms, and human Ranked matches. The frozen prototype requirements live in [OVERRIDE_PRD_v0.3.docx](OVERRIDE_PRD_v0.3.docx), with current learning and timing requirements in [LEARNING_PACING_REQUIREMENTS.md](LEARNING_PACING_REQUIREMENTS.md); delivery decisions and acceptance gates are in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+OVERRIDE is a 5×5 simultaneous-turn territory game. Play an untimed Practice game, a timed Quick Duel against a bot or friend, or a human Ranked match. Signed-in players with public handles can also earn RP in timed Hard Quick Duels.
 
-The production architecture uses Cloudflare Workers and a SQLite-backed Durable Object. The Node server remains available for local development and tests. Staging uses a separate Worker and Durable Object namespace on the existing Workers Paid account; usage beyond included allowances may incur charges, and this setup does not guarantee zero spend.
+[Play the game](https://override-game.cnebolisa.workers.dev/) · [Staging](https://override-game-staging.cnebolisa.workers.dev/)
 
-## Local development
+The deployed app uses a Cloudflare Worker with a SQLite-backed Durable Object. The Node server is for local development, tests, and local database operations.
+
+## Run locally
 
 Use Node.js 24 or newer:
 
@@ -13,62 +15,39 @@ npm ci
 npm run dev:server
 ```
 
-In another terminal, run `npm run dev` and open <http://localhost:5173>. Vite proxies API and WebSocket traffic to the server on port 8787. Practice, bot games, and guest friend rooms work without credentials.
+In another terminal, run `npm run dev` and open <http://localhost:5173>. Vite proxies API and WebSocket traffic to the Node server on port 8787. Guest games work without credentials. To test the Worker locally, copy `.dev.vars.example` to `.dev.vars`, replace its local-only values, and run `npm run dev:worker`. `.env.example` lists the separate Node configuration; the Node development script does not load that file automatically.
 
-For local Worker development, copy `.dev.vars.example` to `.dev.vars`, replace the local-only values, then run `npm run dev:worker`. The Node server uses the separate configuration in `.env.example`.
-
-## Verify and build
+## Verify
 
 ```powershell
 npm test
 npm run build
+npx playwright install chromium
+npm run test:browser
 ```
 
-CI also runs the production and full dependency audits, Linux Worker runtime smoke, and container backup/restore check. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for current evidence and open checks.
+Run `npm run test:worker-runtime` on Linux. CI also runs dependency audits and a container backup/restore check in [`.github/workflows/verify.yml`](.github/workflows/verify.yml).
 
-## Google sign-in
+## Ratings and timing
 
-Enable Google in Firebase Authentication. Add each deployed host to Firebase Authorized domains and add its same-origin callback (`https://<workers-host>/__/auth/handler`) to the Google OAuth client's authorized redirect URIs. Preserve existing production entries when adding staging. Both Google buttons use Firebase redirect sign-in; Node and Worker verify Firebase ID tokens against public signing certificates and permit only the Google provider. No Firebase Admin service-account key is required. Real account sign-in still needs verification on supported desktop and mobile browsers.
+New human matches have a shared ten-second decision window. They resolve when both players lock or the deadline passes, followed by a three-second reveal. Bot decisions resolve on an accepted Lock or a timed deadline, then wait in review for the human to choose Next. Default Practice is untimed; timed Practice and Quick bot games use ten seconds. Existing saved matches retain their stored timing policy.
 
-## Cloudflare deployment
+Guest games, Practice, and Easy/Normal bots never affect RP. A signed-in player with a public handle can earn RP and complete both placement matches in a new timed Hard Quick Duel. The bot has a fixed **1000-RP opponent rating** for scoring; this is an initial benchmark, not a measured human Elo. Credit per account in a rolling 24 hours is 50% for the first three qualifying starts, 37.5% for the fourth, 25% for the fifth, then 0%. Voided games do not count. Credit is frozen at match creation. Reduced-credit bot games advance placements and rated-match count but do not change W-L-D or streak. A player cannot overlap a rated Hard duel with another rated game or Ranked matchmaking.
 
-`wrangler.jsonc` builds the client, serves the SPA assets, and routes API and WebSocket requests to the Durable Object. The `staging` environment deploys as `override-game-staging`, uses its own `GAME` namespace, and reuses the Firebase project. The current staging URL, version, and smoke results are recorded in [STAGING_VERIFICATION.md](STAGING_VERIFICATION.md).
+Bot controls remain tied to the browser session that started the game. If that session is lost, the owning account can resign its rated Hard duel from Ranked; the saved credit is used to settle the loss and release the rated-game lock. Settlement retries are idempotent.
 
-Learning and manual bot-round pacing are deployed at [override-game.cnebolisa.workers.dev](https://override-game.cnebolisa.workers.dev/). Run `npm run deploy:worker` from the reviewed commit; this builds and deploys the default `override-game` configuration. Follow [LEARNING_PACING_VERIFICATION.md](LEARNING_PACING_VERIFICATION.md) for asset checks and real-production verification.
+## Authentication and deployment
 
-Deploy staging with `npx wrangler deploy --env staging`. Use separate secrets for each environment; staging uses `INVITATION_ENCRYPTION_KEY` and `RECOVERY_CONTROL_TOKEN`. For example:
+Google sign-in uses Firebase Authentication. Enable Google in the Firebase project, add each deployed host to Firebase Authorized domains, and add `https://<workers-host>/__/auth/handler` to the Google OAuth client's authorized redirect URIs. Preserve existing production entries when adding staging. The Node and Worker runtimes verify Firebase ID tokens against public signing certificates; no Firebase Admin service-account key is needed.
 
-```powershell
-npx wrangler secret put INVITATION_ENCRYPTION_KEY --env staging
-npx wrangler secret put RECOVERY_CONTROL_TOKEN --env staging
-```
+`wrangler.jsonc` builds the client, serves static assets, and routes API and WebSocket traffic to the Durable Object. Staging has its own Worker and `GAME` namespace. Keep separate `INVITATION_ENCRYPTION_KEY` values for production and staging; staging recovery also requires `RECOVERY_CONTROL_TOKEN`. After the relevant checks pass, deploy staging with `npx wrangler deploy --env staging`, then deploy production from the reviewed `main` commit with `npm run deploy:worker`. Check `/api/health` and the served page in each environment. Follow [STAGING_VERIFICATION.md](STAGING_VERIFICATION.md) for cloud, account, recovery, and device checks.
 
-Keep Firebase on Spark. Workers Paid may bill usage beyond included allowances; budget alerts only notify, and the app's 80% request, compute, and SQL admission thresholds are estimates rather than account-level spending limits. Review [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), and [Cloudflare billing alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/) before broad play. Do not deploy the Node server to a paid host or add paid services/domains.
+Workers Paid usage beyond included allowances can incur charges; budget alerts and the app's admission estimates are not spending caps. The hosting decision is to keep Firebase on Spark; verify the current account plan before broader traffic. Do not use the local Node database as a Worker restore source.
 
-## Metrics, backups, and recovery
+## Local operations and recovery
 
-```powershell
-npm run report:metrics
-npm run ops:status
-npm run backup:db
-```
+`npm run report:metrics`, `npm run ops:status`, and `npm run backup:db` operate on the Node SQLite database selected by `DB_PATH`. The backup command creates a new integrity-checked file. Preserve the source database and WAL files during a local restore, and keep the same invitation-encryption key.
 
-Metrics summarize revealed rounds and finished matches; pending actions are never read. Finished and voided guest matches are removed 30 days after ending, once dependent rematches and restarts can also be removed. Bot matches with an expired or missing owning session are voided during maintenance, releasing capacity; reviews owned by valid sessions remain untimed. Telemetry and expired invitation tokens are removed after 30 days. Ranked matches and settlement records are retained for rating integrity. `ops:status` reports overdue deadlines, stuck ready shells, expired searches, unsettled matches, failed settlement retries, and duplicate settlement attempts. `/api/health` returns 503 when database checks fail or server work is overdue.
+The Worker uses Cloudflare Durable Object point-in-time recovery through the operator-only `/__ops/recovery/bookmark` and `/__ops/recovery/restore` endpoints. Rehearse bookmark, restore, and undo only in the isolated staging namespace, as described in [STAGING_VERIFICATION.md](STAGING_VERIFICATION.md). Local Wrangler storage cannot verify cloud point-in-time recovery.
 
-`backup:db` creates an integrity-checked SQLite backup beside `DB_PATH`. Restore to a new database path and use the same `INVITATION_ENCRYPTION_KEY` as the source. Preserve the source database and WAL files before a recovery. Back up persistent databases regularly; ephemeral storage loses sessions, matches, and ratings.
-
-The Worker records SQL cursor reads/writes, including maintenance and `SELECT changes()`. Multi-statement `exec` exposes only its final cursor, and external dashboard or account traffic is outside the ledger. Safety multipliers remain, so usage accounting supports admission estimates rather than billing reconciliation. Existing matches, accepted invitations, queue leases, retries, and alarms continue when new allocations are paused.
-
-Durable Object recovery uses the operator-only `POST /__ops/recovery/bookmark` and `POST /__ops/recovery/restore` endpoints with a unique `RECOVERY_CONTROL_TOKEN`. Restore accepts a bookmark or a timestamp from the preceding 30 days, returns an undo bookmark, temporarily gates player APIs, and restarts through an alarm. Rehearse only in the isolated staging namespace; SQLite point-in-time recovery is unavailable in Wrangler local development.
-
-## Product boundaries
-
-- Guest games, Practice, and Easy/Normal bot games never affect Ranked ratings. Signed-in players with handles earn RP and placement credit in new timed Hard Quick Duels against a fixed 1000-RP bot. Credit per account in a rolling 24 hours is 50% for the first three starts, 37.5% for the fourth, 25% for the fifth, then zero; voided starts are excluded. Wins, losses, and draws use Elo; reduced-credit bot games leave W-L-D and streak unchanged. Bot controls remain tied to the original browser session. If that session is lost, the owning account can explicitly end its duel from Ranked; this settles a loss using the saved credit before releasing its rated-game lock. Retries preserve the original result.
-- Every new game starts both players at 5/5 Energy. Successful Expand earns 0.5; Ambush requires 1 to attempt, earns up to 3 and drains up to 2 on a hit, or costs 1 on a miss. A successful Ambush captures the intercepted space. Surge costs 3 and Override costs 2; existing saved games retain their balances and caps.
-- Ranked requires two distinct Google accounts and public handles.
-- Pending contents remain secret until resolution. New human matches reveal when both players lock or the shared ten-second deadline expires; early reveal communicates that both committed, without a rival-ready indicator. Migrated matches retain their fixed-deadline policy.
-- New bot games resolve on accepted Lock or a timed deadline, then persist in review until the human chooses Next round. Default Practice and explicit learning are untimed; timed Practice and Quick bot use ten seconds. New human matches have a shared three-second reveal.
-- Home and How to play offer untimed learning inside a normal Easy Practice game. The separate staged lessons have been removed; the static rules reference remains available.
-- The global leaderboard combines players after two qualifying placement matches with shared practice bots. BOT tags identify bots, and all entries use the same RP order; Practice does not change human records; qualifying Hard Quick Duels can change human RP and complete placements.
-
-Before public launch, complete the staging checks, structured human playtest, device interruption checks, and mobile screen-reader review in the implementation plan.
+Human balance and comprehension evidence is collected with [PLAYTEST_PROTOCOL.md](PLAYTEST_PROTOCOL.md). Physical-device interruptions, mobile screen-reader behavior, and live Google/Ranked journeys require separate hands-on verification; automated checks do not establish those outcomes.

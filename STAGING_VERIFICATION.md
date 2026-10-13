@@ -1,61 +1,37 @@
-# OVERRIDE staging verification
+# Staging verification
 
-Use this procedure after the nine fixes in `AUDIT_REPORT_2026-10-10.md` pass local verification. Record evidence in `IMPLEMENTATION_STATUS.md`. The original audit remains dated evidence.
+Use the isolated [staging Worker](https://override-game-staging.cnebolisa.workers.dev/) for cloud and device checks. Record each run's commit, Worker version, date, accounts/devices, and results outside this evergreen procedure. A deployment or local test pass alone does not verify sign-in, live settlement, or Cloudflare recovery.
 
-## Prerequisites and deployment
+## Prepare and deploy
 
-1. Run `npx wrangler login`, then `npx wrangler whoami`. Confirm the account owns the `cnebolisa.workers.dev` subdomain. If it differs, correct staging's `PUBLIC_ORIGIN` before deploying.
-2. Confirm the existing Workers **Paid** account in Cloudflare Billing and Firebase **Spark** in project `override-game`. The owner directed staging to use Workers Paid on 2026-10-10. Paid usage beyond included allowances can incur charges; budget notifications are not a spending cap. No subscription changes are part of this rehearsal.
-3. Run `npm ci`, `npm test`, `npm run build`, `npm audit --omit=dev --audit-level=high`, and `npm audit --audit-level=high`. Run `npm run test:worker-runtime` on Linux and the container backup/restore check.
-4. Dry-run both default and staging deployment into ignored scratch directories. Confirm staging binds `GAME` to its own `GameDurableObject` namespace. Its binding must not set `script_name` to the production Worker.
-5. Use separate cryptographically random secrets of at least 32 bytes for staging's `INVITATION_ENCRYPTION_KEY` and `RECOVERY_CONTROL_TOKEN`. The current values are in ignored `.dev.vars.staging` and the deployed staging Worker; preserve them for the existing fixture. Generate fresh values only for a new isolated environment, and never reuse production secrets. Upload with `npx wrangler secret put <NAME> --env staging`.
-6. Deploy only with `npx wrangler deploy --env staging`. Confirm the resulting hostname matches staging's `PUBLIC_ORIGIN`. Check `/`, `/api/health`, and `/api/config`.
-7. Add the staging hostname to Firebase Authentication's Authorized domains and `https://<staging-host>/__/auth/handler` to the Google OAuth client's authorized redirect URIs. Preserve existing production entries. Both runtimes verify Firebase ID tokens against public signing certificates; no Admin private key is needed.
+1. Confirm the intended commit passed CI. Run `npx wrangler whoami` and verify the account owns the `cnebolisa.workers.dev` subdomain. Inspect `wrangler.jsonc`: staging must use `override-game-staging`, its own `GAME` Durable Object namespace, and the matching `PUBLIC_ORIGIN`.
+2. Confirm staging has its own `INVITATION_ENCRYPTION_KEY` and `RECOVERY_CONTROL_TOKEN`; never reuse production values. Use `npx wrangler secret list --env staging` to check names without displaying values. If a new secret is needed, set it with `npx wrangler secret put <NAME> --env staging`.
+3. Deploy with `npx wrangler deploy --env staging`. Record the reported Worker version. Check `/`, `/api/health`, `/api/config`, the built asset URLs, and the bundled font. Health must return HTTP 200 with `{ "ok": true }`.
+4. In Firebase Authentication, authorize the staging host and its same-origin Google callback, `https://override-game-staging.cnebolisa.workers.dev/__/auth/handler`. Keep production entries. Verify the browser returns to the staging app after sign-in.
 
-The configuration omits a custom CPU override and uses platform defaults for the selected Paid plan. Inspect actual staging errors and CPU metrics rather than treating a local build as evidence of runtime behavior. See [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [environment isolation](https://developers.cloudflare.com/durable-objects/reference/environments/).
+Workers Paid usage beyond included allowances can incur charges. Budget alerts and in-app admission thresholds do not impose an account-level spending cap.
 
-## Identity, Ranked, and placement
+## Game and account checks
 
-1. On supported desktop and mobile browsers, sign in, reload, sign out, and sign in again. Test return to Profile, queue, and a challenge URL. Confirm both clients reach the same intended destination and can select a handle.
-2. With two different real Google identities, create and redeem a challenge by link, then by code in a separate match. Verify queue pairing, both ready acknowledgments, a completed normal-timing match, one settlement, side-swapped rematch, and credit disclosure before readiness.
-3. With four real identities A–D, play two completed, credited matches for each pair: AB, CD, AC, BD, AD, BC. Each player obtains six matches without exceeding two per pair. Check placement completes after two credited matches, public rank is absent before placement, and placed players appear in the shared global leaderboard alongside BOT-tagged practice bots. Keep scheduling these required tests separate from observations of voluntary rematches.
-4. Record commit, browser/device, match IDs, credit, placement counts, profiles, and leaderboard observations using participant aliases. If accounts are unavailable, mark this gate unverified; synthetic profiles do not prove live sign-in.
+- In fresh guest sessions, finish Practice, Easy/Normal Quick, and Hard Quick games. None should change RP or placements. Verify a friend room from two browsers, reconnect, and rematch.
+- With a signed-in account and public handle, start a timed Hard Quick Duel. Confirm the displayed credit and 1000-RP opponent rating match the server preview. Finish wins, losses or resignation, and a draw using isolated test accounts; check settlement once, placement progress, and that W-L-D and streak remain unchanged. Across sessions, confirm the rolling 24-hour 50% / 37.5% / 25% / 0% tiers, void exclusion, and the rated-game lock. From a second browser session on the same account, confirm account-authorized resignation releases an inaccessible rated duel without granting play controls.
+- Use distinct accounts for human Ranked pairing, invitations, placements, rematches, and leaderboard order. Four accounts permit two pairs without confusing same-opponent credit limits. Verify the pre-ready credit notice, both player sides, one settlement per match, and the two-placement threshold.
+- Check alarms, refresh, network interruption, and stale/retried requests. The result and rating ledger must converge without duplicate credit or revealing unrevealed actions.
+
+Do not use production profiles or ratings as test fixtures. Keep test identities and tokens out of saved evidence.
 
 ## Restore and undo rehearsal
 
-Use only the staging namespace and its `override-game-global` object. Keep active players out of the recovery fixture while recording snapshots.
+Run this only against the staging namespace and its `override-game-global` object, with no active players in the fixture. Local Wrangler storage cannot prove cloud point-in-time recovery.
 
-1. Complete and settle the first Ranked match. Save its match ID, ordered actions/revealed rounds, settlement, and both profiles. Obtain a bookmark using authenticated `POST /__ops/recovery/bookmark` with staging's bearer recovery token.
-2. Complete and settle a second rematch. Save the corresponding second snapshot and its side/credit details.
-3. Request authenticated `POST /__ops/recovery/restore` with `{ "bookmark": "<first-bookmark>" }`. Save the 202 response and its `undoBookmark` in ignored local evidence before the reset. Player APIs temporarily return 503.
-4. After reset, `/api/health` must return 200. The first match's rounds and settlement must match the first snapshot; the second match must be absent, and profiles must match the first snapshot. `worker_recovery_control` must be empty. Repeated reads and subsequent settlement maintenance must not change totals or create another settlement.
-5. Restore the saved undo bookmark. After reset, both matches and profiles must match the second snapshot, each surviving match must have exactly one settlement, and the recovery-control table must remain empty. Perform another bookmark request to demonstrate recovery remains usable.
-6. Inspect records with read-only SQL in Cloudflare [Durable Objects Data Studio](https://developers.cloudflare.com/durable-objects/observability/data-studio/). Select the **staging namespace**, then the object name above. Compare match, pending-action, round-result, rating-settlement, and intended public profile fields; do not export session cookies, provider tokens, encrypted invitation secrets, or personal account details.
+1. Complete and settle a Ranked fixture. Record its rounds, result, settlement, and both profiles. Request an authenticated `POST /__ops/recovery/bookmark` using staging's `RECOVERY_CONTROL_TOKEN`; save the bookmark privately.
+2. Complete and settle a second fixture. Record the same fields.
+3. Call authenticated `POST /__ops/recovery/restore` with the first bookmark. Save the returned `undoBookmark`. Player APIs may briefly return 503 while the object restarts.
+4. Wait for `/api/health` to return 200. The first fixture and profiles must match the first snapshot; the second fixture must be absent. `worker_recovery_control` must be empty. Repeated reads and settlement maintenance must not create another settlement.
+5. Restore the undo bookmark. Both fixtures and profiles must match the second snapshot, with exactly one settlement per match and an empty recovery-control table. Confirm another bookmark request succeeds.
 
-Local mocked storage tests verify marker consumption, serialization, rejection paths, and restart ordering. Local workerd cannot prove actual PITR; only this cloud rehearsal closes that gate. Keep production out of this procedure. If staging needs a code rollback, redeploy the preceding staging build and preserve the recorded data/bookmarks.
+Use read-only SQL in Cloudflare Durable Objects Data Studio to inspect the **staging** object when needed. Do not export session cookies, provider tokens, invitation secrets, or personal account details. Keep production out of this procedure.
 
-## Runtime, devices, and human evidence
+## Devices and human evidence
 
-- Confirm staging game creation, rematches, alarms, reconnects, and settlement do not generate unexpected 500s or CPU-limit failures. Record representative cursor/ledger counts and platform metrics. App estimates retain safety multipliers and exclude external/account-wide work; they are not an account spend cap.
-- On two physical devices, test refresh and brief network loss during lock, deadline, reveal, and grace. Both clients must converge on the same result without exposing hidden actions or extending fixed deadlines.
-- On a mobile screen reader, check onboarding, board/action controls, lock feedback, reveal round/score announcements, result focus, and Ranked sign-in return. Save concrete observations and remaining issues.
-- Run `PLAYTEST_PROTOCOL.md` with two competent pairs and one novice on a dedicated local Node database, so `npm run report:metrics` describes only those sessions. Use default timings, record voluntary rematches before prompting, and keep interruption tests separate. Record an evidence-based **go / tune / stop** decision; do not invent a numeric product threshold or tune balance without a separate decision.
-
-## Evidence record
-
-| Gate | Record |
-| --- | --- |
-| Tested commit and working-tree state | `b0b6d659a9ebb5eda645da985e8553621f195643`; clean working tree at deployment. The two-match placement update passed all 209 tests across 25 files and `npm run build`. |
-| Workers Paid / Firebase Spark, date checked | 2026-10-10: Workers Paid selected for staging by owner; Firebase Spark confirmed. Wrangler login restored and whoami succeeded. |
-| Staging Worker URL and namespace | Deployed `https://override-game-staging.cnebolisa.workers.dev`, version `f7e65226-b1d0-4792-bbd6-e5a4a27b09d2`; staging environment uses its own `GAME` Durable Object binding. |
-| Staging secrets and smoke | Existing dedicated staging secrets retained. `/`, `/api/health`, `/api/config` returned 200; health was `ok: true`, config reported project `override-game` and staging auth domain. Served client asset contains the two-match placement copy and shared bot standings label. Firebase OAuth allowlists remain pending. |
-| Local tests, audits, builds, dry-runs, Linux smoke, container | Windows/Linux: clean installs, 209 tests/25 files, builds passed. Both audits zero vulnerabilities; both dry-runs and Linux workerd smoke passed. Node backup/replay and the local container backup/restore job passed. Main CI passed after push. |
-| Desktop/mobile identity and Ranked journey | Unverified in staging. |
-| Four-account placement and leaderboard | Unverified; four real accounts required. |
-| Restore and undo snapshots / healthy restart | Mock regressions passed; live PITR and Data Studio checks unverified. |
-| CPU, SQL usage, and runtime errors | Local smoke ledger: 531 estimated reads / 354 estimated writes. Paid staging CPU and platform SQL metrics unverified. |
-| Two-device interruption / mobile screen reader | Unverified; physical devices and human checks required. |
-| Human playtest go / tune / stop | No human sessions or decision collected. Dedicated Node metrics command verified with a synthetic backup fixture. |
-| Unverified checks and required access | Firebase Authorized domains and Google OAuth callback, real accounts/devices, and playtest participants. Secret values remain only in ignored local `.dev.vars.staging` and the staging Worker secret store. |
-
-Missing external evidence remains unverified even when all local checks pass. Public rollout is a subsequent action.
+On two physical devices, test refresh and brief network loss during lock, deadline, reveal, review, and reconnect. On a mobile screen reader, check onboarding, action and target controls, Lock/Next feedback, result announcements, and Google sign-in return. Run [PLAYTEST_PROTOCOL.md](PLAYTEST_PROTOCOL.md) with real participants and record a go / tune / stop decision. These checks remain unverified until observations are recorded for the tested version.
