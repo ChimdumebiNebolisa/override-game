@@ -16,6 +16,7 @@ import {
   type Player,
 } from "../shared/rules";
 import { PLACEMENT_MATCHES } from "../shared/rating";
+import type { BotRatingPreview } from "../shared/bot-rating";
 import { api, RequestError, snapshotIsCurrent, type LeaderboardEntry, type PublicMatch, type QuickRematchInvitation, type RankedInvitation, type RankedProfile, type RankedQueue, type RankedSettlement, type Room } from "./api";
 import {
   beginGoogleFirebaseSignIn,
@@ -171,7 +172,7 @@ const ACTION_HELP: Record<Action['type'], string> = {
   expand: "Claim one open space beside your territory and earn 0.5 Energy, up to the cap.",
   ambush: "Predict their Expand beside rival territory. Hit: capture that space, gain up to 3 Energy and drain up to 2; miss: −1. Requires 1 Energy.",
   override: "Spend 2 Energy to steal one adjacent rival space.",
-  surge: "Spend 3 Energy to take up to two spaces, each within two steps of your territory.",
+  surge: "Spend 3 Energy to take up to two spaces, each within two steps of your territory. Tap a selected space again to deselect it.",
   pass: "Make no move; Pass earns no Energy and needs no target.",
 };
 
@@ -231,10 +232,10 @@ function AppHeader({ navigate }: { navigate: (screen: Screen) => void }) {
     <header className="site-header">
       <Brand onHome={() => navigate("home")} />
       <nav aria-label="Main navigation">
-        <button onClick={() => navigate("how-to")}>How to play</button>
-        <button onClick={() => navigate("leaderboard")}>Leaderboard</button>
+        <button onClick={() => navigate("how-to")} aria-label="How to play" title="How to play"><svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-2H4zM13 7a3 3 0 0 1 3-3h4v15h-3a4 4 0 0 0-4 2" /></svg><span>How to play</span></button>
+        <button onClick={() => navigate("leaderboard")} aria-label="Leaderboard" title="Leaderboard"><svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M9 4h6v16H9zM3 10h6v10H3zM15 7h6v13h-6z" /></svg><span>Leaderboard</span></button>
         <button className="profile-button" onClick={() => navigate("profile")} aria-label="Open profile">
-          G
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="8" r="3.5" /><path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg>
         </button>
       </nav>
     </header>
@@ -261,23 +262,23 @@ function Home({ navigate, onGenericStart, onLearn }: { navigate: (screen: Screen
 
       <section className="mode-grid" aria-labelledby="choose-mode">
         <div className="section-heading">
-          <p className="eyebrow">Choose a mode</p>
           <h2 id="choose-mode">Make your move.</h2>
+          <p>Choose your next duel.</p>
         </div>
         <button className="mode-card practice-card" onClick={() => navigate("practice")}>
           <span className="mode-index">01</span>
           <span className="mode-copy"><strong>Practice</strong><small>Learn with hints and clear outcome explanations.</small></span>
-          <span className="mode-arrow">↗</span>
+          <span className="mode-arrow" aria-hidden="true">→</span>
         </button>
         <button className="mode-card quick-card" onClick={() => navigate("quick")}>
           <span className="mode-index">02</span>
           <span className="mode-copy"><strong>Quick Duel</strong><small>Face a bot or invite a friend. No account needed.</small></span>
-          <span className="mode-arrow">↗</span>
+          <span className="mode-arrow" aria-hidden="true">→</span>
         </button>
         <button className="mode-card ranked-card" onClick={() => navigate("ranked")}>
           <span className="mode-index">03</span>
           <span className="mode-copy"><strong>Ranked Duel</strong><small>Play human opponents and climb the leaderboard.</small></span>
-          <span className="mode-arrow">↗</span>
+          <span className="mode-arrow" aria-hidden="true">→</span>
         </button>
       </section>
     </main>
@@ -298,6 +299,20 @@ function ModeSelect({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [uncertainCreation, setUncertainCreation] = useState(false);
+  const [botRating, setBotRating] = useState<BotRatingPreview | null>(null);
+  const [creditError, setCreditError] = useState(false);
+  useEffect(() => {
+    if (kind !== "quick" || difficulty !== "Hard") return;
+    let active = true;
+    const load = () => {
+      void api.getBotRating().then((preview) => {
+        if (active) { setBotRating(preview); setCreditError(false); }
+      }).catch(() => { if (active) setCreditError(true); });
+    };
+    load();
+    window.addEventListener("focus", load);
+    return () => { active = false; window.removeEventListener("focus", load); };
+  }, [kind, difficulty]);
   const creationRef = useRef<{ difficulty: Difficulty; timed: boolean; key: string } | null>(null);
   const launch = async () => {
     setBusy(true);
@@ -319,22 +334,29 @@ function ModeSelect({
       <div className="panel-heading">
         <p className="eyebrow">{kind === "practice" ? "Learn the grid" : "Quick Duel · Bot"}</p>
         <h1>{kind === "practice" ? "Practice" : "Choose your rival."}</h1>
-        <p>{kind === "practice" ? "Legal targets and outcome explanations stay on. You can show or hide hints while you play." : "A full unranked match with no coaching and no sign-in."}</p>
+        <p>{kind === "practice" ? "Legal targets and outcome explanations stay on. You can show or hide hints while you play." : "A full duel with no coaching. Signed-in players with handles can earn RP against Hard; Easy and Normal stay unranked."}</p>
       </div>
       <fieldset className="difficulty-picker" disabled={busy || uncertainCreation}>
         <legend>Bot difficulty</legend>
         {(["Easy", "Normal", "Hard"] as const).map((item) => (
-          <button key={item} className={difficulty === item ? "active" : ""} onClick={() => setDifficulty(item)}>
+            <button key={item} className={difficulty === item ? "active" : ""} aria-pressed={difficulty === item} onClick={() => setDifficulty(item)}>
             <strong>{item}</strong>
             <span>{item === "Easy" ? "Favors safe Expands" : item === "Normal" ? "Balances position and Energy" : "Reads the public board closely"}</span>
           </button>
         ))}
       </fieldset>
+      {kind === "quick" && difficulty === "Hard" && <section className="bot-credit-note" aria-label="Hard bot RP credit" aria-live="polite">
+        {creditError ? <p>RP credit could not be checked. A signed-in Hard duel can still affect your rating.</p>
+          : !botRating ? <p>Checking RP credit…</p>
+          : botRating.eligible ? <><strong>{Math.round(botRating.multiplier * 1000) / 10}% RP credit · {botRating.opponentRating} RP bot</strong><p>{hardBotCreditExplanation(botRating.multiplier)}</p></>
+          : <><p>This game will be unranked. Sign in and choose a public handle before starting to earn RP.</p><button className="back-link" onClick={() => navigate("profile")}>Set up your profile →</button></>}
+        <small>Per account in 24 hours: first 3 games 50%, then 37.5%, then 25%. Later games earn no credit. Credit is fixed when the game starts.</small>
+      </section>}
       {kind === "practice" && <label className="timed-practice"><input type="checkbox" disabled={busy || uncertainCreation} checked={timedPractice} onChange={(event) => setTimedPractice(event.target.checked)} />
         <span><strong>Use a turn timer</strong><small>Ten seconds per round. Off by default while you learn.</small></span>
       </label>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      <button className="primary-cta full" disabled={busy} onClick={launch}>{busy ? "Starting match…" : `Play ${difficulty}`} <span>→</span></button>
+      <button className="primary-cta full" disabled={busy || (kind === "quick" && difficulty === "Hard" && !botRating && !creditError)} onClick={launch}>{busy ? "Starting match…" : `Play ${difficulty}`} <span>→</span></button>
       {kind === "quick" && (
         <div className="friend-entry">
           <span>or</span>
@@ -591,7 +613,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
   };
   const exit = () => { if (match.status === "finished") acknowledgeReview(); onExit(); };
   if (serverStatus === "voided" || match.status === "finished") {
-    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={async (key) => { acknowledgeReview(); await onRestart(key, snapshotRef.current); }} onExit={exit} onOpenRanked={onOpenRanked} onOpenLeaderboard={onOpenLeaderboard} onQuickRematch={onQuickRematch} onSnapshot={receiveSnapshot}
+    return <ResultScreen match={match} totals={score(match.board)} player={me} ranked={mode === "ranked"} ratedBot={initialMatch.ratedBot} friend={Boolean(initialMatch.roomId)} matchId={initialMatch.id} resultType={resultType} onRestart={async (key) => { acknowledgeReview(); await onRestart(key, snapshotRef.current); }} onExit={exit} onOpenRanked={onOpenRanked} onOpenLeaderboard={onOpenLeaderboard} onQuickRematch={onQuickRematch} onSnapshot={receiveSnapshot}
       lastResult={reveal} learningReady={Boolean(learning && !learning.skipped && learning.independentRound !== null && !learning.completed)} onStartDuel={() => { acknowledgeReview(); onStartDuel(); }} onReplayLearning={onReplayLearning} />;
   }
 
@@ -707,11 +729,12 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
 
         <section className="commit-panel" aria-label={decisionOpen ? "Confirm your move" : "Match options"}>
           <div className="selection-line">
-            <span>Selected{actionType === "surge" ? ` · ${selectedTargets.length}/2 · tap again to deselect` : ""}</span><strong>{selectedAction ? actionText(selectedAction) : `${ACTIONS.find((item) => item.type === actionType)?.label}: choose a node`}</strong>
+            <span>Selected{actionType === "surge" ? ` · ${selectedTargets.length}/2` : ""}</span><strong>{selectedAction ? actionText(selectedAction) : `${ACTIONS.find((item) => item.type === actionType)?.label}: choose a node`}</strong>
           </div>
           <button className="lock-button" disabled={!selectedAction || !canAct} onClick={() => void commit()}>
             {submitting ? "Sending move…" : locked ? "Move locked" : "Lock move"}<span>{locked ? "✓" : "→"}</span>
           </button>
+          {initialMatch.ratedBot && <p className="match-credit-note">Hard bot · {initialMatch.ratedBot.opponentRating} RP · {Math.round((initialMatch.competitiveMultiplier ?? 0) * 1000) / 10}% RP credit. {(initialMatch.competitiveMultiplier ?? 0) > 0 ? "Wins and losses can change RP." : "This game earns no RP or placement credit."}</p>}
           <nav className="match-tools" aria-label="Match help">
             <button className="back-link" onClick={() => setHelpOpen(true)}>Action rules</button>
             <button className="back-link" disabled={!lastResult} onClick={() => setResultOpen(true)}>Round result</button>
@@ -728,7 +751,7 @@ function Game({ mode, difficulty, initialMatch, onExit, onRestart, onRestartPrac
         </section>
       </div>
 
-      {confirmResign && <ResignDialog ranked={mode === "ranked"} onCancel={closeResign} onConfirm={() => void resign()} />}
+      {confirmResign && <ResignDialog ranked={mode === "ranked" || Boolean(initialMatch.ratedBot) && (initialMatch.competitiveMultiplier ?? 0) > 0} onCancel={closeResign} onConfirm={() => void resign()} />}
     </main>
   );
 }
@@ -742,7 +765,7 @@ function ResignDialog({ ranked, onCancel, onConfirm }: { ranked: boolean; onCanc
   }, []);
   return (
     <dialog ref={dialogRef} className="confirm-bar" aria-labelledby="resign-title" onCancel={(event) => { event.preventDefault(); onCancel(); }}>
-      <p><strong id="resign-title">Resign match?</strong>{ranked ? " This counts as a loss." : " This ends the duel."}</p>
+      <p><strong id="resign-title">Resign match?</strong>{ranked ? " This counts as a loss and can lower your RP." : " This ends the duel."}</p>
       <div><button className="secondary-cta" onClick={onCancel}>Keep playing</button><button className="danger-button" onClick={onConfirm}>Resign</button></div>
     </dialog>
   );
@@ -821,22 +844,30 @@ export function RevealPanel({ result, player, finalRound, activeRoundOpen, onCon
   );
 }
 
+export function hardBotCreditExplanation(multiplier: number): string {
+  return multiplier > 0
+    ? "Wins can raise RP; losses can lower it. Draws use Elo too. This game counts toward placement and rated matches. W-L-D and streak stay unchanged."
+    : "Your Hard bot allowance is used up. RP, placement, rated matches, W-L-D, and streak stay unchanged for this game.";
+}
+
 export function RankedSettlementDetails({ settlement, profile }: { settlement: RankedSettlement; profile: RankedProfile | null }) {
   const mine = settlement.player;
   return <>
     <section className="settlement-card">
       {mine.delta !== undefined && <div><span>RP change</span><strong className={mine.delta >= 0 ? "positive" : "negative"}>{mine.delta >= 0 ? "+" : ""}{mine.delta}</strong></div>}
       {mine.ratingAfter !== undefined && <div><span>Rating</span><strong>{mine.ratingBefore === undefined ? mine.ratingAfter : `${mine.ratingBefore} → ${mine.ratingAfter}`}</strong></div>}
-      <div><span>Credit</span><strong>{Math.round(settlement.multiplier * 100)}%</strong></div>
+      <div><span>Credit</span><strong>{Math.round(settlement.multiplier * 1000) / 10}%</strong></div>
+      {settlement.ratedBot && <div><span>Hard bot</span><strong>{settlement.ratedBot.opponentRating} RP</strong></div>}
       {mine.placementProgress >= PLACEMENT_MATCHES && <div><span>Tier</span><strong>{profile?.tier ?? "Updating"}</strong></div>}
       <div><span>{mine.placementProgress < PLACEMENT_MATCHES ? "Placement" : "Global rank"}</span><strong>{mine.placementProgress < PLACEMENT_MATCHES ? `${mine.placementProgress}/${PLACEMENT_MATCHES}` : profile?.rank ? `#${profile.rank}` : "Updating"}</strong></div>
     </section>
-    <p className="status-note">{creditExplanation(settlement.multiplier)}</p>
+    <p className="status-note">{settlement.ratedBot ? hardBotCreditExplanation(settlement.multiplier) : creditExplanation(settlement.multiplier)}</p>
     {profile?.rating !== undefined && <p className="next-rival">{nextRivalText(profile.rating)}</p>}
   </>;
 }
 
 export function finalResultExplanation(match: MatchState, player: Player, resultType: PublicMatch['resultType'], lastResult: PublicMatch['lastResult']): string {
+  if (resultType === "session-expired") return "Your session expired and the match was voided. No rating was changed.";
   if (resultType === "server-error") return "Match voided due to a connection or server error. No rating was changed.";
   if (resultType === "no-contest") return "Neither player receives competitive credit for this match.";
   if (resultType === "resignation" || match.endingReason === "resignation") return "The match ended by resignation.";
@@ -854,11 +885,12 @@ export function finalResultExplanation(match: MatchState, player: Player, result
       : "Your rival finished with more territory. The final territory score decides the winner.";
 }
 
-function ResultScreen({ match, totals, player, ranked, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onOpenLeaderboard, onQuickRematch, onSnapshot, lastResult, learningReady, onStartDuel, onReplayLearning }: {
+function ResultScreen({ match, totals, player, ranked, ratedBot, friend, matchId, resultType, onRestart, onExit, onOpenRanked, onOpenLeaderboard, onQuickRematch, onSnapshot, lastResult, learningReady, onStartDuel, onReplayLearning }: {
   match: MatchState;
   totals: Readonly<Record<Player, number>>;
   player: Player;
   ranked: boolean;
+  ratedBot?: PublicMatch['ratedBot'];
   friend: boolean;
   matchId: string;
   resultType: string | null;
@@ -874,7 +906,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   onReplayLearning: () => void;
 }) {
   const rival: Player = player === "A" ? "B" : "A";
-  const title = resultType === "server-error" ? "Match voided" : resultType === "no-contest" ? "No contest" : match.winner === player ? "Victory" : match.winner === rival ? "Defeat" : "Draw";
+  const title = resultType === "server-error" || resultType === "session-expired" ? "Match voided" : resultType === "no-contest" ? "No contest" : match.winner === player ? "Victory" : match.winner === rival ? "Defeat" : "Draw";
   const [settlement, setSettlement] = useState<RankedSettlement | null>(null);
   const [profile, setProfile] = useState<RankedProfile | null>(null);
   const [invitation, setInvitation] = useState<RankedInvitation | null>(null);
@@ -893,38 +925,58 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
   }, []);
 
   useEffect(() => {
-    if (!ranked || resultType === "server-error") return;
+    if ((!ranked && !ratedBot) || resultType === "server-error" || resultType === "session-expired") return;
     let active = true;
+    let poll: number | undefined;
+    let retryMs = 1_000;
+    let saved: RankedSettlement | null = null;
     const load = async () => {
+      if (!active) return;
+      if (document.hidden) { poll = window.setTimeout(() => void load(), retryMs); return; }
       try {
-        const settled = await api.getRankedSettlement(matchId);
-        if (!settled.settlement) {
+        saved ??= (await api.getRankedSettlement(matchId)).settlement;
+        if (!saved) {
           const latest = (await api.getMatch<PublicMatch>(matchId)).match;
           if (active) {
             setError("");
             if (latest.status === "voided") onSnapshot(latest);
           }
+        } else {
+          const currentProfile = await api.getProfile();
+          if (!active) return;
+          setError("");
+          setSettlement(saved);
+          setProfile(currentProfile.profile);
           return;
         }
-        const [currentProfile, rematch, queue] = await Promise.all([
-          api.getProfile(), api.getRankedRematch(matchId), api.getRankedQueue(),
-        ]);
+      } catch (reason) {
+        if (active) setError(reason instanceof Error ? reason.message : "Ranked result details could not be loaded.");
+      }
+      if (active) { poll = window.setTimeout(() => void load(), retryMs); retryMs = Math.min(retryMs * 2, 15_000); }
+    };
+    void load();
+    return () => { active = false; window.clearTimeout(poll); };
+  }, [ranked, ratedBot, matchId, resultType]);
+
+  useEffect(() => {
+    if (!ranked || !settlement) return;
+    let active = true;
+    let poll: number | undefined;
+    const load = async () => {
+      if (!active) return;
+      if (!document.hidden) try {
+        const [rematch, queue] = await Promise.all([api.getRankedRematch(matchId), api.getRankedQueue()]);
         if (!active) return;
-        setError("");
-        setSettlement(settled.settlement);
-        setProfile(currentProfile.profile);
         setInvitation(rematch.invitation);
         setRequested(rematch.requestedByYou);
         if (queue.queue?.matchId && queue.queue.matchId !== matchId &&
             (queue.queue.state === "readying" || queue.queue.state === "active")) onOpenRanked();
-      } catch (reason) {
-        if (active) setError(reason instanceof Error ? reason.message : "Ranked result details could not be loaded.");
-      }
+      } catch { /* Rematch monitoring must not hide a committed result. */ }
+      if (active) poll = window.setTimeout(() => void load(), 1_000);
     };
     void load();
-    const poll = window.setInterval(() => void load(), 1_000);
-    return () => { active = false; window.clearInterval(poll); };
-  }, [ranked, matchId, resultType]);
+    return () => { active = false; window.clearTimeout(poll); };
+  }, [ranked, settlement, matchId]);
 
   useEffect(() => {
     if (!friend || ranked) return;
@@ -980,7 +1032,7 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
 
   return (
     <main className="result-page">
-      <p className="eyebrow">{ranked ? "Ranked Duel" : "Unranked match"} · Complete</p>
+      <p className="eyebrow">{ranked ? "Ranked Duel" : ratedBot ? "Hard bot · RP duel" : "Unranked match"} · Complete</p>
       <h1 className={title === "Victory" ? "victory" : title === "Defeat" ? "defeat" : title === "Draw" ? "draw" : ""} ref={titleRef} tabIndex={-1}>{title}</h1>
       <div className="result-score" aria-label={`Final score: you ${totals[player]}, rival ${totals[rival]}`}><span><small>You</small>{totals[player]}</span><i>—</i><span><small>Rival</small>{totals[rival]}</span></div>
       <p className="result-explanation">{finalResultExplanation(match, player, resultType, lastResult)}</p>
@@ -995,9 +1047,9 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
         <RevealPanel result={lastResult} player={player} finalRound activeRoundOpen={false} onContinue={() => setLastRoundOpen(false)} />
       </GameDialog>}
       {learningReady && <p role="status">You practiced the loop. Start a duel or leave to acknowledge this result.</p>}
-      {!ranked && !friend && <div className="learning-choices"><button className="secondary-cta" onClick={onStartDuel}>Start a duel</button><button className="back-link" onClick={onReplayLearning}>Replay learning</button></div>}
-      {ranked && settlement && <RankedSettlementDetails settlement={settlement} profile={profile} />}
-      {ranked && !settlement && resultType !== "server-error" && <p className="status-note" role="status">Rating update pending. This result will refresh automatically.</p>}
+      {!ranked && !ratedBot && !friend && <div className="learning-choices"><button className="secondary-cta" onClick={onStartDuel}>Start a duel</button><button className="back-link" onClick={onReplayLearning}>Replay learning</button></div>}
+      {(ranked || ratedBot) && settlement && <RankedSettlementDetails settlement={settlement} profile={profile} />}
+      {(ranked || ratedBot) && !settlement && resultType !== "server-error" && resultType !== "session-expired" && <p className="status-note" role="status">Rating update pending. This result will refresh automatically.</p>}
       {ranked && invitation && !requested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Sides will swap and credit is recalculated before ready.</p><button className="primary-cta" disabled={busy} onClick={acceptRematch}>Accept rematch <span>→</span></button></div>}
       {ranked && requested && <div className="rematch-offer"><p><strong>Rematch sent.</strong> Waiting for your opponent.</p>{invitation && <CopyButton value={invitation.inviteUrl} />}</div>}
       {friend && quickInvitation && !quickRequested && <div className="rematch-offer"><p><strong>Rematch requested.</strong> Accept to play again with sides swapped.</p><button className="primary-cta" disabled={busy} onClick={acceptQuickRematch}>Accept rematch <span>→</span></button></div>}
@@ -1006,10 +1058,10 @@ function ResultScreen({ match, totals, player, ranked, friend, matchId, resultTy
       <div className="result-actions">
         {ranked ? resultType !== "server-error" && settlement && !invitation && <button className="primary-cta" disabled={busy} onClick={requestRematch}>Request rematch <span>↻</span></button> : friend ? resultType !== "server-error" && !quickInvitation && <button className="primary-cta" disabled={busy} onClick={requestQuickRematch}>Request rematch <span>↻</span></button> : <button className="primary-cta" disabled={busy} onClick={restart}>Rematch <span>↻</span></button>}
         {ranked && (settlement || resultType === "server-error") && <button className="secondary-cta" onClick={onOpenRanked}>New opponent</button>}
-        {ranked && <button className="secondary-cta" onClick={onOpenLeaderboard}>Leaderboard</button>}
+        {(ranked || ratedBot) && <button className="secondary-cta" onClick={onOpenLeaderboard}>Leaderboard</button>}
         <button className="secondary-cta" onClick={onExit}>Home</button>
       </div>
-      {!ranked && <small>Practice and Quick Duel results do not affect Ranked statistics.</small>}
+      {!ranked && !ratedBot && <small>This unranked result does not affect RP or Ranked statistics.</small>}
     </main>
   );
 }
@@ -1084,7 +1136,7 @@ function RoomScreen({ navigate, onMatch, inviteToken, initialRoom }: { navigate:
         </section>
       ) : (
         <section className="room-form">
-          {!inviteToken && <div className="segmented"><button disabled={busy || uncertainSubmission} className={tab === "create" ? "active" : ""} onClick={() => setTab("create")}>Create room</button><button disabled={busy || uncertainSubmission} className={tab === "join" ? "active" : ""} onClick={() => setTab("join")}>Join room</button></div>}
+          {!inviteToken && <div className="segmented"><button disabled={busy || uncertainSubmission} aria-pressed={tab === "create"} className={tab === "create" ? "active" : ""} onClick={() => setTab("create")}>Create room</button><button disabled={busy || uncertainSubmission} aria-pressed={tab === "join"} className={tab === "join" ? "active" : ""} onClick={() => setTab("join")}>Join room</button></div>}
           <label>Display name<input disabled={busy || uncertainSubmission} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" maxLength={24} /></label>
           {tab === "join" && !inviteToken && <label>Room code<input disabled={busy || uncertainSubmission} value={code} onChange={(event) => setCode(event.target.value)} placeholder="e.g. K7MX9Q" maxLength={12} /></label>}
           <button className="primary-cta full" disabled={!name.trim() || (tab === "join" && !inviteToken && !code.trim()) || busy} onClick={submit}>{busy ? "Connecting…" : tab === "create" ? "Create room" : "Join room"}<span>→</span></button>
@@ -1131,11 +1183,18 @@ function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { 
   const [inviteFailed, setInviteFailed] = useState(false);
   const [inviteAttempt, setInviteAttempt] = useState(0);
   const [arenaConnected, setArenaConnected] = useState(false);
+  const [botRecovery, setBotRecovery] = useState(false);
+  const [confirmBotResign, setConfirmBotResign] = useState(false);
+  const [recoveredSettlement, setRecoveredSettlement] = useState<RankedSettlement | null>(null);
   const acceptingInvite = useRef(false);
 
   const openActiveMatch = async (next: RankedQueue | null) => {
     if (next?.state === "active" && next.matchId) {
-      onMatch((await api.getMatch<PublicMatch>(next.matchId)).match);
+      try { onMatch((await api.getMatch<PublicMatch>(next.matchId)).match); }
+      catch (reason) {
+        if (next.ratedBot && reason instanceof RequestError && reason.status === 404) setBotRecovery(true);
+        else throw reason;
+      }
     }
   };
 
@@ -1170,7 +1229,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { 
             setInviteCode(invitation?.code ?? "");
           })
           .catch(() => undefined);
-        void refreshQueue();
+        void refreshQueue().catch((reason) => active && setError(reason instanceof Error ? reason.message : "Ranked could not be loaded."));
       }
     }).catch((reason) => active && setError(reason instanceof Error ? reason.message : "Ranked could not be loaded."));
     return () => { active = false; };
@@ -1190,7 +1249,7 @@ function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { 
       return;
     }
     setArenaConnected(false);
-    return api.subscribeMatch(queue.matchId, () => void refreshQueue(), () => setArenaConnected(true), () => setArenaConnected(false));
+    return api.subscribeMatch(queue.matchId, () => void refreshQueue().catch(() => undefined), () => setArenaConnected(true), () => setArenaConnected(false));
   }, [queue?.state, queue?.matchId]);
 
   const signInWithGoogle = async () => {
@@ -1205,6 +1264,20 @@ function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { 
     } finally {
       setBusy(false);
     }
+  };
+
+  const endBotMatch = async () => {
+    if (!queue?.matchId || busy) return;
+    setBusy(true); setError("");
+    try {
+      const response = await api.resignRatedBotMatch(queue.matchId);
+      setRecoveredSettlement(response.settlement);
+      setConfirmBotResign(false);
+      setBotRecovery(false);
+      setQueue(null);
+      setProfile((await api.getProfile()).profile);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "The Hard duel could not be ended. Try again."); }
+    finally { setBusy(false); }
   };
 
   useEffect(() => {
@@ -1292,8 +1365,11 @@ function RankedScreen({ navigate, onMatch, inviteIntent, authRedirectError }: { 
       {queue?.state === "ready-expired" && <section className="ranked-console"><strong>Ready window expired.</strong><p>Both players need to confirm within 15 seconds. This match did not affect ratings.</p><button className="secondary-cta full" onClick={() => { if (inviteIntent) dismissInvite(); setQueue(null); }}>Return to Ranked</button></section>}
       {queue?.state === "readying" && <section className="ranked-console"><p className="eyebrow">Opponent found</p><strong>{queue.competitiveMultiplier === 1 ? "Full competitive credit" : `${Math.round((queue.competitiveMultiplier ?? 0) * 100)}% RP credit`}</strong><p>{creditExplanation(queue.competitiveMultiplier ?? 0)}</p><p>{arenaConnected ? "Opponent identity appears after both players commit." : "Connecting to the arena…"}</p><button className="primary-cta full" disabled={busy || !arenaConnected} onClick={ready}>Ready <span>→</span></button></section>}
       {queue?.state === "cooldown" && <section className="ranked-console"><strong>Ranked cooldown</strong><p>Matchmaking is temporarily unavailable after repeated disconnect incidents.</p></section>}
+      {botRecovery && queue?.ratedBot && <section className="ranked-console"><strong>A Hard duel is still open</strong><p>Continue it in the browser where you started. To play here, end that duel first. Resigning records a loss using its saved RP credit.</p><button className="danger-button full" disabled={busy} onClick={() => setConfirmBotResign(true)}>End Hard duel</button></section>}
+      {confirmBotResign && <ResignDialog ranked={(queue?.competitiveMultiplier ?? 0) > 0} onCancel={() => setConfirmBotResign(false)} onConfirm={() => void endBotMatch()} />}
+      {recoveredSettlement && <RankedSettlementDetails settlement={recoveredSettlement} profile={profile} />}
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="ranked-facts"><p><strong>1000</strong><span>Starting RP</span></p><p><strong>{PLACEMENT_MATCHES}</strong><span>Placements</span></p><p><strong>Human</strong><span>Opponents only</span></p></div>
+      <div className="ranked-facts"><p><strong>1000</strong><span>Starting RP</span></p><p><strong>{PLACEMENT_MATCHES}</strong><span>Placements</span></p><p><strong>Hard bots</strong><span>Earn RP in Quick Duel</span></p></div>
       {!profile?.handle && <p className="status-note">Your Google email is never shown as your public game identity.</p>}
     </main>
   );
@@ -1362,7 +1438,7 @@ function InfoScreen({ screen, navigate, authRedirectError, onStartPractice }: { 
       <div className="panel-heading">
         {screen === "profile" && <p className="eyebrow">Player profile</p>}
         <h1>{screen === "profile" ? profile?.handle ?? (signedIn ? "Signed in." : "Playing as guest.") : "Leaderboard"}</h1>
-        <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/${PLACEMENT_MATCHES} · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Placed players and practice bots share one RP ranking. BOT tags identify practice bots; practice matches do not change player records."}</p>
+        <p>{screen === "profile" ? profile ? profile.rating === undefined ? `Placement ${profile.placementProgress ?? 0}/${PLACEMENT_MATCHES} · Provisional rating hidden` : `${profile.tier} · ${profile.rating} RP` : "Practice and Quick Duel work without an account." : "Placed players and practice bots share one RP ranking. BOT tags identify practice bots. Timed Hard Quick Duels can change player RP and complete placements; Practice stays unranked."}</p>
       </div>
       {infoLoading && <p className="status-note" role="status">Loading {screen === "profile" ? "profile" : "leaderboard"}…</p>}
       {screen === "profile" && !infoLoading && !signedIn && <button className="google-button" disabled={!firebaseConfig || signInBusy} onClick={() => void signInWithGoogle()}><span>G</span> {signInBusy ? "Signing in…" : firebaseConfig ? "Sign in with Google for Ranked" : "Google sign-in is not configured"}</button>}
@@ -1370,6 +1446,7 @@ function InfoScreen({ screen, navigate, authRedirectError, onStartPractice }: { 
       {screen === "profile" && profile && <ProfileStats profile={profile} />}
       {screen === "profile" && profile?.handle && <section className="room-form ranked-setup"><label>Change public handle<input value={newHandle} onChange={(event) => setNewHandle(event.target.value)} placeholder="3–16 letters, numbers, or _" maxLength={16} /></label><p className="status-note">After your first rename, you can change your handle once every 30 days.</p><button className="secondary-cta full" disabled={renaming || !/^[A-Za-z0-9_]{3,16}$/.test(newHandle.trim()) || newHandle.trim() === profile.handle} onClick={rename}>{renaming ? "Changing handle…" : "Change handle"}</button></section>}
       {screen === "leaderboard" && leaders.length > 0 && <div className="leaderboard-scroll" role="region" aria-label="Global Ranked leaderboard" tabIndex={0}><LeaderboardList entries={leaders} /></div>}
+      {screen === "leaderboard" && leaders.length > 0 && <p className="leaderboard-scroll-note">Swipe the table sideways for tier and W–L–D details.</p>}
       {!infoLoading && !error && screen === "profile" && !profile && <div className="empty-state"><span aria-hidden="true">G</span><strong>No persistent profile yet</strong><p>Guest games do not carry into Ranked statistics.</p></div>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <button className="secondary-cta full" onClick={() => navigate(screen === "profile" ? "quick" : "ranked")}>{screen === "profile" ? "Play Quick Duel" : "View Ranked"}</button>
@@ -1393,15 +1470,15 @@ export function ProfileStats({ profile }: { profile: RankedProfile }) {
 
 export function LeaderboardList({ entries }: { entries: LeaderboardEntry[] }) {
   return <table className="leaderboard-table">
-    <thead><tr><th scope="col">Rank</th><th scope="col">Username</th><th scope="col">Tier</th><th scope="col">W–L–D</th><th scope="col">RP</th></tr></thead>
+    <thead><tr><th scope="col">Rank</th><th scope="col">Username</th><th scope="col">RP</th><th scope="col">Tier</th><th scope="col">W–L–D</th></tr></thead>
     <tbody>{entries.map((entry) => <tr key={`${entry.bot ? "bot" : "player"}:${entry.handle}`}>
       <th scope="row" className="leaderboard-rank">#{entry.rank}</th>
       <td className="leaderboard-player"><span className="leaderboard-handle" title={entry.handle}>{entry.handle}</span>{entry.bot && <small className="bot-tag">BOT</small>}</td>
+      <td className="leaderboard-rating">{entry.rating}</td>
       <td className="leaderboard-tier">{entry.tier}</td>
       <td className="leaderboard-record" aria-label={`${entry.wins} ${entry.wins === 1 ? "win" : "wins"}, ${entry.losses} ${entry.losses === 1 ? "loss" : "losses"}, ${entry.draws} ${entry.draws === 1 ? "draw" : "draws"}`}>
         {entry.wins}–{entry.losses}–{entry.draws}
       </td>
-      <td className="leaderboard-rating">{entry.rating}</td>
     </tr>)}</tbody>
   </table>;
 }
@@ -1551,11 +1628,11 @@ export function App() {
       {screen === "game" && botMatch && <Game key={gameKey} {...solo} initialMatch={botMatch} onExit={() => navigate("home")} onStartDuel={() => navigate("quick")} onReplayLearning={() => void learn()} onOpenRanked={() => navigate("ranked")} onOpenLeaderboard={() => navigate("leaderboard")} onQuickRematch={(match) => { setBotMatch(match); setGameKey((value) => value + 1); }} onRestart={async (key, current) => { if (solo.mode === "ranked") navigate("ranked"); else if (current.roomId) navigate("room"); else await start(solo.mode, solo.difficulty, key, current.status === "voided" ? undefined : current.id, undefined, current.timed); }} onRestartPractice={(key) => start("practice", solo.difficulty, key, undefined, botMatch.id, botMatch.timed)} />}
       {screen === "room" && <RoomScreen inviteToken={guestInvite} initialRoom={resumedRoom} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {screen === "quick-rematch" && quickRematchToken && <QuickRematchLanding token={quickRematchToken} navigate={navigate} onMatch={(match) => { setSolo({ mode: "quick", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
-      {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} authRedirectError={authRedirectError} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: "ranked", difficulty: "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
+      {screen === "ranked" && <RankedScreen inviteIntent={inviteIntent} authRedirectError={authRedirectError} navigate={navigate} onMatch={(match) => { window.history.replaceState(null, "", "/"); setSolo({ mode: match.mode, difficulty: match.botDifficulty === "hard" ? "Hard" : "Normal" }); setBotMatch(match); setGameKey((value) => value + 1); navigate("game"); }} />}
       {(screen === "leaderboard" || screen === "profile" || screen === "how-to") && <InfoScreen screen={screen} authRedirectError={authRedirectError} navigate={navigate}
         onStartPractice={() => void learn()} />}
       {welcome && <WelcomeDialog onClose={() => closeWelcome()} onLearn={() => { closeWelcome(false); void learn(); }} onDuel={() => { closeWelcome(false); navigate("quick"); }} />}
-      {learningReplacement && <ResignDialog ranked={learningReplacement.mode === "ranked"} onCancel={() => setLearningReplacement(null)} onConfirm={() => void replaceWithLearning()} />}
+      {learningReplacement && <ResignDialog ranked={learningReplacement.mode === "ranked" || Boolean(learningReplacement.ratedBot) && (learningReplacement.competitiveMultiplier ?? 0) > 0} onCancel={() => setLearningReplacement(null)} onConfirm={() => void replaceWithLearning()} />}
     </div>
   );
 }

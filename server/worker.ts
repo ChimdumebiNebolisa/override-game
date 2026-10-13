@@ -328,7 +328,7 @@ export class GameDurableObject {
           this.logMatchEvent(match?.status === 'voided' ? 'match_voided' : match?.status === 'finished' ? 'match_finished' : match?.status === 'decision' ? 'round_opened' : 'round_resolved', id);
           if (match?.room_id) this.notify('room', match.room_id);
           this.notify('match', id);
-          if (match?.mode === 'ranked' && match.status === 'finished') {
+          if (match && (match.mode === 'ranked' || match.rated_bot_uid) && match.status === 'finished') {
             core.settleRankedMatch(this.db, id);
             this.logMatchEvent('ranked_settled', id);
           }
@@ -467,7 +467,7 @@ export class GameDurableObject {
       (SELECT COUNT(*) FROM ranked_invitations WHERE status = 'open') +
       (SELECT COUNT(*) FROM quick_rematch_invitations WHERE status = 'open') +
       (SELECT COUNT(*) FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
-        WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL AND s.match_id IS NULL) AS count`).get() as { count: number };
+        WHERE (m.mode = 'ranked' OR m.rated_bot_uid IS NOT NULL) AND m.status = 'finished' AND m.started_at IS NOT NULL AND s.match_id IS NULL) AS count`).get() as { count: number };
     const requestUnits = row?.request_units ?? 0;
     const activeSeconds = (row?.active_ms ?? 0) * ACTIVE_MEMORY_GB / 1_000;
     const reads = row?.rows_read ?? 0;
@@ -521,7 +521,7 @@ export class GameDurableObject {
       ((SELECT MIN(due_at) FROM worker_socket_closures)),
       (CASE WHEN EXISTS (
         SELECT 1 FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
-        WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL
+        WHERE (m.mode = 'ranked' OR m.rated_bot_uid IS NOT NULL) AND m.status = 'finished' AND m.started_at IS NOT NULL
           AND m.ended_at < ? AND s.match_id IS NULL
       ) THEN ? ELSE ? END)
     )`).get(now, now + 1_000, now + 60 * 60_000) as { due_at: number | null };

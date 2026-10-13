@@ -60,6 +60,8 @@ export const initialSchema = `    CREATE TABLE IF NOT EXISTS sessions (
       restart_match_id TEXT REFERENCES matches(id),
       mode TEXT NOT NULL CHECK (mode IN ('quick', 'ranked', 'practice')),
       bot_difficulty TEXT,
+      rated_bot_uid TEXT REFERENCES profiles(uid),
+      rated_bot_rating INTEGER,
       player_a_key TEXT NOT NULL,
       player_b_key TEXT NOT NULL,
       player_a_name TEXT NOT NULL,

@@ -4,7 +4,7 @@ import type Database from 'better-sqlite3';
 import { assessCompetitiveCredit, PLACEMENT_MATCHES, settleRatedMatch, type RatingProfile, type RatingSettlement } from '../src/shared/rating.js';
 import { createInitialState, type MatchState, type Player } from '../src/shared/rules.js';
 import { HttpError } from './http.js';
-import { initializeHumanPresence } from './matches.js';
+import { botSide, initializeHumanPresence } from './matches.js';
 
 const READY_WINDOW_MS = 15_000;
 const QUEUE_LEASE_MS = 60_000;
@@ -33,6 +33,10 @@ interface QueueRow {
 }
 
 interface MatchShellRow {
+  rated_bot_uid: string | null;
+  rated_bot_rating: number | null;
+  bot_difficulty: string | null;
+  timed: number;
   decision_duration_ms: number;
   id: string;
   mode: string;
@@ -60,6 +64,7 @@ export interface RankedQueueResult {
   competitiveMultiplier: number | null;
   readyDeadline: number | null;
   cooldownUntil?: number;
+  ratedBot?: { opponentRating: number };
 }
 
 export interface RankedShell {
@@ -71,6 +76,7 @@ export interface RankedShell {
 
 export interface PublicRankedSettlement {
   multiplier: number;
+  ratedBot?: { opponentRating: number };
   player: {
     outcome: 'win' | 'loss' | 'draw';
     placementProgress: number;
@@ -96,7 +102,7 @@ function ownership(db: Database.Database, uid: string): OwnershipRow | undefined
 }
 
 function rankedMatch(db: Database.Database, id: string): MatchShellRow | undefined {
-  return db.prepare(`SELECT id, mode, player_a_key, player_b_key, status, ready_deadline, ready_a, ready_b,
+  return db.prepare(`SELECT id, mode, rated_bot_uid, rated_bot_rating, bot_difficulty, timed, player_a_key, player_b_key, status, ready_deadline, ready_a, ready_b,
       ready_connected_a, ready_connected_b, decision_duration_ms,
       started_at, competitive_multiplier, credit_assessed_at, state_json, result_type,
       disconnected_a_at, disconnected_b_at
@@ -115,6 +121,7 @@ function queueResultFor(db: Database.Database, uid: string): RankedQueueResult |
     matchId: match.id,
     competitiveMultiplier: match.competitive_multiplier,
     readyDeadline: match.ready_deadline,
+    ...(match.rated_bot_uid === uid && match.rated_bot_rating !== null ? { ratedBot: { opponentRating: match.rated_bot_rating } } : {}),
   };
 }
 
@@ -417,8 +424,8 @@ export function settleRankedMatch(db: Database.Database, matchId: string, now = 
     }
 
     const match = rankedMatch(db, matchId);
-    if (!match || match.mode !== 'ranked') throw new HttpError(404, 'Ranked match not found');
-    if (match.status !== 'finished' || match.started_at === null) throw new HttpError(409, 'Ranked match is not a bound terminal result');
+    if (!match || (match.mode !== 'ranked' && !match.rated_bot_uid)) throw new HttpError(404, 'Rated match not found');
+    if (match.status !== 'finished' || match.started_at === null) throw new HttpError(409, 'Rated match is not a bound terminal result');
     if (match.competitive_multiplier === null || match.credit_assessed_at === null) {
       throw new HttpError(500, 'Ranked credit assessment is missing');
     }
@@ -429,12 +436,23 @@ export function settleRankedMatch(db: Database.Database, matchId: string, now = 
     const winner = state.winner;
     const outcomeA = kind === 'no-contest' || winner === null ? 'draw' : winner === 'A' ? 'win' : 'loss';
     const outcomeB = kind === 'no-contest' || winner === null ? 'draw' : winner === 'B' ? 'win' : 'loss';
-    const aRow = db.prepare('SELECT * FROM profiles WHERE uid = ?').get(match.player_a_key) as Record<string, unknown> | undefined;
-    const bRow = db.prepare('SELECT * FROM profiles WHERE uid = ?').get(match.player_b_key) as Record<string, unknown> | undefined;
-    if (!aRow || !bRow) throw new HttpError(500, 'Ranked profiles are missing');
+    const bot = match.rated_bot_uid ? botSide(match) : null;
+    if (match.rated_bot_uid && (!bot || match.mode !== 'quick' || match.bot_difficulty !== 'hard' || !match.timed ||
+        match.rated_bot_rating === null || !Number.isFinite(match.rated_bot_rating))) {
+      throw new HttpError(500, 'Rated bot assessment is invalid');
+    }
+    const uidA = bot === 'B' ? match.rated_bot_uid! : match.player_a_key;
+    const uidB = bot === 'A' ? match.rated_bot_uid! : match.player_b_key;
+    const readProfile = (uid: string): RatingProfile => {
+      const row = db.prepare('SELECT * FROM profiles WHERE uid = ?').get(uid) as Record<string, unknown> | undefined;
+      if (!row) throw new HttpError(500, 'Ranked profiles are missing');
+      return profileFromRow(row);
+    };
+    const botProfile: RatingProfile = { rating: match.rated_bot_rating ?? 1000, peakRating: match.rated_bot_rating ?? 1000,
+      placementProgress: PLACEMENT_MATCHES, ratedMatchCount: 20, wins: 0, losses: 0, draws: 0, streak: 0 };
     const settlement = settleRatedMatch({
-      playerA: { id: match.player_a_key, profile: profileFromRow(aRow) },
-      playerB: { id: match.player_b_key, profile: profileFromRow(bRow) },
+      playerA: { id: uidA, profile: bot === 'A' ? botProfile : readProfile(uidA) },
+      playerB: { id: uidB, profile: bot === 'B' ? botProfile : readProfile(uidB) },
       outcomeA,
       outcomeB,
       multiplier: match.competitive_multiplier,
@@ -442,8 +460,8 @@ export function settleRankedMatch(db: Database.Database, matchId: string, now = 
     });
 
     if (kind !== 'no-contest') {
-      writeProfile(db, match.player_a_key, settlement.playerA.updatedProfile);
-      writeProfile(db, match.player_b_key, settlement.playerB.updatedProfile);
+      if (bot !== 'A') writeProfile(db, uidA, settlement.playerA.updatedProfile);
+      if (bot !== 'B') writeProfile(db, uidB, settlement.playerB.updatedProfile);
     } else if (match.disconnected_a_at !== null && match.disconnected_b_at !== null) {
       for (const uid of [match.player_a_key, match.player_b_key]) {
         db.prepare('INSERT INTO disconnect_incidents (uid, match_id, created_at) VALUES (?, ?, ?)').run(uid, matchId, now);
@@ -461,7 +479,7 @@ export function settleRankedMatch(db: Database.Database, matchId: string, now = 
 export function settlePendingRankedMatches(db: Database.Database, now = Date.now()): string[] {
   const pending = db.prepare(`SELECT m.id FROM matches m
     LEFT JOIN rating_settlements s ON s.match_id = m.id
-    WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL
+    WHERE (m.mode = 'ranked' OR m.rated_bot_uid IS NOT NULL) AND m.status = 'finished' AND m.started_at IS NOT NULL
       AND s.match_id IS NULL
     ORDER BY m.ended_at, m.id LIMIT 100`).all() as { id: string }[];
   const resolved: string[] = [];

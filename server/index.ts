@@ -74,7 +74,7 @@ async function serveStatic(res: ServerResponse, pathname: string): Promise<void>
   }
   try {
     const body = await readFile(file);
-    const type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : 'text/html';
+    const type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : file.endsWith('.woff2') ? 'font/woff2' : file.endsWith('.txt') ? 'text/plain' : 'text/html';
     applySecurityHeaders(res);
     res.writeHead(200, { 'content-type': type });
     res.end(body);
@@ -167,7 +167,7 @@ setInterval(() => {
         logMatchEvent(match?.status === 'voided' ? 'match_voided' : match?.status === 'finished' ? 'match_finished' : match?.status === 'decision' ? 'round_opened' : 'round_resolved', id);
         if (match?.room_id) notifyRoom(match.room_id);
         notifyMatch(id);
-        if (match?.mode === 'ranked' && match.status === 'finished') {
+        if (match && (match.mode === 'ranked' || match.rated_bot_uid) && match.status === 'finished') {
           settleRankedMatch(db, id);
           logMatchEvent('ranked_settled', id);
         }

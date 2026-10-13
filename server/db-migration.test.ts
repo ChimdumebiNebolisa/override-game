@@ -69,6 +69,8 @@ describe('database schema migration', () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       const db = openDatabase(path);
       for (const status of ['decision', 'transition', 'grace', 'readying']) {
+        expect(db.prepare('SELECT rated_bot_uid, rated_bot_rating FROM matches WHERE id = ?').get(status))
+          .toEqual({ rated_bot_uid: null, rated_bot_rating: null });
         expect(db.prepare(`SELECT state_json, status, deadline, transition_at, policy_version,
           decision_duration_ms, reveal_duration_ms, progression FROM matches WHERE id = ?`).get(status))
           .toEqual({ state_json: state, status, deadline: 105000, transition_at: 101000,
@@ -109,12 +111,12 @@ describe('database schema migration', () => {
     expect(legacyRoom.invite_token_hash).toBe(invitationTokenHash('legacy-room-token'));
     expect(revealInvitationSecret(legacyRoom.invite_token)).toBe('legacy-room-token');
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
-      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 },
+      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 },
     ]);
     db.close();
 
     db = openDatabase(path);
-    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 7 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 8 });
     expect(db.prepare('SELECT id FROM sessions').get()).toEqual({ id: sessionTokenId(legacySessionToken) });
     db.close();
   });
@@ -140,7 +142,7 @@ describe('database schema migration', () => {
     expect(columns(recovered, 'ranked_invitations')).toContain('code');
     expect(columns(recovered, 'matches')).toContain('timed');
     expect(recovered.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
-      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 },
+      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 },
     ]);
     recovered.close();
   });

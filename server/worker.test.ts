@@ -34,6 +34,73 @@ function fixture() {
   return { store, sockets, env, ctx };
 }
 
+it.each(['actions', 'deadline', 'restart', 'account-recovery'] as const)('settles a rated Hard bot through Worker %s exactly once', async (completion) => {
+  const { store, env, ctx } = fixture();
+  let durable = new GameDurableObject(ctx, env);
+  await durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/config`));
+  const now = Date.now(); const token = 'c'.repeat(64); const uid = 'bot-player';
+  const actor = { id: sessionTokenId(token), uid, createdAt: now, expiresAt: now + 86_400_000 };
+  store.sqlite.prepare('INSERT INTO profiles (uid, handle, normalized_handle, created_at) VALUES (?, ?, ?, ?)').run(uid, uid, uid, now);
+  store.sqlite.prepare('INSERT INTO sessions (id, uid, created_at, expires_at) VALUES (?, ?, ?, ?)').run(actor.id, uid, now, actor.expiresAt);
+  const send = (path: string, body?: object) => durable.fetch(new Request(`${env.PUBLIC_ORIGIN}${path}`, {
+    method: body ? 'POST' : 'GET', headers: { cookie: `override_session=${token}`, origin: env.PUBLIC_ORIGIN,
+      'x-requested-with': 'override-game', 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined,
+  }));
+  expect(await (await send('/api/bot-rating')).json()).toEqual({ eligible: true, opponentRating: 1000, multiplier: 0.5 });
+  const body = { mode: 'quick', difficulty: 'hard', creationKey: '00000000-0000-4000-8000-000000000077' };
+  const creations = await Promise.all([send('/api/bot-matches', body), send('/api/bot-matches', body)]);
+  expect(creations.map((response) => response.status)).toEqual([201, 201]);
+  const first = await creations[0].json() as { match: { id: string; player: 'A' | 'B'; ratedBot: { opponentRating: number } } };
+  expect((await creations[1].json() as typeof first).match.id).toBe(first.match.id);
+  const { id, player } = first.match;
+  expect(first.match.ratedBot).toEqual({ opponentRating: 1000 });
+  expect((await send('/api/bot-matches', { ...body, creationKey: '00000000-0000-4000-8000-000000000078' })).status).toBe(409);
+  if (completion === 'actions') {
+    const state = { ...createInitialState(), round: 12, energy: { A: 0, B: 0 }, board: Array(25).fill(player) };
+    store.sqlite.prepare('UPDATE matches SET state_json = ? WHERE id = ?').run(JSON.stringify(state), id);
+    const locks = await Promise.all([send(`/api/matches/${id}/actions`, { action: { type: 'pass' }, round: 12, revision: 1 }),
+      send(`/api/matches/${id}/actions`, { action: { type: 'pass' }, round: 12, revision: 1 })]);
+    expect(locks.map((response) => response.status).sort()).toEqual([200, 409]);
+  } else if (completion === 'deadline') {
+    store.sqlite.prepare(`UPDATE matches SET deadline = ?, ${player === 'A' ? 'afk_a' : 'afk_b'} = 2 WHERE id = ?`).run(now - 1, id);
+    await durable.alarm();
+  } else if (completion === 'account-recovery') {
+    const replacement = 'd'.repeat(64);
+    store.sqlite.prepare('INSERT INTO sessions (id, uid, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sessionTokenId(replacement), uid, now, actor.expiresAt);
+    store.sqlite.prepare("UPDATE matches SET status = 'review', deadline = NULL WHERE id = ?").run(id);
+    const recover = () => durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/bot-matches/${id}/resign`, {
+      method: 'POST', headers: { cookie: `override_session=${replacement}`, origin: env.PUBLIC_ORIGIN,
+        'x-requested-with': 'override-game', 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
+    }));
+    const recovered = await Promise.all([recover(), recover()]);
+    expect(recovered.map(response => response.status)).toEqual([200, 200]);
+    expect(await recovered[0].json()).toMatchObject({ settlement: { player: { outcome: 'loss' } } });
+    expect((await durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/matches/${id}`, {
+      headers: { cookie: `override_session=${replacement}` },
+    }))).status).toBe(404);
+  } else {
+    store.sqlite.prepare("UPDATE matches SET state_json = ?, status = 'finished', ended_at = ?, deadline = NULL WHERE id = ?")
+      .run(JSON.stringify({ ...createInitialState(), status: 'finished', winner: player }), now - 10_000, id);
+    expect((await send('/api/health')).status).toBe(503);
+    durable = new GameDurableObject(ctx, env);
+    await durable.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/config`));
+    await durable.alarm();
+  }
+  const read = await send(`/api/matches/${id}/settlement`);
+  expect(read.status).toBe(200);
+  expect(await read.json()).toMatchObject({ settlement: { multiplier: 0.5, ratedBot: { opponentRating: 1000 }, player: { placementProgress: 1 } } });
+  await durable.alarm();
+  expect(store.sqlite.prepare('SELECT rating, placement_progress, rated_match_count FROM profiles WHERE uid = ?').get(uid))
+    .toEqual({ rating: completion === 'deadline' || completion === 'account-recovery' ? 984 : 1016, placement_progress: 1, rated_match_count: 1 });
+  expect(store.sqlite.prepare('SELECT COUNT(*) AS count FROM rating_settlements WHERE match_id = ?').get(id)).toEqual({ count: 1 });
+  expect(store.sqlite.prepare('SELECT * FROM ranked_ownership').all()).toEqual([]);
+  expect((await send('/api/health')).status).toBe(200);
+  store.sqlite.prepare('UPDATE sessions SET uid = NULL WHERE id = ?').run(actor.id);
+  expect((await send(`/api/matches/${id}/settlement`)).status).toBe(401);
+  expect((await send(`/api/matches/${id}`)).status).toBe(200);
+  expect(store.sqlite.pragma('foreign_key_check')).toEqual([]);
+});
+
 it('releases 80 orphaned reviews through the Worker adapter so new visitors can start a game', async () => {
   const { store, env, ctx } = fixture();
   const durable = new GameDurableObject(ctx, env);

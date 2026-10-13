@@ -13,6 +13,10 @@ const result: RoundResult = {
 };
 
 describe('in-match round feedback', () => {
+  it('explains an expired-session void without presenting it as a draw', () => {
+    expect(finalResultExplanation({ ...createInitialState(), status: 'finished' }, 'A', 'session-expired', null))
+      .toBe('Your session expired and the match was voided. No rating was changed.');
+  });
   it.each([1, 6, 12, 13, 15])('labels the actual resolved round %i from the rules result', (round) => {
     const before = { ...createInitialState(), round, phase: round > 12 ? 'sudden-death' as const : 'standard' as const };
     const resolved = resolveRound(before, {

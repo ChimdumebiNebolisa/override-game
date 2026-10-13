@@ -1,4 +1,5 @@
 import type { Action, MatchState, Player, RoundResult } from "../shared/rules";
+import type { BotRatingPreview } from "../shared/bot-rating";
 
 type RoomStatus = "open" | "full" | "readying" | "active" | "finished" | "expired";
 
@@ -25,6 +26,7 @@ export interface PublicMatch {
   roomId: string | null;
   mode: "quick" | "practice" | "ranked";
   botDifficulty: "easy" | "normal" | "hard" | null;
+  ratedBot?: { opponentRating: number };
   timed: boolean;
   player: Player;
   playerNames: Record<Player, string>;
@@ -71,6 +73,7 @@ export interface RankedQueue {
   competitiveMultiplier: number | null;
   readyDeadline: number | null;
   cooldownUntil?: number;
+  ratedBot?: { opponentRating: number };
 }
 
 export interface RankedInvitation {
@@ -105,6 +108,7 @@ interface SettlementPlayer {
 
 export interface RankedSettlement {
   multiplier: number;
+  ratedBot?: { opponentRating: number };
   player: SettlementPlayer;
 }
 
@@ -121,7 +125,7 @@ export interface LeaderboardEntry {
 }
 
 export class RequestError extends Error {
-  constructor(message: string, readonly uncertain = false) { super(message); }
+  constructor(message: string, readonly uncertain = false, readonly status?: number) { super(message); }
 }
 
 let sessionReady: Promise<unknown> | null = null;
@@ -159,7 +163,7 @@ async function sendRequest<T>(path: string, init?: RequestInit): Promise<T> {
     | null;
 
   if (!response.ok) {
-    throw new RequestError(payload?.error ?? "The request could not be completed.", response.status >= 500);
+    throw new RequestError(payload?.error ?? "The request could not be completed.", response.status >= 500, response.status);
   }
 
   if (!payload) {
@@ -244,6 +248,10 @@ export const api = {
 
   closeRoom(roomId: string) {
     return request<{ closed: boolean }>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
+  },
+
+  getBotRating() {
+    return request<BotRatingPreview>("/api/bot-rating");
   },
 
   async createBotMatch(mode: "quick" | "practice", difficulty: "easy" | "normal" | "hard", creationKey: string, parentMatchId?: string, restartMatchId?: string, timed = mode === "quick") {
@@ -359,6 +367,12 @@ export const api = {
 
   getRankedSettlement(matchId: string) {
     return request<{ settlement: RankedSettlement | null }>(`/api/matches/${encodeURIComponent(matchId)}/settlement`);
+  },
+
+  resignRatedBotMatch(matchId: string) {
+    return request<{ settlement: RankedSettlement }>(`/api/bot-matches/${encodeURIComponent(matchId)}/resign`, {
+      method: "POST", body: JSON.stringify({ confirm: true }),
+    });
   },
 
   requestRankedRematch(matchId: string) {

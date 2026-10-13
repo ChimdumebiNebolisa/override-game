@@ -3,6 +3,27 @@ import { describe, expect, it } from 'vitest';
 import { LeaderboardList, ProfileStats, RankedSettlementDetails } from './App';
 
 describe('Ranked progression displays', () => {
+  it('shows exact reduced bot credit and distinguishes it from human repeat credit', () => {
+    const result = renderToStaticMarkup(<RankedSettlementDetails
+      settlement={{ multiplier: 0.375, ratedBot: { opponentRating: 1000 }, player: { outcome: 'win', placementProgress: 2, delta: 6, ratingBefore: 1000, ratingAfter: 1006 } }}
+      profile={{ handle: 'Player', tier: 'Silver', rank: 12 }}
+    />);
+    expect(result).toContain('37.5%');
+    expect(result).toContain('1000 RP');
+    expect(result).toContain('+6');
+    expect(result).toContain('W-L-D and streak stay unchanged');
+    expect(result).not.toContain('same opponent');
+  });
+  it('explains an exhausted Hard bot allowance without promising placement', () => {
+    const result = renderToStaticMarkup(<RankedSettlementDetails
+      settlement={{ multiplier: 0, ratedBot: { opponentRating: 1000 }, player: { outcome: 'draw', placementProgress: 1 } }}
+      profile={{ handle: 'Player', placementProgress: 1 }}
+    />);
+    expect(result).toContain('0%');
+    expect(result).toContain('allowance is used up');
+    expect(result).toContain('1/2');
+    expect(result).not.toContain('RP change');
+  });
   it('shows only placement progress before the second qualifying match', () => {
     const profile = renderToStaticMarkup(<ProfileStats profile={{ handle: 'Placing', placementProgress: 1 }} />);
     expect(profile).toContain('1/2');

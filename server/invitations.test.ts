@@ -158,6 +158,7 @@ test('concurrent link and code redemption across workers creates one shell', asy
   const directory = mkdtempSync(join(tmpdir(), 'override-invite-race-'));
   tempDirectories.push(directory);
   const path = join(directory, 'race.sqlite');
+  const workers: Worker[] = [];
   try {
     const db = openDatabase(path);
     const now = 2_750_000;
@@ -169,18 +170,23 @@ test('concurrent link and code redemption across workers creates one shell', asy
       .run('c', 'Charlie', 'charlie', now);
     const invite = createRankedChallenge(db, 'a', now);
     db.pragma('wal_checkpoint(TRUNCATE)');
-    db.pragma('journal_mode = DELETE');
     db.close();
 
+    let readyCount = 0;
     const race = (method: 'token' | 'code', value: string, uid: string) => new Promise<{ ok: boolean; matchId?: string; status?: number | null }>((resolve, reject) => {
       const worker = new Worker(new URL('./invitation-race.worker.ts', import.meta.url), {
         workerData: { path, method, value, uid, now: now + 1 },
         execArgv: ['--import', 'tsx'],
       });
+      workers.push(worker);
       let result: { ok: boolean; matchId?: string; status?: number | null } | null = null;
       let exited = false;
       const finish = () => { if (exited && result) resolve(result); };
-      worker.once('message', (message) => { result = message; finish(); });
+      worker.on('message', (message) => {
+        if (message.ready) {
+          if (++readyCount === 2) for (const competitor of workers) competitor.postMessage('start');
+        } else { result = message; finish(); }
+      });
       worker.once('error', reject);
       worker.once('exit', (code) => {
         if (code !== 0) reject(new Error(`Race worker exited with ${code}`));
@@ -203,9 +209,9 @@ test('concurrent link and code redemption across workers creates one shell', asy
       check.close();
     }
   } finally {
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await Promise.all(workers.map(worker => worker.terminate()));
   }
-});
+}, 20_000);
 
 test('rematch invitation expires after 30 seconds and can be accepted only by the opponent', () => {
   const db = makeDb();

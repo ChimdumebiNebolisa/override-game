@@ -119,6 +119,12 @@ async function smoke() {
   startWorker();
   await waitForHealth();
 
+  const font = await fetch(`${origin}/fonts/roboto-condensed-latin.woff2`);
+  if (font.status !== 200 || !font.headers.get('content-type')?.startsWith('font/woff2') ||
+      new TextDecoder().decode((await font.arrayBuffer()).slice(0, 4)) !== 'wOF2') {
+    throw new Error('The Worker must serve the bundled display font as WOFF2');
+  }
+
   const firstSession = await request('/api/session');
   if (firstSession.response.status !== 200) throw new Error('Worker session creation failed');
   const hostCookie = sessionCookie(firstSession.response);

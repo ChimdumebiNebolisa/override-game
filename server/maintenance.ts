@@ -20,6 +20,7 @@ export function pruneExpiredGuestData(db: Database.Database, now = Date.now()) {
         deadline = NULL, transition_at = NULL, grace_until = NULL, ended_at = ?, revision = revision + 1
         WHERE id = ?`).run(JSON.stringify({ ...state, status: 'finished', winner: null, endingReason: null }), now, row.id);
       db.prepare('DELETE FROM pending_actions WHERE match_id = ?').run(row.id);
+      db.prepare('DELETE FROM ranked_ownership WHERE match_id = ?').run(row.id);
     }
     const telemetry = db.prepare('DELETE FROM telemetry_events WHERE created_at < ?').run(cutoff).changes;
     db.prepare('DELETE FROM join_attempts WHERE window_started_at < ?').run(now - 5 * 60_000);
@@ -28,7 +29,7 @@ export function pruneExpiredGuestData(db: Database.Database, now = Date.now()) {
       + db.prepare('DELETE FROM ranked_invitations WHERE expires_at < ?').run(cutoff).changes;
     let matches = 0;
     for (;;) {
-      const leaves = db.prepare(`SELECT m.id FROM matches m WHERE m.mode <> 'ranked'
+      const leaves = db.prepare(`SELECT m.id FROM matches m WHERE m.mode <> 'ranked' AND m.rated_bot_uid IS NULL
         AND m.status IN ('finished', 'voided') AND m.ended_at < ?
         AND NOT EXISTS (SELECT 1 FROM matches child WHERE child.parent_match_id = m.id OR child.restart_match_id = m.id)
         LIMIT 100`).all(cutoff) as { id: string }[];

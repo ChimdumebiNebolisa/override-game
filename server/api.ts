@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { firebaseWebConfig as configuredFirebaseWebConfig, publicOrigin as configuredPublicOrigin } from './config.js';
 import { attachFirebaseIdentity, claimHandle, renameHandle } from './auth.js';
 import { HttpError, assertMutationOrigin, displayName, existingSession, json, parseCreationKey, readJson, requireSession } from './http.js';
-import { acknowledgeBotRound, activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, resignMatch } from './matches.js';
+import { acknowledgeBotRound, activeMatchForSession, createBotMatch, dueMatches, getMatch, lockAction, markConnected, markDisconnected, matchForSession, parseAction, resignMatch, resignRatedBotMatch } from './matches.js';
 import { closeQuickRoom, createQuickRoom, getRoom, joinQuickRoom, openRoomForSession, roomForSession } from './rooms.js';
 import { acknowledgeRankedReady, expireRankedLeases, getRankedSettlement, joinRankedQueue, leaveRankedQueue, markRankedReadyPresence, publicRankedSettlement, rankedQueueStatus, settlePendingRankedMatches, settleRankedMatch } from './ranked.js';
 import { leaderboard, profileView } from './progression.js';
@@ -11,6 +11,7 @@ import { acceptRankedChallenge, acceptRankedChallengeByCode, acceptRankedRematch
 import { acceptQuickRematch, expireQuickRematches, pendingQuickRematch, requestQuickRematch } from './quick-rematch.js';
 import { recordClientTelemetry, recordTelemetryEvent } from './metrics.js';
 import { pruneExpiredGuestData } from './maintenance.js';
+import { botRatingPreview } from './bot-rating.js';
 
 export const workerServices = {
   existingSession,
@@ -66,7 +67,7 @@ export function createApiHandler(context: ApiContext) {
           EXISTS(SELECT 1 FROM matches WHERE status = 'readying' AND ready_deadline < ?) OR
           EXISTS(SELECT 1 FROM ranked_ownership WHERE state = 'searching' AND lease_expires_at < ?) OR
           EXISTS(SELECT 1 FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
-            WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL
+            WHERE (m.mode = 'ranked' OR m.rated_bot_uid IS NOT NULL) AND m.status = 'finished' AND m.started_at IS NOT NULL
               AND m.ended_at < ? AND s.match_id IS NULL) AS stalled`)
           .get(cutoff, cutoff, cutoff, cutoff, cutoff, cutoff) as { stalled: number };
         return json(res, stalled.stalled ? 503 : 200, { ok: !stalled.stalled });
@@ -79,6 +80,9 @@ export function createApiHandler(context: ApiContext) {
       return json(res, 200, { signedIn: Boolean(session.uid), profile: session.uid ? profileView(db, session.uid) : null });
     }
     if (path === '/api/config' && method === 'GET') return json(res, 200, { firebaseConfig: firebaseWebConfig });
+    if (path === '/api/bot-rating' && method === 'GET') {
+      return json(res, 200, botRatingPreview(db, requireSession(req, res, db)));
+    }
     if (path === '/api/telemetry' && method === 'POST') {
       const session = requireSession(req, res, db);
       const body = await readJson(req);
@@ -135,6 +139,7 @@ export function createApiHandler(context: ApiContext) {
     }
     if (path === '/api/bot-matches' && method === 'POST') {
       const session = requireSession(req, res, db);
+      expireRankedLeases(db);
       const body = await readJson(req);
       const mode = body.mode === 'practice' ? 'practice' : 'quick';
       const difficulty = body.difficulty === 'normal' || body.difficulty === 'hard' ? body.difficulty : 'easy';
@@ -222,7 +227,7 @@ export function createApiHandler(context: ApiContext) {
       const body = await readJson(req);
       lockAction(db, actionMatch[1], session, parseAction(body.action), body.round as number, body.revision as number);
       const match = matchForSession(db, actionMatch[1], session);
-      if (match.mode === 'ranked' && match.status === 'finished') settleRankedMatch(db, actionMatch[1]);
+      if ((match.mode === 'ranked' || match.ratedBot) && match.status === 'finished') settleRankedMatch(db, actionMatch[1]);
       if (match.roomId && match.status !== 'decision') notifyRoom(match.roomId);
       if (match.status !== 'decision') notifyMatch(actionMatch[1]);
       return json(res, 200, { match });
@@ -236,6 +241,19 @@ export function createApiHandler(context: ApiContext) {
       notifyMatch(nextMatch[1]);
       return json(res, 200, { match: matchForSession(db, nextMatch[1], session) });
     }
+    const recoverBot = path.match(/^\/api\/bot-matches\/([a-f0-9-]{36})\/resign$/);
+    if (recoverBot && method === 'POST') {
+      const session = requireSession(req, res, db);
+      const body = await readJson(req);
+      if (body.confirm !== true) throw new HttpError(400, 'Confirm resignation to end the match');
+      const player = resignRatedBotMatch(db, recoverBot[1], session);
+      const settlement = settleRankedMatch(db, recoverBot[1]);
+      const match = getMatch(db, recoverBot[1])!;
+      notifyMatch(match.id);
+      logMatchEvent('ranked_settled', match.id);
+      return json(res, 200, { settlement: { ...publicRankedSettlement(settlement, player),
+        ratedBot: { opponentRating: match.rated_bot_rating! } } });
+    }
     const resign = path.match(/^\/api\/matches\/([a-f0-9-]{36})\/resign$/);
     if (resign && method === 'POST') {
       const session = requireSession(req, res, db);
@@ -243,7 +261,7 @@ export function createApiHandler(context: ApiContext) {
       if (body.confirm !== true) throw new HttpError(400, 'Confirm resignation to end the match');
       resignMatch(db, resign[1], session);
       const match = getMatch(db, resign[1]);
-      if (match?.mode === 'ranked') {
+      if (match && (match.mode === 'ranked' || match.rated_bot_uid)) {
         settleRankedMatch(db, resign[1]);
         logMatchEvent('ranked_settled', resign[1]);
       }
@@ -256,10 +274,14 @@ export function createApiHandler(context: ApiContext) {
     if (settlementMatch && method === 'GET') {
       const session = requireSession(req, res, db);
       const match = matchForSession(db, settlementMatch[1], session);
-      if (match.mode !== 'ranked' || !match.player) throw new HttpError(404, 'Settlement not found');
+      if ((match.mode !== 'ranked' && !match.ratedBot) || !match.player) throw new HttpError(404, 'Settlement not found');
+      if (match.ratedBot && getMatch(db, settlementMatch[1])?.rated_bot_uid !== session.uid) {
+        throw new HttpError(401, 'Sign in to the account that started this rated duel');
+      }
       const settlement = getRankedSettlement(db, settlementMatch[1]);
       if (!settlement) return json(res, 200, { settlement: null });
-      return json(res, 200, { settlement: publicRankedSettlement(settlement, match.player) });
+      return json(res, 200, { settlement: { ...publicRankedSettlement(settlement, match.player),
+        ...(match.ratedBot ? { ratedBot: match.ratedBot } : {}) } });
     }
     const quickRematch = path.match(/^\/api\/matches\/([a-f0-9-]{36})\/rematch$/);
     if (quickRematch && (method === 'GET' || method === 'POST')) {

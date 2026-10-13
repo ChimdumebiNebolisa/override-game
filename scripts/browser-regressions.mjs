@@ -100,6 +100,7 @@ export async function runBrowserRegressions({ browser, origin, outputDir }) {
       await subscribed;
       await page.evaluate(() => new Promise(requestAnimationFrame));
       await page.getByRole('button', { name: /^Next round/ }).waitFor();
+      await page.evaluate(() => document.fonts.ready);
       const evidence = await run(fixture);
       assert.deepEqual(errors, [], 'No uncaught browser errors');
       results.push({ name, passed: true, ...evidence });
@@ -196,7 +197,10 @@ export async function runBrowserRegressions({ browser, origin, outputDir }) {
       // Normal wheel scrolling, without forcing a click or moving the DOM.
       await page.mouse.move(width - 40, height - 80);
       await page.mouse.wheel(0, 1600);
-      await page.waitForTimeout(100);
+      await page.waitForFunction(() => {
+        const box = document.querySelector('.lock-button').getBoundingClientRect();
+        return box.top >= 0 && box.bottom <= innerHeight;
+      });
       let box = await lock.boundingBox();
       assert.ok(box.y >= 0 && box.y + box.height <= height, `Full lock visible after scrolling: ${JSON.stringify(box)}`);
       await page.screenshot({ path: resolve(outputDir, `controls-${width}x${height}-expanded.png`) });
@@ -251,6 +255,8 @@ export async function runGuideRegressions({ browser, origin, outputDir, dbPath }
     page.on('pageerror', (error) => errors.push(error.message));
     try {
       await page.goto(origin);
+      await page.locator('.site-header').waitFor();
+      await page.evaluate(() => document.fonts.ready);
       const evidence = await run(page, context);
       assert.deepEqual(errors, []);
       results.push({ name, passed: true, ...evidence });
@@ -899,6 +905,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const results = await runBrowserRegressions({ browser, origin,
       outputDir: resolve(process.env.BROWSER_EVIDENCE_DIR ?? 'output/verification/browser') });
     results.push(...await runGuideRegressions({ browser, origin,
+      outputDir: resolve(process.env.BROWSER_EVIDENCE_DIR ?? 'output/verification/browser'), dbPath: env.DB_PATH }));
+    const { runBotRatingRegressions } = await import('./bot-rating-browser-regressions.mjs');
+    results.push(...await runBotRatingRegressions({ browser, origin,
       outputDir: resolve(process.env.BROWSER_EVIDENCE_DIR ?? 'output/verification/browser'), dbPath: env.DB_PATH }));
     for (const result of results) console.log(`${result.passed ? 'PASS' : 'FAIL'} ${result.name}${result.error ? `: ${result.error}` : ''}`);
     if (results.some((result) => !result.passed)) process.exitCode = 1;

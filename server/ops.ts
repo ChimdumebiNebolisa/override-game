@@ -17,7 +17,7 @@ try {
     timedOutSearches: (db.prepare(`SELECT uid FROM ranked_queue WHERE joined_at < ?`)
       .all(now - 20_000) as { uid: string }[]).map((row) => row.uid),
     unsettledRanked: (db.prepare(`SELECT m.id FROM matches m LEFT JOIN rating_settlements s ON s.match_id = m.id
-      WHERE m.mode = 'ranked' AND m.status = 'finished' AND m.started_at IS NOT NULL AND s.match_id IS NULL`)
+      WHERE (m.mode = 'ranked' OR m.rated_bot_uid IS NOT NULL) AND m.status = 'finished' AND m.started_at IS NOT NULL AND s.match_id IS NULL`)
       .all() as { id: string }[]).map((row) => row.id),
     settlementRetryFailures: db.prepare(`SELECT f.match_id AS matchId, f.attempts,
       f.first_failed_at AS firstFailedAt, f.last_failed_at AS lastFailedAt, m.status

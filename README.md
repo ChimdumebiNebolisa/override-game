@@ -63,12 +63,12 @@ Durable Object recovery uses the operator-only `POST /__ops/recovery/bookmark` a
 
 ## Product boundaries
 
-- Guest and bot games never affect Ranked ratings.
+- Guest games, Practice, and Easy/Normal bot games never affect Ranked ratings. Signed-in players with handles earn RP and placement credit in new timed Hard Quick Duels against a fixed 1000-RP bot. Credit per account in a rolling 24 hours is 50% for the first three starts, 37.5% for the fourth, 25% for the fifth, then zero; voided starts are excluded. Wins, losses, and draws use Elo; reduced-credit bot games leave W-L-D and streak unchanged. Bot controls remain tied to the original browser session. If that session is lost, the owning account can explicitly end its duel from Ranked; this settles a loss using the saved credit before releasing its rated-game lock. Retries preserve the original result.
 - Every new game starts both players at 5/5 Energy. Successful Expand earns 0.5; Ambush requires 1 to attempt, earns up to 3 and drains up to 2 on a hit, or costs 1 on a miss. A successful Ambush captures the intercepted space. Surge costs 3 and Override costs 2; existing saved games retain their balances and caps.
 - Ranked requires two distinct Google accounts and public handles.
 - Pending contents remain secret until resolution. New human matches reveal when both players lock or the shared ten-second deadline expires; early reveal communicates that both committed, without a rival-ready indicator. Migrated matches retain their fixed-deadline policy.
 - New bot games resolve on accepted Lock or a timed deadline, then persist in review until the human chooses Next round. Default Practice and explicit learning are untimed; timed Practice and Quick bot use ten seconds. New human matches have a shared three-second reveal.
 - Home and How to play offer untimed learning inside a normal Easy Practice game. The separate staged lessons have been removed; the static rules reference remains available.
-- The global leaderboard combines players after two qualifying placement matches with shared practice bots. BOT tags identify bots, and all entries use the same RP order; bot practice does not change human records.
+- The global leaderboard combines players after two qualifying placement matches with shared practice bots. BOT tags identify bots, and all entries use the same RP order; Practice does not change human records; qualifying Hard Quick Duels can change human RP and complete placements.
 
 Before public launch, complete the staging checks, structured human playtest, device interruption checks, and mobile screen-reader review in the implementation plan.

@@ -262,6 +262,22 @@ export function initializeDatabase(db: Database.Database, options: { workerBasel
       db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (7, ?)').run(Date.now());
     }).immediate();
   } catch (error) { db.close(); throw error; }
+  try {
+    db.transaction(() => {
+      if (db.prepare('SELECT 1 FROM schema_migrations WHERE version = 8').get()) return;
+      for (const [name, definition] of [
+        ['rated_bot_uid', 'TEXT REFERENCES profiles(uid)'],
+        ['rated_bot_rating', 'INTEGER'],
+      ]) {
+        try { db.exec(`ALTER TABLE matches ADD COLUMN ${name} ${definition}`); }
+        catch (error) {
+          if (!(error instanceof Error) || !error.message.includes(`duplicate column name: ${name}`)) throw error;
+        }
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS rated_bot_starts ON matches(rated_bot_uid) WHERE rated_bot_uid IS NOT NULL');
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (8, ?)').run(Date.now());
+    }).immediate();
+  } catch (error) { db.close(); throw error; }
   let keyCheck = db.prepare('SELECT value FROM secret_key_verification WHERE id = 1').get() as { value: string } | undefined;
   try {
     if (!keyCheck || revealInvitationSecret(keyCheck.value) !== 'override invitation key verification v1') {

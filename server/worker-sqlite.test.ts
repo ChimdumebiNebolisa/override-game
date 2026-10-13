@@ -123,7 +123,24 @@ it('initializes the current Worker schema without unsupported table_info pragmas
 
   expect(() => initializeDatabase(db, { workerBaseline: true })).not.toThrow();
   expect(adapter.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-    .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }]);
+    .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }]);
+});
+
+it('adds rated bot fields to existing Worker data without retroactive eligibility', () => {
+  process.env.NODE_ENV = 'test';
+  process.env.INVITATION_ENCRYPTION_KEY = 'worker-adapter-test-key';
+  const { db } = workerDatabase(); initializeDatabase(db, { workerBaseline: true });
+  const actor = { id: 'legacy-bot-session', uid: null, createdAt: 1, expiresAt: 999999 };
+  const id = createBotMatch(db, actor, 'Human', 'quick', 'hard');
+  const before = db.prepare('SELECT state_json, deadline, status FROM matches WHERE id = ?').get(id);
+  db.exec(`DROP INDEX rated_bot_starts;
+    ALTER TABLE matches DROP COLUMN rated_bot_uid;
+    ALTER TABLE matches DROP COLUMN rated_bot_rating;
+    DELETE FROM schema_migrations WHERE version = 8;`);
+  initializeDatabase(db, { workerBaseline: true }); initializeDatabase(db, { workerBaseline: true });
+  expect(db.prepare('SELECT state_json, deadline, status FROM matches WHERE id = ?').get(id)).toEqual(before);
+  expect(db.prepare('SELECT rated_bot_uid, rated_bot_rating FROM matches WHERE id = ?').get(id))
+    .toEqual({ rated_bot_uid: null, rated_bot_rating: null });
 });
 
 it('migrates pre-policy Worker records without changing their phases or pending commitments', () => {

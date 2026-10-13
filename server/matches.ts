@@ -7,6 +7,7 @@ import {
 import { chooseBotAction, type BotDifficulty } from '../src/shared/bots';
 import { HttpError, type Session } from './http';
 import { NEW_MATCH_POLICY, usesReview } from './match-policy';
+import { botRatingPreview } from './bot-rating';
 
 export interface MatchRow {
   id: string;
@@ -16,6 +17,8 @@ export interface MatchRow {
   restart_match_id: string | null;
   mode: 'quick' | 'ranked' | 'practice';
   bot_difficulty: BotDifficulty | null;
+  rated_bot_uid: string | null;
+  rated_bot_rating: number | null;
   player_a_key: string;
   player_b_key: string;
   player_a_name: string;
@@ -93,6 +96,7 @@ export function matchForSession(db: Database.Database, id: string, session: Sess
   if (row.mode === 'ranked' && row.started_at === null) {
     return {
       id: row.id, roomId: row.room_id, mode: row.mode, botDifficulty: row.bot_difficulty, status: row.status,
+      ratedBot: undefined,
       player: null, playerNames: null, state: null, score: null,
       timed: Boolean(row.timed), policyVersion: row.policy_version ?? 1,
       decisionDurationMs: row.decision_duration_ms, revealDurationMs: row.reveal_duration_ms ?? 1_000,
@@ -111,6 +115,7 @@ export function matchForSession(db: Database.Database, id: string, session: Sess
     roomId: row.room_id,
     mode: row.mode,
     botDifficulty: row.bot_difficulty,
+    ...(row.rated_bot_uid ? { ratedBot: { opponentRating: row.rated_bot_rating! } } : {}),
     timed: Boolean(row.timed),
     policyVersion: row.policy_version ?? 1,
     decisionDurationMs: row.decision_duration_ms,
@@ -193,6 +198,10 @@ export function createBotMatch(db: Database.Database, session: Session, name: st
       humanSide = parent.player_a_key === session.id ? 'B' : 'A';
     } else humanSide = randomBytes(1)[0] % 2 === 0 ? 'A' : 'B';
     const now = Date.now();
+    const credit = mode === 'quick' && difficulty === 'hard' && timed ? botRatingPreview(db, session, now) : null;
+    if (credit?.eligible && db.prepare('SELECT 1 FROM ranked_ownership WHERE uid = ?').get(session.uid)) {
+      throw new HttpError(409, 'Finish your rated match or leave Ranked matchmaking before starting a Hard duel');
+    }
     const recent = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE (player_a_key = ? OR player_b_key = ?)
       AND bot_difficulty IS NOT NULL AND started_at > ?`).get(session.id, session.id, now - 5 * 60_000) as { count: number };
     const active = db.prepare(`SELECT COUNT(*) AS count FROM matches WHERE (player_a_key = ? OR player_b_key = ?)
@@ -209,6 +218,12 @@ export function createBotMatch(db: Database.Database, session: Session, name: st
         humanSide === 'A' ? name : 'Bot', humanSide === 'B' ? name : 'Bot',
         JSON.stringify(createInitialState()), timed ? 1 : 0, NEW_MATCH_POLICY.version, NEW_MATCH_POLICY.decisionMs,
         NEW_MATCH_POLICY.revealMs, timed ? now + NEW_MATCH_POLICY.decisionMs : null, now);
+    if (credit?.eligible) {
+      db.prepare(`UPDATE matches SET rated_bot_uid = ?, rated_bot_rating = ?, competitive_multiplier = ?, credit_assessed_at = ? WHERE id = ?`)
+        .run(session.uid, credit.opponentRating, credit.multiplier, now, id);
+      db.prepare(`INSERT INTO ranked_ownership (uid, state, match_id, lease_expires_at) VALUES (?, 'active_match', ?, NULL)`)
+        .run(session.uid, id);
+    }
     if (restarted) {
       const finalState: MatchState = { ...stateOf(restarted), status: 'finished', winner: null, endingReason: null };
       const stopped = db.prepare(`UPDATE matches SET state_json = ?, status = 'voided', deadline = NULL,
@@ -513,20 +528,31 @@ export function resignMatch(db: Database.Database, id: string, session: Session,
     if (row.status !== 'decision' && row.status !== 'transition' && row.status !== 'review' && row.status !== 'grace') {
       throw new HttpError(409, 'This match is not active');
     }
-    const state = stateOf(row);
-    const finalState: MatchState = {
-      ...state,
-      status: 'finished',
-      winner: player === 'A' ? 'B' : 'A',
-      endingReason: 'resignation',
-    };
-    db.prepare(`UPDATE matches SET state_json = ?, status = 'finished', deadline = NULL,
+    finishResignation(db, row, player, now);
+  })();
+}
+
+/** An account may end its frozen rated bot game without gaining session-based play controls. */
+export function resignRatedBotMatch(db: Database.Database, id: string, session: Session, now = Date.now()): Player {
+  return db.transaction(() => {
+    const row = getMatch(db, id);
+    const bot = row && botSide(row);
+    if (!row || !bot || !session.uid || row.rated_bot_uid !== session.uid) throw new HttpError(404, 'Rated bot match not found');
+    const player: Player = bot === 'A' ? 'B' : 'A';
+    if (['decision', 'transition', 'review', 'grace'].includes(row.status)) finishResignation(db, row, player, now);
+    else if (row.status !== 'finished' && row.status !== 'voided') throw new HttpError(409, 'This match cannot be resigned');
+    return player;
+  }).immediate();
+}
+
+function finishResignation(db: Database.Database, row: MatchRow, player: Player, now: number): void {
+  const finalState: MatchState = { ...stateOf(row), status: 'finished', winner: player === 'A' ? 'B' : 'A', endingReason: 'resignation' };
+  db.prepare(`UPDATE matches SET state_json = ?, status = 'finished', deadline = NULL,
       transition_at = NULL, grace_until = NULL, ended_at = ?, result_type = 'resignation',
       revision = revision + 1 WHERE id = ?`)
-      .run(JSON.stringify(finalState), now, id);
-    db.prepare('DELETE FROM pending_actions WHERE match_id = ?').run(id);
-    if (row.room_id) db.prepare("UPDATE rooms SET status = 'finished' WHERE id = ?").run(row.room_id);
-  })();
+      .run(JSON.stringify(finalState), now, row.id);
+  db.prepare('DELETE FROM pending_actions WHERE match_id = ?').run(row.id);
+  if (row.room_id) db.prepare("UPDATE rooms SET status = 'finished' WHERE id = ?").run(row.room_id);
 }
 
 function voidUntrustworthyMatch(db: Database.Database, id: string, now: number): boolean {
