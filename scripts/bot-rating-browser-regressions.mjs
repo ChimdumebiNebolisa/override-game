@@ -31,6 +31,12 @@ export async function runBotRatingRegressions({ browser, origin, outputDir, dbPa
     assert.ok(ratio >= 4.5, `Button contrast ${ratio.toFixed(2)} must be at least 4.5`);
     return ratio;
   }
+  async function waitForPrimaryColor(page, selector, color) {
+    await page.waitForFunction(({ selector, color }) => {
+      const button = document.querySelector(selector);
+      return button && !button.matches(':disabled') && getComputedStyle(button).backgroundColor === color;
+    }, { selector, color });
+  }
   try {
     for (const width of [1440, 390, 320]) {
       const context = await browser.newContext({ viewport: { width, height: width === 320 ? 568 : 900 }, reducedMotion: 'reduce', isMobile: width < 400, hasTouch: width < 400 });
@@ -95,8 +101,7 @@ export async function runBotRatingRegressions({ browser, origin, outputDir, dbPa
         await page.getByRole('button', { name: /^Hard/ }).focus(); await page.keyboard.press('Enter');
         assert.equal(await page.locator('.difficulty-picker').getByRole('button', { pressed: true }).count(), 1);
         await page.getByText('50% RP credit · 1000 RP bot', { exact: true }).waitFor();
-        await page.locator('.panel-page > .primary-cta:not(:disabled)').waitFor();
-        assert.equal(await page.getByRole('button', { name: /^Play Hard/ }).evaluate((el) => getComputedStyle(el).backgroundColor), primaryColor);
+        await waitForPrimaryColor(page, '.panel-page > .primary-cta', primaryColor);
         await page.keyboard.press('Tab'); await page.getByRole('button', { name: /^Play Hard/ }).focus();
         assert.equal(await page.getByRole('button', { name: /^Play Hard/ }).evaluate((el) => getComputedStyle(el).outlineStyle), 'solid');
         await screenshot(page, `rated-setup-focus-${width}`);
@@ -131,9 +136,8 @@ export async function runBotRatingRegressions({ browser, origin, outputDir, dbPa
             .run(JSON.stringify(state), Date.now() + 120000, match.id);
           await page.reload(); await page.locator('.game-page').waitFor();
           await page.locator('.action-grid button').filter({ hasText: /^Pass/ }).click();
-          await page.locator('.lock-button:not(:disabled)').waitFor();
+          await waitForPrimaryColor(page, '.lock-button', primaryColor);
           const lock = page.getByRole('button', { name: /^Lock move/ }); await contrast(lock);
-          assert.equal(await lock.evaluate((el) => getComputedStyle(el).backgroundColor), primaryColor);
           await lock.click(); await page.locator('.settlement-card').waitFor();
           assert.match(await page.locator('.result-page > .eyebrow').textContent(), /Hard bot · RP duel/);
           assert.equal(await page.getByRole('button', { name: /^Request rematch/ }).count(), 0);
