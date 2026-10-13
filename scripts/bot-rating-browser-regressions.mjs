@@ -95,6 +95,7 @@ export async function runBotRatingRegressions({ browser, origin, outputDir, dbPa
         await page.getByRole('button', { name: /^Hard/ }).focus(); await page.keyboard.press('Enter');
         assert.equal(await page.locator('.difficulty-picker').getByRole('button', { pressed: true }).count(), 1);
         await page.getByText('50% RP credit · 1000 RP bot', { exact: true }).waitFor();
+        await page.locator('.panel-page > .primary-cta:not(:disabled)').waitFor();
         assert.equal(await page.getByRole('button', { name: /^Play Hard/ }).evaluate((el) => getComputedStyle(el).backgroundColor), primaryColor);
         await page.keyboard.press('Tab'); await page.getByRole('button', { name: /^Play Hard/ }).focus();
         assert.equal(await page.getByRole('button', { name: /^Play Hard/ }).evaluate((el) => getComputedStyle(el).outlineStyle), 'solid');
@@ -130,6 +131,7 @@ export async function runBotRatingRegressions({ browser, origin, outputDir, dbPa
             .run(JSON.stringify(state), Date.now() + 120000, match.id);
           await page.reload(); await page.locator('.game-page').waitFor();
           await page.locator('.action-grid button').filter({ hasText: /^Pass/ }).click();
+          await page.locator('.lock-button:not(:disabled)').waitFor();
           const lock = page.getByRole('button', { name: /^Lock move/ }); await contrast(lock);
           assert.equal(await lock.evaluate((el) => getComputedStyle(el).backgroundColor), primaryColor);
           await lock.click(); await page.locator('.settlement-card').waitFor();
